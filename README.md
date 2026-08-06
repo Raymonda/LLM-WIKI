@@ -188,4 +188,5 @@ llmwiki-web-ui/           # Frontend (Vue 3 + Vite)
 ## Author
 
 **Liu Weitao** — cool_zeel@163.com
-<img width="958" height="1415" alt="image" src="https://github.com/user-attachments/assets/3d2e1531-da91-4c01-8c19-f7a3e97a9279" />
+
+<img width="190" height="282" alt="image" src="https://github.com/user-attachments/assets/3d2e1531-da91-4c01-8c19-f7a3e97a9279" />
