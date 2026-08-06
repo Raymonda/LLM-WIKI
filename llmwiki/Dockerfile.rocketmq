@@ -1,0 +1,3 @@
+FROM apache/rocketmq:5.3.1
+
+COPY rocketmq/broker.conf /home/rocketmq/rocketmq-5.3.1/conf/broker.conf

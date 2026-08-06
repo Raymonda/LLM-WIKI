@@ -1,0 +1,94 @@
+# LLM Wiki — Minimal deployment (4 containers, ~2.5GB RAM)
+# Usage: cp .env.example .env && edit .env && docker-compose up -d
+# For full distributed mode (with MinIO + RocketMQ): docker-compose -f docker-compose.full.yml up -d
+# To build from source instead of using pre-built images: docker-compose up -d --build
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: llmwiki-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-llmwiki_root_2024}
+      MYSQL_DATABASE: llmwiki
+      MYSQL_USER: llmwiki
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-llmwiki_2024}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  elasticsearch:
+    image: ghcr.io/raymonda/llm-wiki-es:latest
+    build:
+      context: ./llmwiki
+      dockerfile: Dockerfile.es
+    container_name: llmwiki-es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  app:
+    image: ghcr.io/raymonda/llm-wiki-app:latest
+    build:
+      context: ./llmwiki
+      dockerfile: Dockerfile
+    container_name: llmwiki-app
+    environment:
+      - SPRING_PROFILES_ACTIVE=prod
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_DATABASE=llmwiki
+      - MYSQL_USER=llmwiki
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-llmwiki_2024}
+      - ES_URIS=http://elasticsearch:9200
+      - ES_INDEX_NAME=llmwiki-pages
+      - STORAGE_PROVIDER=local
+      - WIKI_DATA_PATH=/data/wiki-data
+      - AI_DASHSCOPE_API_KEY=${AI_DASHSCOPE_API_KEY}
+      - ADMIN_USERNAMES=${ADMIN_USERNAMES:-admin}
+      - ROCKETMQ_ENABLED=false
+      - JWT_SECRET=${JWT_SECRET:-llmwiki-default-secret-change-in-production}
+      - JAVA_OPTS=-Xms512m -Xmx1024m
+    ports:
+      - "8080:8080"
+    volumes:
+      - wiki_data:/data/wiki-data
+    depends_on:
+      mysql:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web-ui:
+    image: ghcr.io/raymonda/llm-wiki-web:latest
+    build:
+      context: ./llmwiki-web-ui
+      dockerfile: Dockerfile
+    container_name: llmwiki-web
+    ports:
+      - "3000:80"
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  es_data:
+  wiki_data:

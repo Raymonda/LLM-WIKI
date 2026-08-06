@@ -1,0 +1,192 @@
+spring:
+  application:
+    name: llmwiki
+  autoconfigure:
+    exclude:
+      - ${ROCKETMQ_AUTOCONFIG_EXCLUDE:org.apache.rocketmq.spring.autoconfigure.RocketMQAutoConfiguration}
+  mvc:
+    async:
+      request-timeout: 600000
+
+  datasource:
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/llmwiki?autoReconnect=true&useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
+    username: ${MYSQL_USER:llmwiki}
+    password: ${MYSQL_PASSWORD:llmwiki_2024}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    baseline-version: 1
+
+  ai:
+    openai:
+      api-key: ${AI_DASHSCOPE_API_KEY:placeholder-not-configured}
+      base-url: https://dashscope.aliyuncs.com/compatible-mode
+      chat:
+        options:
+          model: deepseek-v4-flash
+
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+server:
+  port: 8080
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+
+llmwiki:
+  wiki-data-path: ${WIKI_DATA_PATH:./wiki-data}
+  edit:
+    context:
+      max-chars: ${EDIT_CONTEXT_MAX_CHARS:24000}
+  ai:
+    # Multi-provider mode: uncomment and configure to use multiple AI providers.
+    # When providers section is empty, falls back to spring.ai.openai.* single-key mode.
+    # providers:
+    #   dashscope:
+    #     base-url: https://dashscope.aliyuncs.com/compatible-mode
+    #     api-key: ${AI_DASHSCOPE_API_KEY:}
+    #   deepseek:
+    #     base-url: https://api.deepseek.com
+    #     api-key: ${AI_DEEPSEEK_API_KEY:}
+    #   moonshot:
+    #     base-url: https://api.moonshot.cn
+    #     api-key: ${AI_MOONSHOT_API_KEY:}
+    #   openai:
+    #     base-url: https://api.openai.com
+    #     api-key: ${AI_OPENAI_API_KEY:}
+    #   local:
+    #     base-url: ${AI_LOCAL_BASE_URL:http://localhost:11434}
+    #     api-key: ${AI_LOCAL_API_KEY:ollama}
+    # slots:
+    #   main:
+    #     provider: deepseek
+    #     model: deepseek-v4-flash
+    #   multimodal:
+    #     provider: dashscope
+    #     model: qwen3.7-plus
+    #   query-multimodal:
+    #     provider: dashscope
+    #     model: qwen3.6-flash
+    #   deep-analysis:
+    #     provider: deepseek
+    #     model: deepseek-v4-pro
+    #   deep-multimodal:
+    #     provider: dashscope
+    #     model: qwen3.7-plus
+    #   ocr:
+    #     provider: dashscope
+    #     model: qwen-vl-ocr
+    #   diagram:
+    #     provider: moonshot
+    #     model: kimi-k2.6
+    timeout-ms: ${LLM_TIMEOUT_MS:300000}
+    retry:
+      max-attempts: ${LLM_RETRY_MAX:3}
+      base-delay-ms: ${LLM_RETRY_DELAY:2000}
+    multimodal: ${AI_MULTIMODAL:false}
+    multimodal-model: ${AI_MULTIMODAL_MODEL:qwen3.7-plus}
+    query-multimodal-model: ${AI_QUERY_MULTIMODAL_MODEL:${AI_MULTIMODAL_MODEL:qwen3.7-plus}}
+    deep-analysis-model: ${AI_DEEP_ANALYSIS_MODEL:${spring.ai.openai.chat.options.model:}}
+    deep-multimodal-model: ${AI_DEEP_MULTIMODAL_MODEL:${AI_MULTIMODAL_MODEL:qwen3.7-plus}}
+    multimodal-max-images: ${AI_MULTIMODAL_MAX_IMAGES:10}
+  llm:
+    concurrency:
+      plan: ${LLM_CONCURRENCY_PLAN:2}
+      summary: ${LLM_CONCURRENCY_SUMMARY:2}
+      entity: ${LLM_CONCURRENCY_ENTITY:4}
+      analyze: ${LLM_CONCURRENCY_ANALYZE:6}
+    executor:
+      core-size: ${LLM_EXECUTOR_CORE:8}
+      max-size: ${LLM_EXECUTOR_MAX:12}
+  ingest:
+    analysis:
+      single-pass-max-chars: ${INGEST_SINGLE_PASS_MAX_CHARS:800000}
+      pool-size: ${INGEST_ANALYSIS_POOL:8}
+  writer:
+    pool:
+      core-size: ${WRITER_POOL_CORE:6}
+      max-size: ${WRITER_POOL_MAX:16}
+  lint:
+    personal-cron: ${LINT_PERSONAL_CRON:0 0 3 ? * MON}
+    team-cron: ${LINT_TEAM_CRON:0 0 4 * * *}
+    skip-window-hours: ${LINT_SKIP_WINDOW_HOURS:1}
+    scheduled-concurrency: ${LINT_SCHEDULED_CONCURRENCY:3}
+    max-scopes-per-run: ${LINT_MAX_SCOPES_PER_RUN:50}
+  storage:
+    provider: ${STORAGE_PROVIDER:local}
+    nas:
+      path: ${NAS_PATH:${WIKI_DATA_PATH:/data/llmwiki/wiki-data}}
+      lock-enabled: ${NAS_LOCK_ENABLED:true}
+    s3:
+      endpoint: ${S3_ENDPOINT:http://localhost:9000}
+      access-key: ${S3_ACCESS_KEY:minioadmin}
+      secret-key: ${S3_SECRET_KEY:minioadmin}
+      region: ${S3_REGION:us-east-1}
+      bucket-prefix: ${S3_BUCKET_PREFIX:llmwiki}
+      path-style: ${S3_PATH_STYLE:true}
+      public-url: ${S3_PUBLIC_URL:}
+  elasticsearch:
+    uris: ${ES_URIS:http://localhost:9200}
+    index-name: ${ES_INDEX_NAME:llmwiki-pages}
+    username: ${ES_USERNAME:}
+    password: ${ES_PASSWORD:}
+    retry:
+      interval-ms: ${ES_RETRY_INTERVAL_MS:60000}
+      max-attempts: ${ES_RETRY_MAX_ATTEMPTS:5}
+  jwt:
+    secret: ${JWT_SECRET:llmwiki-default-secret-change-in-production}
+    expiration: 86400000
+  auth:
+    allow-self-register: ${ALLOW_SELF_REGISTER:false}
+  bootstrap:
+    # Comma-separated admin usernames. On startup:
+    #   - user exists and role!=admin: promote to admin
+    #   - user does not exist: auto-create with a random 8-char temporary password,
+    #     which is printed ONCE to the startup log (WARN level).
+    #     Login and change it immediately.
+    admin-usernames: ${ADMIN_USERNAMES:admin}
+  schema-lint:
+    # 宪法规则 7：SchemaLint 独立调度——观察期补丁自动提升 + 治理健康日志
+    enabled: ${SCHEMA_LINT_ENABLED:true}
+    # 默认每小时 30 分跑一次；生产可按需放缓
+    cron: ${SCHEMA_LINT_CRON:0 30 * * * ?}
+  ocr:
+    enabled: ${OCR_ENABLED:true}
+    model: ${OCR_MODEL:qwen-vl-ocr}
+    scan-threshold: ${OCR_SCAN_THRESHOLD:0.3}
+    max-pages: ${OCR_MAX_PAGES:20}
+    timeout-ms: ${OCR_TIMEOUT_MS:120000}
+  diagram:
+    enabled: ${DIAGRAM_ENABLED:false}
+    model: ${DIAGRAM_MODEL:kimi-k2.6}
+    api-key: ${DIAGRAM_API_KEY:}
+    max-images: ${DIAGRAM_MAX_IMAGES:15}
+    timeout-ms: ${DIAGRAM_TIMEOUT_MS:180000}
+    dpi: ${DIAGRAM_DPI:200}
+    jpeg-quality: ${DIAGRAM_JPEG_QUALITY:85}
+    concurrency: ${DIAGRAM_CONCURRENCY:4}
+    score-threshold: ${DIAGRAM_SCORE_THRESHOLD:5.0}
+    large-drawing-ratio: ${DIAGRAM_LARGE_DRAWING_RATIO:0.05}
+    significant-image-ratio: ${DIAGRAM_IMAGE_AREA_RATIO:0.05}
+    payload-gate-mb: ${DIAGRAM_PAYLOAD_GATE_MB:2.0}
+  rocketmq:
+    enabled: ${ROCKETMQ_ENABLED:false}
+
+rocketmq:
+  name-server: ${ROCKETMQ_NAME_SERVER:}
+  producer:
+    group: llmwiki-producer-group
+
+logging:
+  level:
+    org.cn.liuwt.llmwiki: INFO

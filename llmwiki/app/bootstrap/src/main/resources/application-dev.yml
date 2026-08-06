@@ -1,0 +1,52 @@
+spring:
+  autoconfigure:
+    exclude:
+      - ${ROCKETMQ_AUTOCONFIG_EXCLUDE:org.apache.rocketmq.spring.autoconfigure.RocketMQAutoConfiguration}
+  datasource:
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/llmwiki?autoReconnect=true&useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
+    username: ${MYSQL_USER:llmwiki}
+    password: ${MYSQL_PASSWORD:llmwiki_2024}
+
+  ai:
+    openai:
+      api-key: ${AI_DASHSCOPE_API_KEY:}
+      chat:
+        options:
+          model: deepseek-v4-flash-0731
+
+llmwiki:
+  ai:
+    multimodal-model: qwen3.7-plus
+    query-multimodal-model: deepseek-v4-flash-0731
+    deep-analysis-model: deepseek-v4-flash-0731
+    deep-multimodal-model: qwen3.7-plus
+  rocketmq:
+    enabled: ${ROCKETMQ_ENABLED:false}
+  elasticsearch:
+    uris: ${ES_URIS:http://localhost:9200}
+    username: ${ES_USERNAME:}
+    password: ${ES_PASSWORD:}
+  diagram:
+    enabled: true
+    api-key: ${DIAGRAM_API_KEY:}
+  llm:
+    budget:
+      ingest:
+        max-input-tokens: 120000
+      query:
+        max-input-tokens: 32000
+      lint:
+        max-input-tokens: 64000
+      default:
+        max-input-tokens: 64000
+
+rocketmq:
+  name-server: ${ROCKETMQ_NAME_SERVER:localhost:9876}
+  producer:
+    namespace: ${ROCKETMQ_NAMESPACE:}
+  consumer:
+    namespace: ${ROCKETMQ_NAMESPACE:}
+
+logging:
+  level:
+    org.cn.liuwt.llmwiki: DEBUG

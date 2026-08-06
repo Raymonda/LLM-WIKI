@@ -1,0 +1,1 @@
+ALTER TABLE execution ADD COLUMN error_message TEXT NULL;

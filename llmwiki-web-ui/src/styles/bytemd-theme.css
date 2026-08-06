@@ -1,0 +1,117 @@
+/* Bytemd theme overrides using design tokens. Applied globally. */
+
+.bytemd {
+  font-family: inherit;
+  background: var(--surface-card) !important;
+  color: var(--text-primary);
+  border: none !important;
+}
+
+.bytemd-toolbar {
+  background: var(--bg-tertiary, var(--surface-card)) !important;
+  border-bottom: 1px solid var(--border-default) !important;
+  color: var(--text-secondary);
+}
+
+.bytemd-toolbar-icon {
+  color: var(--text-secondary) !important;
+}
+
+.bytemd-toolbar-icon:hover {
+  background: var(--accent-light) !important;
+  color: var(--accent-primary) !important;
+}
+
+.bytemd-toolbar-icon-active {
+  color: var(--accent-primary) !important;
+}
+
+.bytemd-status {
+  background: var(--bg-tertiary, var(--surface-card)) !important;
+  border-top: 1px solid var(--border-default) !important;
+  color: var(--text-tertiary);
+}
+
+.bytemd-split .bytemd-preview,
+.bytemd-split .bytemd-editor {
+  border-color: var(--border-default) !important;
+}
+
+.bytemd-editor {
+  background: var(--input-bg) !important;
+}
+
+.bytemd-preview {
+  background: var(--surface-card) !important;
+}
+
+.bytemd-preview .markdown-body {
+  background: transparent !important;
+  color: var(--text-primary) !important;
+  padding: var(--space-4);
+  font-family: inherit;
+}
+
+.bytemd-preview .markdown-body a {
+  color: var(--accent-primary);
+}
+
+.bytemd-preview .markdown-body code {
+  background: var(--bg-tertiary, rgba(0, 0, 0, 0.04));
+  color: var(--text-primary);
+}
+
+.bytemd-preview .markdown-body pre {
+  background: var(--bg-tertiary, #f6f8fa);
+}
+
+.bytemd-preview .markdown-body blockquote {
+  color: var(--text-secondary);
+  border-left-color: var(--border-default);
+}
+
+.bytemd-preview .markdown-body table th,
+.bytemd-preview .markdown-body table td {
+  border-color: var(--border-default);
+}
+
+.bytemd-preview .markdown-body hr {
+  background: var(--border-default);
+}
+
+/* CodeMirror (editor area) */
+.bytemd .CodeMirror {
+  background: var(--input-bg) !important;
+  color: var(--text-primary) !important;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.bytemd .CodeMirror-gutters {
+  background: var(--bg-tertiary, var(--input-bg)) !important;
+  border-right: 1px solid var(--border-default) !important;
+}
+
+.bytemd .CodeMirror-linenumber {
+  color: var(--text-tertiary) !important;
+}
+
+.bytemd .CodeMirror-cursor {
+  border-left-color: var(--text-primary) !important;
+}
+
+.bytemd .CodeMirror-selected {
+  background: var(--accent-light) !important;
+}
+
+/* Dark theme adjustments */
+html[data-theme='dark'] .bytemd-preview .markdown-body code {
+  background: rgba(211, 207, 199, 0.08);
+}
+
+html[data-theme='dark'] .bytemd-preview .markdown-body pre {
+  background: rgba(211, 207, 199, 0.04);
+}
+
+html[data-theme='dark'] .bytemd-toolbar-icon:hover {
+  background: var(--accent-light) !important;
+}

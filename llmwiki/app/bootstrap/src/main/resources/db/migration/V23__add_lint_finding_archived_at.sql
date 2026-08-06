@@ -1,0 +1,2 @@
+ALTER TABLE lint_finding ADD COLUMN archived_at DATETIME DEFAULT NULL COMMENT '归档时间：终态(resolved/dismissed/rolled_back/auto_resolved)时自动设置' AFTER feedback_count;
+CREATE INDEX idx_lf_archived_at ON lint_finding(archived_at);

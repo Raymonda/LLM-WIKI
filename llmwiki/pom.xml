@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>3.4.5</version>
+		<relativePath/>
+	</parent>
+
+	<groupId>org.cn.liuwt.llmwiki</groupId>
+	<artifactId>llmwiki-parent</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<packaging>pom</packaging>
+	<name>llmwiki</name>
+	<description>LLM Wiki - Knowledge management system powered by AI</description>
+
+	<modules>
+		<module>app/bootstrap</module>
+		<module>app/web</module>
+		<module>app/common/dal</module>
+		<module>app/common/util</module>
+		<module>app/common/service/facade</module>
+		<module>app/common/service/integration</module>
+		<module>app/domain/model</module>
+		<module>app/domain/service</module>
+		<module>app/biz/service</module>
+		<module>app/test</module>
+	</modules>
+
+	<properties>
+		<java.version>17</java.version>
+		<spring-ai.version>1.1.2</spring-ai.version>
+		<mybatis-plus.version>3.5.9</mybatis-plus.version>
+		<postgresql.version>42.7.5</postgresql.version>
+		<mysql.version>9.2.0</mysql.version>
+		<jjwt.version>0.12.6</jjwt.version>
+		<lombok.version>1.18.38</lombok.version>
+		<flyway.version>11.7.0</flyway.version>
+		<flyway-mysql.version>11.7.0</flyway-mysql.version>
+		<aws-s3.version>2.31.3</aws-s3.version>
+		<spring-data-es.version>5.4.5</spring-data-es.version>
+		<testcontainers.version>1.20.4</testcontainers.version>
+		<rocketmq-starter.version>2.3.3</rocketmq-starter.version>
+		<rocketmq-client.version>5.3.1</rocketmq-client.version>
+	</properties>
+
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>org.springframework.ai</groupId>
+				<artifactId>spring-ai-bom</artifactId>
+				<version>${spring-ai.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+			
+			<dependency>
+				<groupId>com.baomidou</groupId>
+				<artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+				<version>${mybatis-plus.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.mysql</groupId>
+				<artifactId>mysql-connector-j</artifactId>
+				<version>${mysql.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>io.jsonwebtoken</groupId>
+				<artifactId>jjwt-api</artifactId>
+				<version>${jjwt.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>io.jsonwebtoken</groupId>
+				<artifactId>jjwt-impl</artifactId>
+				<version>${jjwt.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>io.jsonwebtoken</groupId>
+				<artifactId>jjwt-jackson</artifactId>
+				<version>${jjwt.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.flywaydb</groupId>
+				<artifactId>flyway-core</artifactId>
+				<version>${flyway.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.flywaydb</groupId>
+				<artifactId>flyway-mysql</artifactId>
+				<version>${flyway-mysql.version}</version>
+			</dependency>
+
+			<dependency>
+				<groupId>software.amazon.awssdk</groupId>
+				<artifactId>s3</artifactId>
+				<version>${aws-s3.version}</version>
+			</dependency>
+
+			<dependency>
+				<groupId>org.springframework.data</groupId>
+				<artifactId>spring-data-elasticsearch</artifactId>
+				<version>${spring-data-es.version}</version>
+			</dependency>
+
+			<dependency>
+				<groupId>org.apache.rocketmq</groupId>
+				<artifactId>rocketmq-spring-boot-starter</artifactId>
+				<version>${rocketmq-starter.version}</version>
+			</dependency>
+
+			<dependency>
+				<groupId>org.apache.rocketmq</groupId>
+				<artifactId>rocketmq-client</artifactId>
+				<version>${rocketmq-client.version}</version>
+			</dependency>
+
+			<dependency>
+				<groupId>org.testcontainers</groupId>
+				<artifactId>testcontainers-bom</artifactId>
+				<version>${testcontainers.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+
+			<dependency>
+				<groupId>org.cn.liuwt.llmwiki</groupId>
+				<artifactId>llmwiki-bootstrap</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.cn.liuwt.llmwiki</groupId>
+				<artifactId>llmwiki-web</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.cn.liuwt.llmwiki</groupId>
+				<artifactId>llmwiki-common-dal</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.cn.liuwt.llmwiki</groupId>
+				<artifactId>llmwiki-common-util</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.cn.liuwt.llmwiki</groupId>
+				<artifactId>llmwiki-facade</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.cn.liuwt.llmwiki</groupId>
+				<artifactId>llmwiki-integration</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.cn.liuwt.llmwiki</groupId>
+				<artifactId>llmwiki-domain-model</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.cn.liuwt.llmwiki</groupId>
+				<artifactId>llmwiki-domain-service</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.cn.liuwt.llmwiki</groupId>
+				<artifactId>llmwiki-biz-service</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.cn.liuwt.llmwiki</groupId>
+				<artifactId>llmwiki-test</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+	<dependencies>
+		<dependency>
+			<groupId>org.projectlombok</groupId>
+			<artifactId>lombok</artifactId>
+			<optional>true</optional>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<source>${java.version}</source>
+					<target>${java.version}</target>
+					<encoding>UTF-8</encoding>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+
+	<repositories>
+		<repository>
+			<id>spring-ai-milestones</id>
+			<name>Spring AI Milestones</name>
+			<url>https://repo.spring.io/milestone</url>
+			<snapshots>
+				<enabled>false</enabled>
+			</snapshots>
+		</repository>
+		<repository>
+			<id>spring-ai-snapshots</id>
+			<name>Spring AI Snapshots</name>
+			<url>https://repo.spring.io/snapshot</url>
+			<snapshots>
+				<enabled>true</enabled>
+			</snapshots>
+		</repository>
+	</repositories>
+</project>

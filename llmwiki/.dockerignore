@@ -1,0 +1,9 @@
+target/
+wiki-data/
+node_modules/
+.git/
+.idea/
+*.md
+*.log
+.env
+__pycache__/

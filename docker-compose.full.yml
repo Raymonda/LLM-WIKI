@@ -1,0 +1,161 @@
+# LLM Wiki — Full distributed deployment (6 containers, ~4GB RAM)
+# Includes MinIO (S3 storage) + RocketMQ (distributed messaging)
+# Usage: cp .env.example .env && edit .env && docker-compose -f docker-compose.full.yml up -d --build
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: llmwiki-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-llmwiki_root_2024}
+      MYSQL_DATABASE: llmwiki
+      MYSQL_USER: llmwiki
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-llmwiki_2024}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  elasticsearch:
+    image: ghcr.io/raymonda/llm-wiki-es:latest
+    build:
+      context: ./llmwiki
+      dockerfile: Dockerfile.es
+    container_name: llmwiki-es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: llmwiki-minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rocketmq-namesrv:
+    image: apache/rocketmq:5.3.1
+    container_name: llmwiki-rocketmq-namesrv
+    ports:
+      - "9876:9876"
+    environment:
+      - JAVA_OPT_EXT=-Xms256m -Xmx256m
+    command: sh mqnamesrv
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/localhost/9876' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rocketmq-broker:
+    build:
+      context: ./llmwiki
+      dockerfile: Dockerfile.rocketmq
+    image: llmwiki-rocketmq-broker:5.3.1
+    container_name: llmwiki-rocketmq-broker
+    ports:
+      - "10911:10911"
+      - "10909:10909"
+    environment:
+      - NAMESRV_ADDR=rocketmq-namesrv:9876
+      - JAVA_OPT_EXT=-Xms256m -Xmx512m
+    command: sh mqbroker -c /home/rocketmq/rocketmq-5.3.1/conf/broker.conf -n rocketmq-namesrv:9876
+    depends_on:
+      rocketmq-namesrv:
+        condition: service_healthy
+    volumes:
+      - ./llmwiki/rocketmq/store:/home/rocketmq/store
+      - ./llmwiki/rocketmq/logs:/home/rocketmq/logs
+      - ./llmwiki/rocketmq/broker-docker.conf:/home/rocketmq/rocketmq-5.3.1/conf/broker.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/localhost/10911' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  app:
+    build:
+      context: ./llmwiki
+      dockerfile: Dockerfile
+    container_name: llmwiki-app
+    environment:
+      - SPRING_PROFILES_ACTIVE=prod
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_DATABASE=llmwiki
+      - MYSQL_USER=llmwiki
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-llmwiki_2024}
+      - ES_URIS=http://elasticsearch:9200
+      - ES_INDEX_NAME=llmwiki-pages
+      - STORAGE_PROVIDER=s3
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - S3_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - S3_REGION=us-east-1
+      - S3_BUCKET_PREFIX=llmwiki
+      - S3_PATH_STYLE=true
+      - AI_DASHSCOPE_API_KEY=${AI_DASHSCOPE_API_KEY}
+      - ADMIN_USERNAMES=${ADMIN_USERNAMES:-admin}
+      - ROCKETMQ_NAME_SERVER=rocketmq-namesrv:9876
+      - ROCKETMQ_ENABLED=true
+      - JWT_SECRET=${JWT_SECRET:-llmwiki-default-secret-change-in-production}
+      - WIKI_DATA_PATH=/data/wiki-data
+      - JAVA_OPTS=-Xms512m -Xmx1024m
+    ports:
+      - "8080:8080"
+    volumes:
+      - wiki_data:/data/wiki-data
+    depends_on:
+      mysql:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      rocketmq-broker:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web-ui:
+    build:
+      context: ./llmwiki-web-ui
+      dockerfile: Dockerfile
+    container_name: llmwiki-web
+    ports:
+      - "3000:80"
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  es_data:
+  minio_data:
+  wiki_data:

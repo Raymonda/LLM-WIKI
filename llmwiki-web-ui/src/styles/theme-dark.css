@@ -1,0 +1,64 @@
+[data-theme="dark"] {
+  --bg-primary: #1A1814;
+  --bg-secondary: #1F1D19;
+  --bg-tertiary: #25231F;
+  --surface-card: #211F1B;
+  --surface-elevated: #2B2924;
+  --border-default: #393732;
+  --border-subtle: #2E2C28;
+  --text-primary: #D3CFC7;
+  --text-secondary: #8B867E;
+  --text-tertiary: #6B6760;
+  --text-on-accent: #1A1814;
+  --accent-primary: #8B7CE6;
+  --accent-hover: #9D8FF0;
+  --accent-light: #2B273A;
+  --accent-muted: #6A5EBF;
+  --success: #4ADE80;
+  --success-light: #1A2E20;
+  --warning: #FBBF24;
+  --warning-light: #352A10;
+  --error: #F87171;
+  --error-light: #3A1E1E;
+  --info: #60A5FA;
+  --info-light: #1E2E3A;
+
+  --btn-primary-bg: #8B7CE6;
+  --btn-primary-text: #1A1814;
+  --btn-secondary-bg: #2B2924;
+  --btn-secondary-text: #D3CFC7;
+  --btn-secondary-border: #393732;
+  --btn-ghost-text: #8B7CE6;
+  --btn-danger-bg: #9E3737;
+  --btn-danger-text: #F5F2EC;
+
+  --input-bg: #211F1B;
+  --input-border: #393732;
+  --input-focus-border: #8B7CE6;
+  --input-focus-ring: #2B273A;
+  --search-bg: #1F1D19;
+  --search-border: #393732;
+
+  --sidebar-bg: #1C1A16;
+  --sidebar-border: #2E2C28;
+  --sidebar-item-hover: #272421;
+  --sidebar-item-active-bg: #2B273A;
+  --sidebar-item-active-text: #8B7CE6;
+
+  --topbar-bg: #1A1814;
+  --topbar-border: #2E2C28;
+
+  --card-bg: #211F1B;
+  --card-border: #393732;
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  --card-hover-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+
+  --step-card-bg: #25231F;
+  --step-card-border: #393732;
+
+  --code-bg: #1E1D18;
+  --code-text: #D3CFC7;
+
+  --scrollbar-thumb: #3D3B35;
+  --scrollbar-track: transparent;
+}

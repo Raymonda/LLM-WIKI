@@ -1,0 +1,17 @@
+export default {
+  SYS_001: 'Internal server error',
+  SYS_002: 'Invalid parameter: {0}',
+  AUTH_001: 'Invalid username or password',
+  AUTH_002: 'Session expired, please login again',
+  AUTH_003: 'Access denied',
+  SCOPE_001: 'Knowledge base not found',
+  SCOPE_002: 'Schema not initialized',
+  SCOPE_003: 'Unsupported language: {0}',
+  INGEST_001: 'Failed to parse document',
+  INGEST_002: 'File exceeds size limit: {0}',
+  INGEST_003: 'An ingest task is already running',
+  WIKI_001: 'Page not found',
+  WIKI_002: 'Raw directory is immutable',
+  LINT_001: 'A health check is already running',
+  QUERY_001: 'Query execution failed',
+}

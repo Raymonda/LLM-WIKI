@@ -1,0 +1,2 @@
+ALTER TABLE lint_finding ADD COLUMN user_feedback VARCHAR(32) COMMENT '用户反馈：accepted/ignored/modified' AFTER ruling_brief_json;
+ALTER TABLE lint_finding ADD COLUMN feedback_count INT DEFAULT 0 COMMENT '同一类型finding被用户dismiss的累计次数' AFTER user_feedback;
