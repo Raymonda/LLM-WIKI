@@ -188,3 +188,4 @@ llmwiki-web-ui/           # 前端（Vue 3 + Vite）
 ## Author
 
 **Liu Weitao** — cool_zeel@163.com
+<img width="958" height="1415" alt="image" src="https://github.com/user-attachments/assets/61274634-54c4-49ac-b3c5-1a7b61503fb6" />
