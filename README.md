@@ -185,8 +185,14 @@ llmwiki-web-ui/           # Frontend (Vue 3 + Vite)
 
 [MIT](LICENSE)
 
-## Author
+## Contact
 
 **Liu Weitao** — cool_zeel@163.com
 
-<img width="190" height="282" alt="image" src="https://github.com/user-attachments/assets/3d2e1531-da91-4c01-8c19-f7a3e97a9279" />
+<div align="center">
+  <img width="190" height="282" alt="WeChat QR code" src="https://github.com/user-attachments/assets/3d2e1531-da91-4c01-8c19-f7a3e97a9279" />
+  <p>
+    <strong>Scan with WeChat to add the author</strong><br/>
+    Feel free to reach out about using or extending LLM Wiki, or any AI knowledge-base topic.
+  </p>
+</div>

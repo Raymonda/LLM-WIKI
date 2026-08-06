@@ -185,8 +185,14 @@ llmwiki-web-ui/           # 前端（Vue 3 + Vite）
 
 [MIT](LICENSE)
 
-## Author
+## 联系作者
 
 **Liu Weitao** — cool_zeel@163.com
 
-<img width="190" height="282" alt="image" src="https://github.com/user-attachments/assets/61274634-54c4-49ac-b3c5-1a7b61503fb6" />
+<div align="center">
+  <img width="190" height="282" alt="微信二维码" src="https://github.com/user-attachments/assets/61274634-54c4-49ac-b3c5-1a7b61503fb6" />
+  <p>
+    <strong>微信扫码添加作者</strong><br/>
+    欢迎交流 LLM Wiki 的使用与二次开发，或任何 AI 知识库相关的话题。
+  </p>
+</div>
