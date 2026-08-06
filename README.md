@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="README_zh.md">中文</a> · <a href="ARCHITECTURE.md">Architecture</a> · <a href="DESIGN.md">Design System</a> · <a href="ROADMAP.md">Roadmap</a>
+  <a href="README_zh.md">中文</a> · <a href="ARCHITECTURE.md">Architecture</a> · <a href="DESIGN.md">Design System</a> · <a href="AGENTS.md">Developer Guide</a>
 </p>
 
 <p align="center">
@@ -33,14 +33,17 @@ The result: **knowledge that compounds.** Cross-references are already built. Co
 
 ## Key Features
 
-- **📥 Incremental Ingestion** — New documents are compiled into the existing knowledge network via a 4-agent pipeline (Parser → Analyzer → Writer → Indexer), updating entity pages, summaries, and cross-references in one pass
-- **📜 Schema Governance** — AI behavior is constrained by a versioned Schema "constitution" (7-section skeleton + compliance validation + patch approval), preventing hallucination-driven structure drift
-- **🩺 Knowledge Lint** — Periodic AI health checks detect contradictions, orphan pages, knowledge gaps, stale content, and missing cross-references — with a feedback loop that auto-tunes sensitivity
-- **🔗 Source Traceability** — Every compiled artifact traces back to its source document. Reference pages are high-fidelity mirrors of the original text
-- **🏢 Multi-Tenant Scopes** — Strictly isolated personal/team knowledge bases with a knowledge plaza, join-request workflow, and membership management
-- **🔍 Full-Text Search + AI Q&A** — Elasticsearch hybrid search with streaming AI answers that cite sources. Good answers can be saved back into the wiki
-- **📡 Real-Time Pipeline Tracking** — SSE-powered live progress for the entire ingestion pipeline with step-level granularity
-- **🐳 One-Command Deploy** — `docker-compose up` brings up MySQL, Elasticsearch, MinIO, RocketMQ, and the app
+- **Incremental Ingestion** — New documents are compiled into the existing knowledge network via a 4-agent pipeline (Parser → Analyzer → Writer → Indexer), updating entity pages, summaries, and cross-references in one pass
+- **Schema Governance** — AI behavior is constrained by a versioned Schema "constitution" (7-section skeleton + compliance validation + patch approval), preventing hallucination-driven structure drift
+- **Knowledge Lint** — Periodic AI health checks detect contradictions, orphan pages, knowledge gaps, stale content, and missing cross-references — with a feedback loop that auto-tunes sensitivity
+- **AI-Assisted Editing** — Select any passage on a wiki page and ask the AI to rewrite it; edits stream in live, are committed step by step, and can be undone individually
+- **Source Traceability** — Every compiled artifact traces back to its source document. Reference pages are high-fidelity mirrors of the original text
+- **Team Collaboration** — Multi-tenant scopes with strict isolation, a knowledge plaza, join-request workflow, team subscriptions, audit logs, and an activity center
+- **Search + AI Q&A** — Elasticsearch hybrid search with streaming AI answers that cite sources. Good answers can be saved back into the wiki
+- **Multi-Provider AI** — Route different tasks (analysis, OCR, diagram recognition) to any OpenAI-compatible provider: DashScope, DeepSeek, Moonshot, OpenAI, Ollama
+- **Real-Time Pipeline Tracking** — SSE-powered live progress for the entire ingestion pipeline with step-level granularity
+- **i18n** — Full Chinese / English interface
+- **One-Command Deploy** — `docker-compose up` brings up MySQL, Elasticsearch, and the app
 
 ## How It Works
 
@@ -55,16 +58,16 @@ LLM Wiki treats knowledge processing as **compilation**:
 | Static analysis | Lint | Detects inconsistencies, gaps, and staleness |
 | Build config | Schema | Governs AI behavior and output constraints |
 
-### Three Core Operations
+### Core Operations
 
 **Ingest** (Compile + Link)
-Drop in a document. The 4-agent pipeline parses it, analyzes entities and facts, writes/updates wiki pages (summaries, entities, references), builds cross-references, and indexes into Elasticsearch. A single source may touch 10–15 existing pages.
+Drop in a document. The 4-agent pipeline parses it (with OCR and diagram recognition for rich formats), analyzes entities and facts, writes/updates wiki pages (summaries, entities, references), builds cross-references, and indexes into Elasticsearch. A single source may touch many existing pages.
 
 **Query** (Runtime)
 Ask questions against the compiled knowledge. The AI searches relevant pages, synthesizes an answer with citations, and streams it in real time. Valuable answers can be saved back as new wiki pages — your explorations compound into the knowledge base.
 
 **Lint** (Static Analysis)
-Periodic health checks scan for 5 diagnostic types: contradictions, orphan pages, knowledge gaps, stale content, and missing cross-references. Findings feed back into page health indicators. User feedback auto-tunes detection sensitivity over time.
+Periodic health checks scan for five diagnostic types: contradictions, orphan pages, knowledge gaps, stale content, and missing cross-references. Findings feed back into page health indicators. User feedback auto-tunes detection sensitivity over time.
 
 ## Architecture
 
@@ -84,8 +87,9 @@ Periodic health checks scan for 5 diagnostic types: contradictions, orphan pages
 │   IngestOrchestrator · PipelineOrchestrator · Agents    │
 └────┬──────────┬──────────┬──────────┬───────────────────┘
      │          │          │          │
-   MySQL    Elastic-    File System  RocketMQ
-   8.x      search 8.x  (NAS/S3)    (optional)
+   MySQL    Elastic-    File Storage RocketMQ
+   8.x      search 8.x  (Local/NAS/  (optional)
+                         MinIO)
 ```
 
 ### Tech Stack
@@ -123,7 +127,7 @@ cp .env.example .env
 docker-compose up -d
 ```
 
-Open **http://localhost:3000** — get the admin password from `docker logs llmwiki-app 2>&1 | grep "temporary password"`.
+Open **http://localhost:3000** — get the admin temporary password from `docker logs llmwiki-app 2>&1 | grep -i password`.
 
 For full distributed mode (adds MinIO + RocketMQ, ~4GB RAM):
 
@@ -137,15 +141,26 @@ All configuration is via environment variables. The only **required** variable i
 
 LLM Wiki supports **multiple AI providers** simultaneously — you can route different tasks (analysis, OCR, diagram recognition) to different providers. See the [deployment guide](docs/LOCAL-DEPLOY.md#ai-provider-configuration) for multi-provider setup.
 
+## Roadmap
+
+Recent releases focused on team collaboration (knowledge plaza, subscriptions, audit logs), the AI-assisted wiki editor, and i18n. Planned directions:
+
+- Richer ingestion formats and smarter multi-modal parsing
+- Incremental re-compilation when a source is updated or removed
+- Deeper conflict resolution workflows between sources and pages
+- Token-cost optimization and lighter models for routine tasks
+- Plugin / MCP integration for external tools
+
+Ideas and feedback are welcome via [issues](https://github.com/Raymonda/LLM-WIKI/issues).
+
 ## Documentation
 
 | Document | Purpose |
 |:--------:|:-------:|
 | [docs/LOCAL-DEPLOY.md](docs/LOCAL-DEPLOY.md) | Local deployment guide — Docker Compose, dev setup, troubleshooting |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture blueprint — components, data flow, pipeline design |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture overview — components, layers, core flows |
 | [DESIGN.md](DESIGN.md) | UI/UX design system — visual language, interaction patterns |
 | [AGENTS.md](AGENTS.md) | Developer guide — coding conventions, build commands, configuration |
-| [ROADMAP.md](ROADMAP.md) | Development roadmap and feature status |
 | [llm-wiki.md](llm-wiki.md) | The original idea document that started it all |
 
 ## Project Structure
@@ -160,7 +175,7 @@ llmwiki/                  # Backend (DDD-layered Maven multi-module)
 └── wiki-data/            # Runtime file storage (gitignored)
 
 llmwiki-web-ui/           # Frontend (Vue 3 + Vite)
-├── src/views/            # Pages: Wiki, Search, Ingest, Lint, Graph...
+├── src/views/            # Pages: Wiki, Editor, Search, Ingest, Lint, Graph...
 ├── src/components/       # Shared: layout, wiki renderer, harness tracker
 ├── src/stores/           # Pinia state management
 └── src/api/              # Axios API layer

@@ -6,7 +6,7 @@ Get LLM Wiki running on your machine in under 5 minutes.
 
 Two modes available:
 - **Minimal** (default): MySQL + Elasticsearch + App + Web UI — 4 containers, ~2.5GB RAM
-- **Full**: adds MinIO + RocketMQ — 6 containers, ~4GB RAM (for distributed/production use)
+- **Full**: adds MinIO + RocketMQ — 7 containers, ~4GB RAM (for distributed/production use)
 
 ### Prerequisites
 
@@ -44,10 +44,10 @@ First build takes ~5–10 minutes (Maven dependency download + npm ci). Subseque
 
 ### First Login
 
-On first startup, the app auto-creates an `admin` user with a random temporary password printed in the container log:
+On first startup, the app auto-creates an `admin` user with a random temporary password printed in the container log (shown only once):
 
 ```bash
-docker logs llmwiki-app 2>&1 | grep -i "temporary password"
+docker logs llmwiki-app 2>&1 | grep -A 5 "INITIAL ADMIN CREATED"
 ```
 
 Login at http://localhost:3000 with `admin` + the printed password, then change it immediately.
@@ -67,9 +67,11 @@ Run infrastructure via Docker but develop the backend/frontend natively for hot-
 
 ### 1. Start Infrastructure Only
 
+Dev mode only needs MySQL + Elasticsearch (file storage defaults to local, RocketMQ is disabled):
+
 ```bash
 cd llmwiki
-docker-compose up -d mysql elasticsearch minio rocketmq-namesrv rocketmq-broker
+docker-compose up -d mysql elasticsearch
 ```
 
 ### 2. Backend
@@ -82,10 +84,9 @@ cd llmwiki
 # Build
 mvn clean package -DskipTests -pl app/bootstrap -am
 
-# Run (dev profile uses localhost services)
-java -jar target/boot/llmwiki-bootstrap-0.0.1-SNAPSHOT.jar \
-  --spring.profiles.active=dev \
-  --AI_DASHSCOPE_API_KEY=sk-your-key-here
+# Run (dev profile uses localhost services; API key passed via env var)
+AI_DASHSCOPE_API_KEY=sk-your-key-here \
+  java -jar target/boot/llmwiki-bootstrap-0.0.1-SNAPSHOT.jar --spring.profiles.active=dev
 ```
 
 Or with Maven directly:

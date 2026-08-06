@@ -6,7 +6,7 @@
 
 两种模式可选：
 - **极简模式**（默认）：MySQL + Elasticsearch + 后端 + 前端 — 4 个容器，约 2.5GB 内存
-- **完整模式**：额外启动 MinIO + RocketMQ — 6 个容器，约 4GB 内存（面向分布式/生产）
+- **完整模式**：额外启动 MinIO + RocketMQ — 7 个容器，约 4GB 内存（面向分布式/生产）
 
 ### 前置条件
 
@@ -44,10 +44,10 @@ docker-compose -f docker-compose.full.yml up -d --build
 
 ### 首次登录
 
-首次启动时，应用自动创建 `admin` 用户并生成随机临时密码，打印在容器日志中：
+首次启动时，应用自动创建 `admin` 用户并生成随机临时密码，打印在容器日志中（只显示一次）：
 
 ```bash
-docker logs llmwiki-app 2>&1 | grep -i "temporary password"
+docker logs llmwiki-app 2>&1 | grep -A 5 "INITIAL ADMIN CREATED"
 ```
 
 在 http://localhost:3000 使用 `admin` + 打印的密码登录，登录后立即修改密码。
@@ -67,9 +67,11 @@ docker-compose down -v       # 停止 + 删除所有数据（全新开始）
 
 ### 1. 仅启动基础设施
 
+开发模式只需要 MySQL + Elasticsearch（文件存储默认本地，RocketMQ 默认关闭）：
+
 ```bash
 cd llmwiki
-docker-compose up -d mysql elasticsearch minio rocketmq-namesrv rocketmq-broker
+docker-compose up -d mysql elasticsearch
 ```
 
 ### 2. 启动后端
@@ -82,10 +84,9 @@ cd llmwiki
 # 构建
 mvn clean package -DskipTests -pl app/bootstrap -am
 
-# 运行（dev profile 连接 localhost 服务）
-java -jar target/boot/llmwiki-bootstrap-0.0.1-SNAPSHOT.jar \
-  --spring.profiles.active=dev \
-  --AI_DASHSCOPE_API_KEY=sk-your-key-here
+# 运行（dev profile 连接 localhost 服务，API Key 通过环境变量传入）
+AI_DASHSCOPE_API_KEY=sk-your-key-here \
+  java -jar target/boot/llmwiki-bootstrap-0.0.1-SNAPSHOT.jar --spring.profiles.active=dev
 ```
 
 或者用 Maven 直接运行：
