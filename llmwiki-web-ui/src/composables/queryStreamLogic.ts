@@ -47,3 +47,17 @@ export function reduceFactBlockJson(jsonText: string, blocks: FactBlockView[]): 
   }
   return next
 }
+
+export function buildFactBlocksMarkdown(blocks: FactBlockView[]): string {
+  return blocks
+    .map((b) => {
+      if (b.kind === 'text') return b.conclusion
+      const label = b.confidence === 'high' ? '高可信' : b.confidence === 'low' ? '低可信' : '中可信'
+      const refs = b.refs.length
+        ? `\n  - 来源：${b.refs.map((r) => `[[${r.title}]]((${r.path}))`).join('；')}`
+        : ''
+      const evidence = b.evidence ? `\n  - 依据：${b.evidence}` : ''
+      return `- ${b.conclusion}（${label}）${evidence}${refs}`
+    })
+    .join('\n\n')
+}

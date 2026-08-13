@@ -9,6 +9,7 @@ import { searchPages, searchSuggest, listCategories, type WikiPageInfo, type Sea
 import { useAuthStore } from '@/stores/auth'
 import { saveAnswer, resolveLinks, type QueryAnalysisMode } from '@/api/query'
 import { useSSEQuery } from '@/composables/useSSEQuery'
+import { buildFactBlocksMarkdown } from '@/composables/queryStreamLogic'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -49,6 +50,19 @@ const funFacts = computed(() => sse.funFacts.value)
 const factContent = computed(() => sse.factAnswer.value)
 const synthesisStream = computed(() => sse.synthesisStreamContent.value)
 const prospectiveContent = computed(() => sse.prospectiveAnswer.value)
+const factBlocks = computed(() => sse.factBlocks.value)
+
+function confidenceLabel(confidence: string): string {
+  return confidence === 'high' ? '高可信' : confidence === 'low' ? '低可信' : '中可信'
+}
+
+function factRefPath(raw: string): string {
+  let p = raw
+  if (p.startsWith('wiki/')) p = p.slice(5)
+  if (!p.startsWith('pages/')) return p
+  if (!p.endsWith('.md')) p += '.md'
+  return p
+}
 
 const isStreamingSynthesis = computed(() => isStreaming.value && isSynthesizing.value)
 
@@ -323,7 +337,8 @@ async function handleSave() {
   if (isSaving.value || isSaved.value) return
   isSaving.value = true
   try {
-    savedPage.value = await saveAnswer(lastQuestion.value, aiAnswer.value)
+    const factMd = factBlocks.value.length > 0 ? buildFactBlocksMarkdown(factBlocks.value) : factContent.value
+    savedPage.value = await saveAnswer(lastQuestion.value, `${factMd}\n\n${synthesisStream.value}`)
     isSaved.value = true
   } catch (e: any) {
     sse.queryError.value = e.message || t('search.saveFailed')
@@ -627,7 +642,30 @@ onUnmounted(() => {
         </div>
 
         <div class="search-page__answer-content">
-          <WikiPageRenderer :content="factContent" :streaming="!isSynthesizing && (isStreaming || isRefining)" :link-resolution="answerLinkResolution" />
+          <div v-if="factBlocks.length > 0" class="search-page__fact-cards">
+            <article v-for="block in factBlocks" :key="block.id" class="search-page__fact-card">
+              <div v-if="block.kind !== 'text'" class="search-page__fact-card-head">
+                <span class="search-page__fact-card-confidence" :class="'search-page__fact-card-confidence--' + block.confidence">
+                  {{ confidenceLabel(block.confidence) }}
+                </span>
+              </div>
+              <p class="search-page__fact-card-conclusion">{{ block.conclusion }}</p>
+              <p v-if="block.evidence" class="search-page__fact-card-evidence">{{ block.evidence }}</p>
+              <div v-if="block.refs.length > 0" class="search-page__fact-card-refs">
+                <template v-for="ref in block.refs" :key="block.id + '-' + ref.path">
+                  <router-link v-if="factRefPath(ref.path).startsWith('pages/')" :to="`/wiki/p/${factRefPath(ref.path)}`" class="search-page__fact-card-ref">
+                    {{ ref.title }}
+                  </router-link>
+                </template>
+              </div>
+            </article>
+          </div>
+          <WikiPageRenderer
+            v-else
+            :content="factContent"
+            :streaming="!isSynthesizing && (isStreaming || isRefining)"
+            :link-resolution="answerLinkResolution"
+          />
           <div v-if="isStreamingSynthesis && !synthesisStream" class="search-page__synthesis-hint" :class="'search-page__synthesis-hint--' + queryAnalysisMode">
             <Brain v-if="queryAnalysisMode === 'deep'" :size="16" class="search-page__brain-icon" />
             <Zap v-else :size="16" class="search-page__zap-icon" />
@@ -1380,6 +1418,84 @@ onUnmounted(() => {
 
 .search-page__answer-content {
   margin-bottom: var(--space-2);
+}
+
+.search-page__fact-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.search-page__fact-card {
+  background: var(--surface-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
+
+.search-page__fact-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+
+.search-page__fact-card-confidence {
+  font-size: var(--font-body-sm);
+  font-weight: var(--weight-medium);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent-light);
+  color: var(--accent-primary);
+}
+
+.search-page__fact-card-confidence--high {
+  background: var(--success-light);
+  color: var(--success);
+}
+
+.search-page__fact-card-confidence--low {
+  background: var(--warning-light);
+  color: var(--warning);
+}
+
+.search-page__fact-card-conclusion {
+  font-size: var(--font-body);
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.search-page__fact-card-evidence {
+  font-size: var(--font-body-sm);
+  color: var(--text-secondary);
+  margin: var(--space-2) 0 0;
+}
+
+.search-page__fact-card-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.search-page__fact-card-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-body-sm);
+  color: var(--accent-primary);
+  background: var(--accent-light);
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.search-page__fact-card-ref:hover {
+  color: var(--text-on-accent);
+  background: var(--accent-primary);
 }
 
 .search-page__synthesis-hint {

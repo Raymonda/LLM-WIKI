@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { reduceFactBlockJson, splitSynthesisAndProspective } from '../queryStreamLogic'
+import { reduceFactBlockJson, splitSynthesisAndProspective, buildFactBlocksMarkdown } from '../queryStreamLogic'
 
 describe('reduceFactBlockJson', () => {
   it('should append a parsed fact block', () => {
@@ -26,5 +26,16 @@ describe('splitSynthesisAndProspective', () => {
     const [synthesis, prospective] = splitSynthesisAndProspective('无前瞻段落')
     expect(synthesis).toBe('无前瞻段落')
     expect(prospective).toBe('')
+  })
+})
+
+describe('buildFactBlocksMarkdown', () => {
+  it('should render markdown list with confidence and refs', () => {
+    const md = buildFactBlocksMarkdown([
+      { id: '1', conclusion: '结论A', evidence: '依据A', refs: [{ path: 'wiki/pages/a.md', title: '页面A' }], confidence: 'high', kind: 'fact' },
+    ])
+    expect(md).toContain('结论A')
+    expect(md).toContain('页面A')
+    expect(md).toContain('wiki/pages/a.md')
   })
 })
