@@ -76,10 +76,7 @@ public class QueryClarifier {
         if (result == null || !"AMBIGUOUS".equals(result.clarity())) return result;
         if (sessionId == null || sessionId.isBlank()) return result;
         long now = System.currentTimeMillis();
-        SessionState state = sessionStates.computeIfAbsent(sessionId, k -> new SessionState(now));
-        if (state.expired(now) && sessionStates.replace(sessionId, state, new SessionState(now))) {
-            state = sessionStates.computeIfAbsent(sessionId, k -> new SessionState(now));
-        }
+        SessionState state = sessionStates.compute(sessionId, (k, v) -> (v == null || v.expired(now)) ? new SessionState(now) : v);
         if (state.tryIncrement(maxClarifications)) {
             return result;
         }
