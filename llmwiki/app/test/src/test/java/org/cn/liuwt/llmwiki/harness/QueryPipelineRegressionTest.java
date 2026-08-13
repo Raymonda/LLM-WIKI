@@ -13,6 +13,7 @@ class QueryPipelineRegressionTest {
         QuerySseProtocol.SseEvent stepEvent = QuerySseProtocol.mapChunk("__STEP__:generating", false);
         QuerySseProtocol.SseEvent plainEvent = QuerySseProtocol.mapChunk("text", false);
         assertEquals("answer-chunk", factEvent.eventName());
+        assertEquals("{}", factEvent.payload());
         assertEquals("clarification", clarifyEvent.eventName());
         assertEquals("step", stepEvent.eventName());
         assertEquals("answer-chunk", plainEvent.eventName());
