@@ -26,4 +26,23 @@ class QueryClarifierTest {
         QueryClarifier.ClarificationResult second = clarifier.assessForTest("s2", "AMBIGUOUS", new AtomicBoolean());
         assertEquals("AMBIGUOUS", second.clarity());
     }
+
+    @Test
+    void shouldParseJsonClarityAndClarification() {
+        QueryClarifier clarifier = new QueryClarifier(5);
+        QueryClarifier.ClarificationResult result = clarifier.assessForTest(
+            "s-json",
+            "{\"clarity\":\"AMBIGUOUS\",\"clarification\":\"请补充公司名称\",\"reason\":\"missing-subject\"}",
+            new AtomicBoolean());
+        assertEquals("AMBIGUOUS", result.clarity());
+        assertEquals("请补充公司名称", result.clarification());
+    }
+
+    @Test
+    void shouldDefaultToClearOnMalformedJson() {
+        QueryClarifier clarifier = new QueryClarifier(5);
+        QueryClarifier.ClarificationResult result = clarifier.assessForTest("s-bad", "{not json", new AtomicBoolean());
+        assertEquals("CLEAR", result.clarity());
+        assertEquals("parse-failed", result.reason());
+    }
 }

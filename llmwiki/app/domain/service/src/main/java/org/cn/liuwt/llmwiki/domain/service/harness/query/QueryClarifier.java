@@ -77,29 +77,29 @@ public class QueryClarifier {
         if (sessionId == null || sessionId.isBlank()) return result;
         long now = System.currentTimeMillis();
         SessionState state = sessionStates.computeIfAbsent(sessionId, k -> new SessionState(now));
-        if (state.expired(now)) {
-            state.reset(now);
+        if (state.expired(now) && sessionStates.replace(sessionId, state, new SessionState(now))) {
+            state = sessionStates.computeIfAbsent(sessionId, k -> new SessionState(now));
         }
-        if (state.count() >= maxClarifications) {
-            if (forcedClearFlag != null) forcedClearFlag.set(true);
-            return new ClarificationResult("CLEAR", result.clarification(), "forced-clear");
+        if (state.tryIncrement(maxClarifications)) {
+            return result;
         }
-        state.increment();
-        return result;
+        if (forcedClearFlag != null) forcedClearFlag.set(true);
+        return new ClarificationResult("CLEAR", result.clarification(), "forced-clear");
     }
 
     private static final class SessionState {
-        private long lastAccess;
+        private volatile long lastAccess;
         private final AtomicInteger counter = new AtomicInteger(0);
 
         SessionState(long now) { this.lastAccess = now; }
 
         boolean expired(long now) { return now - lastAccess > SESSION_TTL_MILLIS; }
 
-        void reset(long now) { lastAccess = now; counter.set(0); }
-
-        int count() { return counter.get(); }
-
-        void increment() { counter.incrementAndGet(); lastAccess = System.currentTimeMillis(); }
+        synchronized boolean tryIncrement(int max) {
+            if (counter.get() >= max) return false;
+            counter.incrementAndGet();
+            lastAccess = System.currentTimeMillis();
+            return true;
+        }
     }
 }
