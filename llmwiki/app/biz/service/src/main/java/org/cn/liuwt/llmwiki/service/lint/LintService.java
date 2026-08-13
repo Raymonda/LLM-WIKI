@@ -2,6 +2,8 @@ package org.cn.liuwt.llmwiki.service.lint;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
+import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
+import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.LintFindingDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ScopeDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
@@ -18,6 +20,7 @@ import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ConflictReviewDO;
 import org.cn.liuwt.llmwiki.service.harness.mq.ExecutionNodeRegistry;
 import org.cn.liuwt.llmwiki.service.harness.mq.LintScheduleTaskMessage;
+import org.cn.liuwt.llmwiki.service.harness.mq.MqHealthService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -86,6 +89,9 @@ public class LintService {
     @Value("${llmwiki.rocketmq.enabled:false}")
     private boolean mqEnabled;
 
+    @Autowired
+    private MqHealthService mqHealthService;
+
     private boolean isMqAvailable() {
         return rocketMQTemplate != null && mqEnabled;
     }
@@ -119,7 +125,7 @@ public class LintService {
 
     public ExecutionModel runLint(Long scopeId, boolean fullScan) {
         if (isLintRunning(scopeId)) {
-            throw new RuntimeException("该知识库已有 Lint 正在执行，请等待完成后再触发");
+            throw new BusinessException(ErrorCode.LINT_ALREADY_RUNNING);
         }
         return harnessEngine.executeLint(scopeId, fullScan);
     }
@@ -130,7 +136,7 @@ public class LintService {
 
     public ExecutionModel createLintExecution(Long scopeId) {
         if (isLintRunning(scopeId)) {
-            throw new RuntimeException("该知识库已有 Lint 正在执行，请等待完成后再触发");
+            throw new BusinessException(ErrorCode.LINT_ALREADY_RUNNING);
         }
         int supersededCount = lintFindingService.autoArchiveSupersededFindings(scopeId, null, null);
         if (supersededCount > 0) {
@@ -212,7 +218,7 @@ public class LintService {
 
         List<ScopeDO> prioritized = prioritizeScopes(new java.util.ArrayList<>(eligible));
 
-        if (isMqAvailable()) {
+        if (isMqAvailable() && mqHealthService.shouldAttempt()) {
             dispatchViaRocketMQ(prioritized, scopeType);
         } else {
             runLintBatchLocal(prioritized, scopeType);
@@ -221,6 +227,7 @@ public class LintService {
 
     private void dispatchViaRocketMQ(List<ScopeDO> scopes, String scopeType) {
         int sent = 0;
+        List<ScopeDO> failedScopes = new java.util.ArrayList<>();
         for (ScopeDO scope : scopes) {
             try {
                 LintScheduleTaskMessage msg = new LintScheduleTaskMessage();
@@ -231,11 +238,18 @@ public class LintService {
                 msg.setSubmittedAt(System.currentTimeMillis());
                 rocketMQTemplate.convertAndSend(LintScheduleTaskMessage.TOPIC, msg);
                 sent++;
+                mqHealthService.markSendSuccess();
             } catch (Exception e) {
+                mqHealthService.markSendFailed();
+                failedScopes.add(scope);
                 log.warn("Failed to send lint schedule message for scopeId={}: {}", scope.getId(), e.getMessage());
             }
         }
         log.info("Scheduled lint ({}) dispatched {} scope tasks to RocketMQ (Clustering)", scopeType, sent);
+        if (!failedScopes.isEmpty()) {
+            log.warn("Scheduled lint ({}) {} scope tasks failed MQ dispatch, running locally", scopeType, failedScopes.size());
+            runLintBatchLocal(failedScopes, scopeType);
+        }
     }
 
     private void runLintBatchLocal(List<ScopeDO> scopes, String scopeType) {

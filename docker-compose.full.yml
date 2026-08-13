@@ -86,7 +86,9 @@ services:
     environment:
       - NAMESRV_ADDR=rocketmq-namesrv:9876
       - JAVA_OPT_EXT=-Xms256m -Xmx512m
-    command: sh mqbroker -c /home/rocketmq/rocketmq-5.3.1/conf/broker.conf -n rocketmq-namesrv:9876
+    # 纯 Docker 部署保持默认（rocketmq-broker 容器主机名）；
+    # 混合部署（后端跑在宿主机）时设置 BROKER_IP1=127.0.0.1（或宿主机 LAN IP）
+    command: sh -c "sed 's|^brokerIP1=.*|brokerIP1=${BROKER_IP1:-rocketmq-broker}|' /home/rocketmq/rocketmq-5.3.1/conf/broker.conf > /tmp/broker-ip.conf && sh mqbroker -c /tmp/broker-ip.conf -n rocketmq-namesrv:9876"
     depends_on:
       rocketmq-namesrv:
         condition: service_healthy

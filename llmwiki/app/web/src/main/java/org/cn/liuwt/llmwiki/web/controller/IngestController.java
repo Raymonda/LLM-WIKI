@@ -19,6 +19,7 @@ import org.cn.liuwt.llmwiki.domain.service.harness.baseline.ExecutionBaselineSer
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
 import org.cn.liuwt.llmwiki.service.harness.mq.ControlMessage;
 import org.cn.liuwt.llmwiki.service.harness.mq.ExecutionNodeRegistry;
+import org.cn.liuwt.llmwiki.service.harness.mq.MqHealthService;
 import org.cn.liuwt.llmwiki.service.harness.mq.PipelineTaskMessage;
 import org.cn.liuwt.llmwiki.service.ingest.IngestService;
 import org.cn.liuwt.llmwiki.web.security.JwtTokenProvider;
@@ -71,6 +72,9 @@ public class IngestController {
     @Autowired(required = false)
     private org.apache.rocketmq.spring.core.RocketMQTemplate rocketMQTemplate;
 
+    @Autowired
+    private MqHealthService mqHealthService;
+
     @Value("${llmwiki.rocketmq.enabled:false}")
     private boolean mqEnabled;
 
@@ -97,22 +101,19 @@ public class IngestController {
         ExecutionInfo info = toExecutionInfo(execution);
         String guidance = request.getGuidance();
 
-        if (isMqAvailable()) {
-            sendPipelineTask(execution.getId(), scopeId, request.getSourceId(), guidance,
-                    PipelineTaskMessage.TYPE_INGEST_START);
-        } else {
-            submitLocalTask(execution.getId(), () -> {
-                try {
-                    ingestService.runIngestPipeline(execution.getId(), scopeId, request.getSourceId(), guidance);
-                } catch (Exception e) {
-                    log.error("Ingest pipeline failed for executionId={}", execution.getId(), e);
-                    ExecutionModel current = ingestService.getProgress(execution.getId());
-                    if (current == null || !"cancelled".equals(current.getStatus())) {
-                        ingestService.failExecution(execution.getId());
+        dispatchToMqOrLocal(execution.getId(), scopeId, request.getSourceId(), guidance,
+                PipelineTaskMessage.TYPE_INGEST_START,
+                () -> submitLocalTask(execution.getId(), () -> {
+                    try {
+                        ingestService.runIngestPipeline(execution.getId(), scopeId, request.getSourceId(), guidance);
+                    } catch (Exception e) {
+                        log.error("Ingest pipeline failed for executionId={}", execution.getId(), e);
+                        ExecutionModel current = ingestService.getProgress(execution.getId());
+                        if (current == null || !"cancelled".equals(current.getStatus())) {
+                            ingestService.failExecution(execution.getId());
+                        }
                     }
-                }
-            });
-        }
+                }));
         return Result.success(info);
     }
 
@@ -135,23 +136,22 @@ public class IngestController {
         }
         String guidance = request.getGuidance();
 
-        if (isMqAvailable()) {
-            sendPipelineTask(execution.getId(), scopeId, request.getSourceId(), guidance,
-                    PipelineTaskMessage.TYPE_INGEST_ANALYZE);
-        } else {
-            log.warn("[DIAG] Using LOCAL path for executionId={}", execution.getId());
-            submitLocalTask(execution.getId(), () -> {
-                try {
-                    ingestService.runIngestAnalysis(execution.getId(), scopeId, request.getSourceId(), guidance);
-                } catch (Exception e) {
-                    log.error("Ingest analysis failed for executionId={}", execution.getId(), e);
-                    ExecutionModel current = ingestService.getProgress(execution.getId());
-                    if (current == null || !"cancelled".equals(current.getStatus())) {
-                        ingestService.failExecution(execution.getId(), e.getMessage());
-                    }
-                }
-            });
-        }
+        dispatchToMqOrLocal(execution.getId(), scopeId, request.getSourceId(), guidance,
+                PipelineTaskMessage.TYPE_INGEST_ANALYZE,
+                () -> {
+                    log.warn("[DIAG] Using LOCAL path for executionId={}", execution.getId());
+                    submitLocalTask(execution.getId(), () -> {
+                        try {
+                            ingestService.runIngestAnalysis(execution.getId(), scopeId, request.getSourceId(), guidance);
+                        } catch (Exception e) {
+                            log.error("Ingest analysis failed for executionId={}", execution.getId(), e);
+                            ExecutionModel current = ingestService.getProgress(execution.getId());
+                            if (current == null || !"cancelled".equals(current.getStatus())) {
+                                ingestService.failExecution(execution.getId(), e.getMessage());
+                            }
+                        }
+                    });
+                });
         return Result.success(info);
     }
 
@@ -167,22 +167,19 @@ public class IngestController {
         String guidance = request != null ? request.getGuidance() : null;
         setNodeOwnership(id);
 
-        if (isMqAvailable()) {
-            sendPipelineTask(id, execution.getScopeId(), execution.getSourceId(), guidance,
-                    PipelineTaskMessage.TYPE_INGEST_EXECUTE);
-        } else {
-            submitLocalTask(id, () -> {
-                try {
-                    ingestService.runIngestExecution(id, execution.getScopeId(), execution.getSourceId(), guidance);
-                } catch (Exception e) {
-                    log.error("Ingest execution failed for executionId={}", id, e);
-                    ExecutionModel current = ingestService.getProgress(id);
-                    if (current == null || !"cancelled".equals(current.getStatus())) {
-                        ingestService.failExecution(id, e.getMessage());
+        dispatchToMqOrLocal(id, execution.getScopeId(), execution.getSourceId(), guidance,
+                PipelineTaskMessage.TYPE_INGEST_EXECUTE,
+                () -> submitLocalTask(id, () -> {
+                    try {
+                        ingestService.runIngestExecution(id, execution.getScopeId(), execution.getSourceId(), guidance);
+                    } catch (Exception e) {
+                        log.error("Ingest execution failed for executionId={}", id, e);
+                        ExecutionModel current = ingestService.getProgress(id);
+                        if (current == null || !"cancelled".equals(current.getStatus())) {
+                            ingestService.failExecution(id, e.getMessage());
+                        }
                     }
-                }
-            });
-        }
+                }));
         return Result.success(null);
     }
 
@@ -310,21 +307,17 @@ public class IngestController {
 
         ingestService.cancelExecution(id, execution.getScopeId());
 
-        if (isMqAvailable()) {
-            sendControlMessage(id, ControlMessage.ACTION_CANCEL, "用户手动取消");
-        } else {
-            registry.cancelAndRemoveFuture(id);
-
-            SseEmitter emitter = registry.removeEmitter(id);
-            if (emitter != null) {
-                try {
-                    ExecutionModel cancelled = ingestService.getProgress(id);
-                    emitter.send(SseEmitter.event().name("done").data(toExecutionInfo(cancelled)));
-                    emitter.complete();
-                } catch (Exception e) {
-                    log.warn("Failed to send cancel SSE event for executionId={}", id);
-                }
+        if (isMqAvailable() && mqHealthService.shouldAttempt()) {
+            try {
+                sendControlMessage(id, ControlMessage.ACTION_CANCEL, "用户手动取消");
+                mqHealthService.markSendSuccess();
+            } catch (Exception e) {
+                mqHealthService.markSendFailed();
+                log.error("Failed to send cancel control message, cancelling locally, executionId={}", id, e);
+                cancelIngestLocally(id);
             }
+        } else {
+            cancelIngestLocally(id);
         }
 
         return Result.success();
@@ -365,20 +358,17 @@ public class IngestController {
 
         ingestService.pauseExecution(id, execution.getScopeId());
 
-        if (isMqAvailable()) {
-            sendControlMessage(id, ControlMessage.ACTION_PAUSE, "用户手动暂停");
-        } else {
-            registry.cancelAndRemoveFuture(id);
-
-            SseEmitter emitter = registry.getEmitter(id);
-            if (emitter != null) {
-                try {
-                    ExecutionModel paused = ingestService.getProgress(id);
-                    emitter.send(SseEmitter.event().name("pause").data(toExecutionInfo(paused)));
-                } catch (Exception e) {
-                    log.warn("Failed to send pause SSE event for executionId={}", id);
-                }
+        if (isMqAvailable() && mqHealthService.shouldAttempt()) {
+            try {
+                sendControlMessage(id, ControlMessage.ACTION_PAUSE, "用户手动暂停");
+                mqHealthService.markSendSuccess();
+            } catch (Exception e) {
+                mqHealthService.markSendFailed();
+                log.error("Failed to send pause control message, pausing locally, executionId={}", id, e);
+                pauseIngestLocally(id);
             }
+        } else {
+            pauseIngestLocally(id);
         }
 
         return Result.success();
@@ -521,34 +511,31 @@ public class IngestController {
         String guidance = request != null ? request.getGuidance() : null;
         setNodeOwnership(id);
 
-        if (isMqAvailable()) {
-            sendPipelineTask(id, execution.getScopeId(), execution.getSourceId(), guidance,
-                    PipelineTaskMessage.TYPE_INGEST_RESUME);
-        } else {
-            List<ExecutionModel.ExecutionStepModel> steps = execution.getSteps();
-            boolean phase1Completed = steps != null && steps.stream()
-                .filter(s -> {
-                    String normalized = IngestStep.normalizeStepName(s.getStepName());
-                    return "UPLOAD".equals(normalized) || "ANALYZE".equals(normalized);
-                })
-                .allMatch(s -> "completed".equals(s.getStatus()));
+        List<ExecutionModel.ExecutionStepModel> steps = execution.getSteps();
+        boolean phase1Completed = steps != null && steps.stream()
+            .filter(s -> {
+                String normalized = IngestStep.normalizeStepName(s.getStepName());
+                return "UPLOAD".equals(normalized) || "ANALYZE".equals(normalized);
+            })
+            .allMatch(s -> "completed".equals(s.getStatus()));
 
-            submitLocalTask(id, () -> {
-                try {
-                    if (phase1Completed) {
-                        ingestService.resumeIngestExecution(id, execution.getScopeId(), execution.getSourceId(), guidance);
-                    } else {
-                        ingestService.resumeIngestAnalysis(id, execution.getScopeId(), execution.getSourceId(), guidance);
+        dispatchToMqOrLocal(id, execution.getScopeId(), execution.getSourceId(), guidance,
+                PipelineTaskMessage.TYPE_INGEST_RESUME,
+                () -> submitLocalTask(id, () -> {
+                    try {
+                        if (phase1Completed) {
+                            ingestService.resumeIngestExecution(id, execution.getScopeId(), execution.getSourceId(), guidance);
+                        } else {
+                            ingestService.resumeIngestAnalysis(id, execution.getScopeId(), execution.getSourceId(), guidance);
+                        }
+                    } catch (Exception e) {
+                        log.error("Resume ingest failed for executionId={}", id, e);
+                        ExecutionModel current = ingestService.getProgress(id);
+                        if (current == null || !"cancelled".equals(current.getStatus())) {
+                            ingestService.failExecution(id, e.getMessage());
+                        }
                     }
-                } catch (Exception e) {
-                    log.error("Resume ingest failed for executionId={}", id, e);
-                    ExecutionModel current = ingestService.getProgress(id);
-                    if (current == null || !"cancelled".equals(current.getStatus())) {
-                        ingestService.failExecution(id, e.getMessage());
-                    }
-                }
-            });
-        }
+                }));
         return Result.success(toExecutionInfo(ingestService.getProgress(id)));
     }
 
@@ -561,6 +548,52 @@ public class IngestController {
             }
         });
         registry.putFuture(executionId, future);
+    }
+
+    private void dispatchToMqOrLocal(Long executionId, Long scopeId, Long sourceId, String guidance,
+                                     String taskType, Runnable localFallback) {
+        if (!isMqAvailable() || !mqHealthService.shouldAttempt()) {
+            localFallback.run();
+            return;
+        }
+        try {
+            sendPipelineTask(executionId, scopeId, sourceId, guidance, taskType);
+            mqHealthService.markSendSuccess();
+        } catch (Exception e) {
+            mqHealthService.markSendFailed();
+            log.error("Failed to send pipeline task to RocketMQ (type={}, executionId={}), falling back to local execution",
+                taskType, executionId, e);
+            localFallback.run();
+        }
+    }
+
+    private void cancelIngestLocally(Long executionId) {
+        registry.cancelAndRemoveFuture(executionId);
+
+        SseEmitter emitter = registry.removeEmitter(executionId);
+        if (emitter != null) {
+            try {
+                ExecutionModel cancelled = ingestService.getProgress(executionId);
+                emitter.send(SseEmitter.event().name("done").data(toExecutionInfo(cancelled)));
+                emitter.complete();
+            } catch (Exception e) {
+                log.warn("Failed to send cancel SSE event for executionId={}", executionId);
+            }
+        }
+    }
+
+    private void pauseIngestLocally(Long executionId) {
+        registry.cancelAndRemoveFuture(executionId);
+
+        SseEmitter emitter = registry.getEmitter(executionId);
+        if (emitter != null) {
+            try {
+                ExecutionModel paused = ingestService.getProgress(executionId);
+                emitter.send(SseEmitter.event().name("pause").data(toExecutionInfo(paused)));
+            } catch (Exception e) {
+                log.warn("Failed to send pause SSE event for executionId={}", executionId);
+            }
+        }
     }
 
     private void sendPipelineTask(Long executionId, Long scopeId, Long sourceId, String guidance, String taskType) {
@@ -588,11 +621,7 @@ public class IngestController {
         msg.setReason(reason);
         msg.setIssuedBy(registry.getNodeId());
         msg.setIssuedAt(System.currentTimeMillis());
-        try {
-            rocketMQTemplate.convertAndSend(ControlMessage.TOPIC, msg);
-        } catch (Exception e) {
-            log.error("Failed to send control message to RocketMQ, executionId={}", executionId, e);
-        }
+        rocketMQTemplate.convertAndSend(ControlMessage.TOPIC, msg);
     }
 
     private void setNodeOwnership(Long executionId) {

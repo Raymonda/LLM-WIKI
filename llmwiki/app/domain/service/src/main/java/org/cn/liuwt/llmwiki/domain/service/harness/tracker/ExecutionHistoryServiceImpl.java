@@ -2,14 +2,18 @@ package org.cn.liuwt.llmwiki.domain.service.harness.tracker;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionStepDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
+import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionStepMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -22,6 +26,9 @@ public class ExecutionHistoryServiceImpl implements ExecutionHistoryService {
 
     @Autowired
     private ExecutionMapper executionMapper;
+
+    @Autowired
+    private ExecutionStepMapper executionStepMapper;
 
     @Override
     public boolean isAnyExecutionRunning(Long scopeId) {
@@ -145,5 +152,58 @@ public class ExecutionHistoryServiceImpl implements ExecutionHistoryService {
                 .in(ExecutionDO::getStatus, statuses)
                 .lt(ExecutionDO::getStartedAt, threshold)
         );
+    }
+
+    @Override
+    public boolean isZombieExecution(Long executionId, Duration noStepGrace, Duration noHeartbeatGrace) {
+        ExecutionDO exec = executionMapper.selectById(executionId);
+        if (exec == null || !ACTIVE_STATUSES.contains(exec.getStatus())) {
+            return false;
+        }
+        LocalDateTime lastStepStart = findLastStepStartedAt(executionId);
+        LocalDateTime activity = lastStepStart != null ? lastStepStart : exec.getStartedAt();
+        if (activity == null) {
+            return false;
+        }
+        Duration grace = lastStepStart != null ? noHeartbeatGrace : noStepGrace;
+        return activity.plus(grace).isBefore(LocalDateTime.now());
+    }
+
+    @Override
+    public List<ExecutionDO> findZombieExecutions(Long scopeId, Duration noStepGrace, Duration noHeartbeatGrace) {
+        LambdaQueryWrapper<ExecutionDO> wrapper = new LambdaQueryWrapper<ExecutionDO>()
+            .in(ExecutionDO::getStatus, ACTIVE_STATUSES);
+        if (scopeId != null) {
+            wrapper.eq(ExecutionDO::getScopeId, scopeId);
+        }
+        List<ExecutionDO> active = executionMapper.selectList(wrapper);
+        if (active.isEmpty()) {
+            return active;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        List<ExecutionDO> zombies = new ArrayList<>();
+        for (ExecutionDO exec : active) {
+            LocalDateTime lastStepStart = findLastStepStartedAt(exec.getId());
+            LocalDateTime activity = lastStepStart != null ? lastStepStart : exec.getStartedAt();
+            if (activity == null) {
+                continue;
+            }
+            Duration grace = lastStepStart != null ? noHeartbeatGrace : noStepGrace;
+            if (activity.plus(grace).isBefore(now)) {
+                zombies.add(exec);
+            }
+        }
+        return zombies;
+    }
+
+    private LocalDateTime findLastStepStartedAt(Long executionId) {
+        List<ExecutionStepDO> steps = executionStepMapper.selectList(
+            new LambdaQueryWrapper<ExecutionStepDO>()
+                .eq(ExecutionStepDO::getExecutionId, executionId)
+                .isNotNull(ExecutionStepDO::getStartedAt)
+                .orderByDesc(ExecutionStepDO::getStartedAt)
+                .last("LIMIT 1")
+        );
+        return steps.isEmpty() ? null : steps.get(0).getStartedAt();
     }
 }

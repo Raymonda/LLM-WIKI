@@ -173,6 +173,7 @@ public class LintFindingService {
         }
 
         LocalDateTime now = LocalDateTime.now();
+        java.util.Set<Long> affectedPageIds = new java.util.LinkedHashSet<>();
         for (LintFindingDO f : superseded) {
             lintFindingMapper.update(null,
                 new LambdaUpdateWrapper<LintFindingDO>()
@@ -183,8 +184,11 @@ public class LintFindingService {
                     .set(LintFindingDO::getArchivedAt, now)
             );
             if (f.getAssetId() != null) {
-                wikiFileService.recalcPageHealthStatus(scopeId, f.getAssetId());
+                affectedPageIds.add(f.getAssetId());
             }
+        }
+        for (Long pageId : affectedPageIds) {
+            wikiFileService.recalcPageHealthStatus(scopeId, pageId);
         }
         log.info("Auto-archived {} superseded findings for scopeId={}, executionId={}",
             superseded.size(), scopeId, currentExecutionId);

@@ -2,6 +2,7 @@ package org.cn.liuwt.llmwiki.domain.service.harness.tracker;
 
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -24,4 +25,8 @@ public interface ExecutionHistoryService {
     List<ExecutionDO> findStaleExecutions(List<String> statuses);
 
     List<ExecutionDO> findStaleExecutionsBefore(List<String> statuses, LocalDateTime threshold);
+
+    boolean isZombieExecution(Long executionId, Duration noStepGrace, Duration noHeartbeatGrace);
+
+    List<ExecutionDO> findZombieExecutions(Long scopeId, Duration noStepGrace, Duration noHeartbeatGrace);
 }

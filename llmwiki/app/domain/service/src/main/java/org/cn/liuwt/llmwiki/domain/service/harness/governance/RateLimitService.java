@@ -1,13 +1,17 @@
 package org.cn.liuwt.llmwiki.domain.service.harness.governance;
 
+import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ScopeDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ScopeMapper;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionHistoryService;
+import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -28,6 +32,11 @@ public class RateLimitService {
     private final ConcurrentHashMap<Long, String> activePipelineIds = new ConcurrentHashMap<>();
 
     private static final long MIN_CALL_INTERVAL_MS = 2000;
+    private static final Duration NO_STEP_GRACE = Duration.ofMinutes(5);
+    private static final Duration NO_HEARTBEAT_GRACE = Duration.ofMinutes(30);
+
+    @Autowired
+    private ExecutionTracker executionTracker;
 
     public boolean tryAcquireConcurrent(Long scopeId) {
         ScopeDO scope = scopeMapper.selectById(scopeId);
@@ -37,6 +46,11 @@ public class RateLimitService {
         int maxConcurrent = scope.getMaxConcurrent() != null ? scope.getMaxConcurrent() : getDefaultMaxConcurrent(scope.getType());
 
         long dbActiveCount = executionHistoryService.countActiveExecutions(scopeId);
+
+        if (dbActiveCount >= maxConcurrent) {
+            reclaimZombieExecutions(scopeId);
+            dbActiveCount = executionHistoryService.countActiveExecutions(scopeId);
+        }
 
         if (dbActiveCount >= maxConcurrent) {
             log.warn("Scope {} DB concurrent limit reached (active={}, max={}), request rejected",
@@ -116,6 +130,19 @@ public class RateLimitService {
         if ("team".equals(scopeType)) return 3;
         if ("department".equals(scopeType)) return 5;
         return 2;
+    }
+
+    private void reclaimZombieExecutions(Long scopeId) {
+        List<ExecutionDO> zombies = executionHistoryService.findZombieExecutions(scopeId, NO_STEP_GRACE, NO_HEARTBEAT_GRACE);
+        if (zombies.isEmpty()) {
+            return;
+        }
+        for (ExecutionDO zombie : zombies) {
+            log.warn("Scope {} concurrency blocked by zombie execution id={} (status={}), reclaiming",
+                scopeId, zombie.getId(), zombie.getStatus());
+            executionTracker.failExecution(zombie.getId(), "僵尸执行回收：长时间无步骤进展");
+        }
+        releaseConcurrent(scopeId);
     }
 
     private int getDefaultMaxFileSize(String scopeType) {

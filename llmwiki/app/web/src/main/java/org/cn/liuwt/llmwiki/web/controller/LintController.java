@@ -18,6 +18,7 @@ import org.cn.liuwt.llmwiki.facade.model.HealthOverview;
 import org.cn.liuwt.llmwiki.facade.model.LintFindingInfo;
 import org.cn.liuwt.llmwiki.facade.model.PageResult;
 import org.cn.liuwt.llmwiki.service.harness.mq.ExecutionNodeRegistry;
+import org.cn.liuwt.llmwiki.service.harness.mq.MqHealthService;
 import org.cn.liuwt.llmwiki.service.harness.mq.PipelineTaskMessage;
 import org.cn.liuwt.llmwiki.service.lint.LintService;
 import org.slf4j.Logger;
@@ -63,6 +64,9 @@ public class LintController {
     @Autowired(required = false)
     private org.apache.rocketmq.spring.core.RocketMQTemplate rocketMQTemplate;
 
+    @Autowired
+    private MqHealthService mqHealthService;
+
     @Value("${llmwiki.rocketmq.enabled:false}")
     private boolean mqEnabled;
 
@@ -89,20 +93,38 @@ public class LintController {
         setNodeOwnership(execution.getId());
         ExecutionInfo info = toExecutionInfo(execution);
 
-        if (isMqAvailable()) {
-            sendPipelineTask(execution.getId(), scopeId, fullScan);
+        if (isMqAvailable() && mqHealthService.shouldAttempt()) {
+            try {
+                sendPipelineTask(execution.getId(), scopeId, fullScan);
+                mqHealthService.markSendSuccess();
+            } catch (Exception e) {
+                mqHealthService.markSendFailed();
+                log.error("Failed to send lint pipeline task to RocketMQ, executionId={}, falling back to local execution", execution.getId(), e);
+                submitLocalTask(execution.getId(), () -> runLintPipelineLocally(execution.getId(), scopeId, fullScan));
+            }
         } else {
-            submitLocalTask(execution.getId(), () -> {
-                try {
-                    harnessEngine.executeLintWithExecution(execution.getId(), scopeId, fullScan);
-                } catch (Exception e) {
-                    log.error("Lint pipeline failed for executionId={}", execution.getId(), e);
-                    executionTracker.failExecution(execution.getId(), e.getMessage());
-                }
-            });
+            submitLocalTask(execution.getId(), () -> runLintPipelineLocally(execution.getId(), scopeId, fullScan));
         }
 
         return Result.success(info);
+    }
+
+    private void runLintPipelineLocally(Long executionId, Long scopeId, boolean fullScan) {
+        try {
+            harnessEngine.executeLintWithExecution(executionId, scopeId, fullScan);
+        } catch (Exception e) {
+            log.error("Lint pipeline failed for executionId={}", executionId, e);
+            failExecutionIfNotStarted(executionId, e.getMessage());
+        }
+    }
+
+    private void failExecutionIfNotStarted(Long executionId, String message) {
+        ExecutionModel current = harnessEngine.getExecution(executionId);
+        if (current != null && (current.getSteps() == null || current.getSteps().isEmpty())) {
+            executionTracker.failExecution(executionId, message);
+        } else {
+            log.warn("Execution {} already has steps, skip failExecution to avoid clobbering an active run", executionId);
+        }
     }
 
     @GetMapping("/{id}/progress")
