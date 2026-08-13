@@ -250,6 +250,7 @@ export function useSSEQuery() {
     funFacts.value = []
     factBlocks.value = []
     clarification.value = null
+    sessionId.value = ''
   }
 
   onUnmounted(() => {

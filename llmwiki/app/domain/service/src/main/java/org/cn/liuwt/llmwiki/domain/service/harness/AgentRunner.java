@@ -432,6 +432,7 @@ public class AgentRunner {
             return Flux.just(QuerySseProtocol.FACT_PREFIX + rest);
         }
         layer1Buffer.append(rest).append('\n');
+        if (rest.startsWith("{")) return Flux.empty();
         return Flux.just(rest);
     }
 
