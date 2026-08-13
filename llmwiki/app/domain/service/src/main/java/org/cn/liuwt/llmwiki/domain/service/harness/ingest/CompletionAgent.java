@@ -86,10 +86,16 @@ public class CompletionAgent {
 
         CompletableFuture<Integer> linksFuture = ensureLinksGenerationStarted(context);
 
-        runComplianceCheck(context);
-        tokensUsed += runConsistencyReconciliation(context);
-        runQualityVerification(context);
-        reSyncIndex(context);
+        if (context.isWriterPostChecksDone()) {
+            joinReconcilerFuture(context);
+        } else {
+            runComplianceCheck(context);
+            tokensUsed += runConsistencyReconciliation(context);
+            runQualityVerification(context);
+        }
+        if (!context.isBulkIndexed()) {
+            reSyncIndex(context);
+        }
 
         tokensUsed += waitForLinks(linksFuture);
 
@@ -128,6 +134,18 @@ public class CompletionAgent {
         CompletableFuture<Integer> future = indexerAgent.startLinksGeneration(context);
         context.setLinksFuture(future);
         return future;
+    }
+
+    private void joinReconcilerFuture(IngestContext context) {
+        CompletableFuture<Void> future = context.getReconcilerFuture();
+        if (future == null) {
+            return;
+        }
+        try {
+            future.get(120, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.warn("CompletionAgent: waiting for async reconciliation failed: {}", e.getMessage());
+        }
     }
 
     private void runComplianceCheck(IngestContext context) {

@@ -93,6 +93,8 @@ public class IngestContext {
 
     private transient CompletableFuture<Integer> linksFuture;
     private transient CompletableFuture<Void> reconcilerFuture;
+    private boolean writerPostChecksDone;
+    private boolean bulkIndexed;
 
     public IngestContext(Long scopeId, Long sourceId, Long executionId, String guidance) {
         this.scopeId = scopeId;
@@ -307,6 +309,11 @@ public class IngestContext {
 
     public CompletableFuture<Void> getReconcilerFuture() { return reconcilerFuture; }
     public void setReconcilerFuture(CompletableFuture<Void> reconcilerFuture) { this.reconcilerFuture = reconcilerFuture; }
+
+    public boolean isWriterPostChecksDone() { return writerPostChecksDone; }
+    public void setWriterPostChecksDone(boolean writerPostChecksDone) { this.writerPostChecksDone = writerPostChecksDone; }
+    public boolean isBulkIndexed() { return bulkIndexed; }
+    public void setBulkIndexed(boolean bulkIndexed) { this.bulkIndexed = bulkIndexed; }
     public void addSchemaPatchHint(String hint) { this.schemaPatchHints.add(hint); }
 
     public record ParallelAnalysisResult(int chunkIndex, String content, boolean hasError) {}

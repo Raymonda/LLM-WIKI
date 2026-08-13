@@ -86,6 +86,8 @@ public class WriterOrchestrator {
             reSyncIndex(context, fixedPaths);
         }
 
+        context.setWriterPostChecksDone(true);
+
         return tokens;
     }
 

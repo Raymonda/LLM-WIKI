@@ -360,8 +360,6 @@ public class WriterAgent {
             log.error("Writer parallel execution failed, some pages may be incomplete", e);
         }
 
-        sanitizeAllContent(scopeId, scopeIdStr, contentCollector);
-
         verifySourceRelations(scopeId, sourceId, context);
         batchPersistTagsAndKeywords(scopeId, context, metadataJson);
         context.getPageContents().putAll(contentCollector);
@@ -480,8 +478,6 @@ public class WriterAgent {
                 tokensUsed += estimateTokens(updatedPage.getSummary());
             }
         }
-
-        sanitizeAllContent(scopeId, scopeIdStr, serialCollector);
 
         verifySourceRelations(scopeId, sourceId, context);
         batchPersistTagsAndKeywords(scopeId, context, metadataJson);
@@ -737,8 +733,6 @@ public class WriterAgent {
             log.error("Writer chapter-based parallel execution failed", e);
         }
 
-        sanitizeAllContent(scopeId, scopeIdStr, contentCollector);
-
         verifySourceRelations(scopeId, sourceId, context);
         batchPersistTagsAndKeywords(scopeId, context, metadataJson);
         context.getPageContents().putAll(contentCollector);
@@ -931,7 +925,7 @@ public class WriterAgent {
     }
 
     private Map<Integer, String> batchGenerateReferenceSummaries(Long scopeId, List<DocumentStructureAnalyzer.Chapter> chapters) {
-        Map<Integer, String> result = new java.util.HashMap<>();
+        Map<Integer, String> result = new java.util.concurrent.ConcurrentHashMap<>();
         if (chatClient == null || chapters == null || chapters.isEmpty()) {
             return result;
         }
@@ -972,28 +966,30 @@ public class WriterAgent {
             if (result.size() < chapters.size()) {
                 int missingCount = chapters.size() - result.size();
                 log.info("Batch summaries incomplete: {} chapters missing, falling back to individual generation", missingCount);
-                for (int i = 0; i < chapters.size(); i++) {
-                    if (!result.containsKey(i)) {
-                        DocumentStructureAnalyzer.Chapter ch = chapters.get(i);
-                        String content = ch.sourceContent() != null ? ch.sourceContent() : "";
-                        String fallbackSummary = generateReferenceSummary(scopeId, content);
-                        result.put(i, fallbackSummary);
-                    }
-                }
+                generateMissingSummariesInParallel(scopeId, chapters, result);
                 log.info("Fallback complete: all {}/{} chapters have summaries", result.size(), chapters.size());
             }
         } catch (Exception e) {
             log.warn("Batch reference summaries failed, falling back to individual: {}", e.getMessage());
-            for (int i = 0; i < chapters.size(); i++) {
-                if (!result.containsKey(i)) {
-                    DocumentStructureAnalyzer.Chapter ch = chapters.get(i);
-                    String content = ch.sourceContent() != null ? ch.sourceContent() : "";
-                    String fallbackSummary = generateReferenceSummary(scopeId, content);
-                    result.put(i, fallbackSummary);
-                }
-            }
+            generateMissingSummariesInParallel(scopeId, chapters, result);
         }
         return result;
+    }
+
+    private void generateMissingSummariesInParallel(Long scopeId, List<DocumentStructureAnalyzer.Chapter> chapters, Map<Integer, String> result) {
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        for (int i = 0; i < chapters.size(); i++) {
+            if (result.containsKey(i)) continue;
+            DocumentStructureAnalyzer.Chapter ch = chapters.get(i);
+            final int idx = i;
+            futures.add(CompletableFuture.runAsync(() -> {
+                String content = ch.sourceContent() != null ? ch.sourceContent() : "";
+                result.put(idx, generateReferenceSummary(scopeId, content));
+            }, writerExecutor));
+        }
+        if (!futures.isEmpty()) {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -1143,6 +1139,7 @@ public class WriterAgent {
                 }
             }
         }
+        context.setBulkIndexed(true);
     }
 
     private void batchPersistTagsAndKeywords(Long scopeId, IngestContext context, String metadataJson) {
@@ -2830,24 +2827,6 @@ public class WriterAgent {
         }
         int nonChinese = text.length() - chineseCount;
         return chineseCount / 2 + nonChinese / 4;
-    }
-
-    private void sanitizeAllContent(Long scopeId, String scopeIdStr, Map<String, String> contentCollector) {
-        int sanitizedCount = 0;
-        for (Map.Entry<String, String> entry : contentCollector.entrySet()) {
-            String original = entry.getValue();
-            if (original == null || original.isBlank()) continue;
-            String sanitized = linkWritingService.sanitizeSourceLinks(original);
-            sanitized = linkWritingService.sanitizeWikiLinks(sanitized, scopeId);
-            if (!sanitized.equals(original)) {
-                entry.setValue(sanitized);
-                storageProvider.write(scopeIdStr, "wiki/" + entry.getKey(), sanitized.getBytes(StandardCharsets.UTF_8));
-                sanitizedCount++;
-            }
-        }
-        if (sanitizedCount > 0) {
-            log.info("Post-hoc sanitized ghost links in {} pages for scope {}", sanitizedCount, scopeId);
-        }
     }
 
     private List<IngestContext.ConflictAnnotation> extractConflictMeta(String writingPlanJson) {

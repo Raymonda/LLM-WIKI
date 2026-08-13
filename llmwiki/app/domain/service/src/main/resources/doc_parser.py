@@ -65,7 +65,10 @@ def _extract_metadata(reader):
 
 
 def _extract_text_fitz(file_path):
-    import fitz
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        import fitz
     try:
         doc = fitz.open(file_path)
     except AssertionError:
@@ -362,8 +365,11 @@ def _extract_tables_pdfplumber(file_path, max_tables_per_page=5):
 def _extract_embedded_images_pdf(file_path, assets_dir, source_id, min_bytes=5120, max_images=50):
     """提取 PDF 内嵌图片，保存到 assets 目录。
     对浏览器不支持的格式（tiff/pbm/ppm/pgm 等）自动转换为 PNG。"""
-    import fitz
-
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        import fitz
+    
     BROWSER_FRIENDLY_EXTS = {"png", "jpg", "jpeg", "gif", "webp", "svg"}
 
     doc = fitz.open(file_path)
@@ -1007,7 +1013,10 @@ def _expand_bbox_with_text(page, bbox, watermark_texts=None, search_margin=100):
 
 
 def _extract_chart_image(page, bbox, page_num, chart_idx, dpi=200, clip_rect=None):
-    import fitz
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        import fitz
     pw, ph = page.rect.width, page.rect.height
     if clip_rect is not None:
         padded = clip_rect
@@ -1262,7 +1271,10 @@ def _parse_vl_structured(text):
 
 
 def _ocr_page_with_vl(file_path, page_index, api_key, model="qwen-vl-plus"):
-    import fitz
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        import fitz
     import base64
     import json
     import urllib.request
@@ -1306,7 +1318,10 @@ def _save_low_text_page_images(file_path, result, assets_dir, source_id, dpi=100
     if low_text_pages <= 0:
         return result, []
 
-    import fitz
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        import fitz
     doc = fitz.open(file_path)
     low_indices = []
     for i, page in enumerate(doc):
@@ -1409,7 +1424,10 @@ def _ocr_low_text_pages(file_path, result, api_key, model="qwen-vl-plus", max_pa
     if low_text_pages <= 0 or low_text_pages / total_pages < threshold:
         return result
 
-    import fitz
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        import fitz
     doc = fitz.open(file_path)
     low_indices = []
     skip_set = set(skip_pages or [])
@@ -1955,8 +1973,11 @@ def _supplement_tables_from_fitz_structured(content, file_path):
     针对图表密集页面（pymupdf4llm 将表格数据渲染为 picture 而丢失），
     用 fitz 的原始文本提取补全数据。
     返回 (增强后 content, 补充的页面列表)"""
-    import fitz
-
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        import fitz
+    
     if not content:
         return content, []
 
@@ -2041,7 +2062,10 @@ def _extract_text_pymupdf4llm(file_path, assets_dir=None, source_id=None):
         if not chunks:
             return None
 
-        import fitz
+        try:
+            import pymupdf as fitz
+        except ImportError:
+            import fitz
         wm_doc = None
         watermark_texts = set()
         try:
@@ -2148,8 +2172,11 @@ def _extract_text_pymupdf4llm(file_path, assets_dir=None, source_id=None):
 def _extract_text_fitz_structured(file_path, assets_dir=None, source_id=None):
     """结构化 PDF 提取：布局分析 + 块级拼装 + 图片提取 + 表格提取
     失败时返回 None，触发 parse_pdf 的降级链路"""
-    import fitz
-
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        import fitz
+    
     # 预处理：pdfplumber 表格提取（内部已有异常处理）
     tables_map = _extract_tables_pdfplumber(file_path)
 
@@ -2277,7 +2304,10 @@ def _extract_text_fitz_structured(file_path, assets_dir=None, source_id=None):
 def _fallback_scan_pdf(file_path, assets_dir=None, source_id=None):
     """纯扫描件兜底：PDF 无文字层时，将每页渲染为 PNG 保存到 assets，返回最小结果。
     后续 OCR 或多模态主模型链路可基于 lowTextPages + hasScanWarning 继续处理。"""
-    import fitz
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        import fitz
     try:
         doc = fitz.open(file_path)
     except Exception:
@@ -3309,7 +3339,10 @@ def _get_diagram_candidate_pages_pdf(file_path, score_threshold=5.0,
     """快速启发式检测，返回需要优先走Diagram分析的页面索引集合（0-based）。
     供OCR阶段跳过这些页面，避免重复VL分析。"""
     try:
-        import fitz
+        try:
+            import pymupdf as fitz
+        except ImportError:
+            import fitz
         doc = fitz.open(file_path)
     except Exception:
         return set()
@@ -3968,7 +4001,10 @@ def main():
                 _chart_assets_dir = assets_dir_val if assets_dir_val else str(Path(real_path).parent / "assets")
                 _watermark_texts_for_diagram = set()
                 try:
-                    import fitz as _fitz_for_wm
+                    try:
+                        import pymupdf as _fitz_for_wm
+                    except ImportError:
+                        import fitz as _fitz_for_wm
                     _wm_doc = _fitz_for_wm.open(str(real_path))
                     _watermark_texts_for_diagram = _detect_watermarks(_wm_doc)
                     _wm_doc.close()

@@ -201,7 +201,7 @@ public class PythonProcessRunner {
                 throw new RuntimeException("文档解析失败 (exit=" + exitCode + "): " + detail);
             }
 
-            return stdoutStr;
+            return extractJsonOutput(stdoutStr);
         } catch (IOException e) {
             log.error("Failed to start Python process", e);
             String msg = e.getMessage() != null ? e.getMessage() : "";
@@ -335,6 +335,16 @@ public class PythonProcessRunner {
         });
         t.start();
         return t;
+    }
+
+    private String extractJsonOutput(String stdoutStr) {
+        String trimmed = stdoutStr.trim();
+        int jsonStart = trimmed.indexOf('{');
+        int jsonEnd = trimmed.lastIndexOf('}');
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+            return trimmed.substring(jsonStart, jsonEnd + 1);
+        }
+        return trimmed;
     }
 
     private String extractErrorDetail(String stdoutStr, String errOutput) {

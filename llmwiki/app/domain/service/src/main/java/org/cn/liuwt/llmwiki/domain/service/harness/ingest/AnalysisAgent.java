@@ -202,19 +202,15 @@ public class AnalysisAgent {
             JsonNode root = mapper.readTree(cleanJson(metadataJson));
             if (!root.has("entities") || !root.get("entities").isArray()) return;
 
+            Map<String, WikiPageDO> activePagesByTitle = loadActivePagesByTitle(scopeId);
+
             ArrayNode entities = (ArrayNode) root.get("entities");
             for (int i = 0; i < entities.size(); i++) {
                 JsonNode entity = entities.get(i);
                 String name = entity.has("name") ? entity.get("name").asText() : "";
                 if (name.isEmpty()) continue;
 
-                WikiPageDO existing = wikiPageMapper.selectOne(
-                    new LambdaQueryWrapper<WikiPageDO>()
-                        .eq(WikiPageDO::getScopeId, scopeId)
-                        .eq(WikiPageDO::getLifecycleStatus, "ACTIVE")
-                        .apply("LOWER(title) = {0}", name.toLowerCase())
-                        .last("LIMIT 1")
-                );
+                WikiPageDO existing = activePagesByTitle.get(name.toLowerCase());
 
                 ObjectNode objNode = (ObjectNode) entity;
                 if (existing != null) {
@@ -232,6 +228,22 @@ public class AnalysisAgent {
         } catch (Exception e) {
             log.warn("resolveEntityActions failed: {}", e.getMessage());
         }
+    }
+
+    private Map<String, WikiPageDO> loadActivePagesByTitle(Long scopeId) {
+        Map<String, WikiPageDO> index = new java.util.HashMap<>();
+        List<WikiPageDO> pages = wikiPageMapper.selectList(
+            new LambdaQueryWrapper<WikiPageDO>()
+                .eq(WikiPageDO::getScopeId, scopeId)
+                .eq(WikiPageDO::getLifecycleStatus, "ACTIVE")
+                .select(WikiPageDO::getId, WikiPageDO::getTitle, WikiPageDO::getFilePath)
+        );
+        for (WikiPageDO page : pages) {
+            if (page.getTitle() != null) {
+                index.putIfAbsent(page.getTitle().toLowerCase(), page);
+            }
+        }
+        return index;
     }
 
     void buildInformationCatalogAndDossiers(IngestContext context) {
