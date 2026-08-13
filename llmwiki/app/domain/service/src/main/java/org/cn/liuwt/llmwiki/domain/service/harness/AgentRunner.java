@@ -196,6 +196,7 @@ public class AgentRunner {
                         .stream()
                         .content()
                         .concatMap(chunk -> {
+                            if (chunk == null) return Flux.empty();
                             lineBuffer.append(chunk);
                             List<String> lines = FactBlockParser.extractCompleteLines(lineBuffer);
                             List<String> out = new ArrayList<>();
@@ -205,6 +206,7 @@ public class AgentRunner {
                                     factBlocks.add(block);
                                     out.add(QuerySseProtocol.FACT_PREFIX + line);
                                 } else if (!line.isBlank()) {
+                                    layer1Buffer.append(line).append('\n');
                                     out.add(line);
                                 }
                             }
@@ -214,7 +216,11 @@ public class AgentRunner {
                             String rest = lineBuffer.toString().trim();
                             if (!rest.isEmpty()) {
                                 FactBlock block = FactBlockParser.tryParse(rest);
-                                if (block != null) factBlocks.add(block);
+                                if (block != null) {
+                                    factBlocks.add(block);
+                                } else {
+                                    layer1Buffer.append(rest).append('\n');
+                                }
                             }
                         })
                     : activeQueryClient.prompt()
@@ -231,7 +237,7 @@ public class AgentRunner {
                         .synthesisPrompt(scopeId, question,
                             FactBlockParser.toFactInput(factBlocks, layer1Buffer.toString()), deprecatedContext, deepMode);
 
-                    return synthesizeWithImages(scopeId, synthesisUserPrompt, "", deepMode);
+                    return synthesizeWithImages(scopeId, synthesisUserPrompt, factBlocks, deepMode);
                 });
 
                 Flux<String> synthesisMarker = Flux.just("\n\n", "__STEP__:synthesizing");
@@ -287,6 +293,7 @@ public class AgentRunner {
                         .stream()
                         .content()
                         .concatMap(chunk -> {
+                            if (chunk == null) return Flux.empty();
                             lineBuffer.append(chunk);
                             List<String> lines = FactBlockParser.extractCompleteLines(lineBuffer);
                             List<String> out = new ArrayList<>();
@@ -296,6 +303,7 @@ public class AgentRunner {
                                     factBlocks.add(block);
                                     out.add(QuerySseProtocol.FACT_PREFIX + line);
                                 } else if (!line.isBlank()) {
+                                    layer1Buffer.append(line).append('\n');
                                     out.add(line);
                                 }
                             }
@@ -305,7 +313,11 @@ public class AgentRunner {
                             String rest = lineBuffer.toString().trim();
                             if (!rest.isEmpty()) {
                                 FactBlock block = FactBlockParser.tryParse(rest);
-                                if (block != null) factBlocks.add(block);
+                                if (block != null) {
+                                    factBlocks.add(block);
+                                } else {
+                                    layer1Buffer.append(rest).append('\n');
+                                }
                             }
                         })
                     : activeQueryClient.prompt()
@@ -319,7 +331,7 @@ public class AgentRunner {
                     String synthesisUserPrompt = PromptRegistry.forQuery()
                         .synthesisPrompt(primaryScopeId, question,
                             FactBlockParser.toFactInput(factBlocks, layer1Buffer.toString()), "", deepMode);
-                    return synthesizeWithImages(primaryScopeId, synthesisUserPrompt, "", deepMode);
+                    return synthesizeWithImages(primaryScopeId, synthesisUserPrompt, factBlocks, deepMode);
                 });
                 Flux<String> synthesisMarker = Flux.just("\n\n", "__STEP__:synthesizing");
                 return Flux.concat(generatingMarker, layer1Stream, synthesisMarker, layer23Stream)
@@ -347,7 +359,7 @@ public class AgentRunner {
 
     private static final Pattern IMG_EXTRACT_PATTERN = Pattern.compile("!\\[[^\\]]*?\\]\\(([^)]+?)\\)");
 
-    private Flux<String> synthesizeWithImages(Long scopeId, String synthesisPrompt, String layer1Text, boolean deepMode) {
+    private Flux<String> synthesizeWithImages(Long scopeId, String synthesisPrompt, List<FactBlock> factBlocks, boolean deepMode) {
         ChatClient activeNoToolsClient = (deepMode && deepNoToolsClient != null) ? deepNoToolsClient : noToolsClient;
         
         if (chatModel == null) {
@@ -358,9 +370,9 @@ public class AgentRunner {
                 .content();
         }
 
-        List<String> imagePaths = extractImagePaths(layer1Text);
-        log.info("Image extraction: scopeId={} deepMode={} foundPaths={} layer1Len={}",
-            scopeId, deepMode, imagePaths.size(), layer1Text.length());
+        List<String> imagePaths = extractImagePathsFromFactBlocks(factBlocks);
+        log.info("Image extraction: scopeId={} deepMode={} foundPaths={} factBlockCount={}",
+            scopeId, deepMode, imagePaths.size(), factBlocks == null ? 0 : factBlocks.size());
 
         List<Media> mediaList = loadImagesAsMedia(String.valueOf(scopeId), imagePaths);
         log.info("Image loading: scopeId={} loadedCount={} (extracted={})", 
@@ -417,6 +429,22 @@ public class AgentRunner {
     private static final int MAX_QUERY_IMAGES = 10;
     private static final int MAX_SINGLE_IMAGE_BYTES = 2 * 1024 * 1024;
     private static final int MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
+
+    private List<String> extractImagePathsFromFactBlocks(List<FactBlock> factBlocks) {
+        List<String> paths = new ArrayList<>();
+        if (factBlocks == null) return paths;
+        for (FactBlock block : factBlocks) {
+            if (!"image".equals(block.kind())) continue;
+            if (block.refs() == null) continue;
+            for (FactBlock.FactRef ref : block.refs()) {
+                String path = ref.path();
+                if (path != null && !path.isBlank() && !path.startsWith("http") && !path.startsWith("data:")) {
+                    paths.add(path);
+                }
+            }
+        }
+        return paths;
+    }
 
     private List<String> extractImagePaths(String text) {
         List<String> paths = new ArrayList<>();

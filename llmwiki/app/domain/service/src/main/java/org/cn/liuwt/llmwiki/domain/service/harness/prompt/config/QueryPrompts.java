@@ -210,11 +210,11 @@ public class QueryPrompts {
             """.formatted(scopeId, pageCount, lightContext);
     }
 
-    public String synthesisPrompt(Long scopeId, String question, String layer1Text, String deprecatedContext) {
-        return synthesisPrompt(scopeId, question, layer1Text, deprecatedContext, false);
+    public String synthesisPrompt(Long scopeId, String question, String factSummaryView, String deprecatedContext) {
+        return synthesisPrompt(scopeId, question, factSummaryView, deprecatedContext, false);
     }
 
-    public String synthesisPrompt(Long scopeId, String question, String layer1Text, String deprecatedContext, boolean deepMode) {
+    public String synthesisPrompt(Long scopeId, String question, String factSummaryView, String deprecatedContext, boolean deepMode) {
         String deprecatedSection = deprecatedContext != null && !deprecatedContext.isEmpty()
             ? "\n" + deprecatedContext + "\n"
             : "\n（无已过时页面与本次查询相关）\n";
@@ -222,17 +222,17 @@ public class QueryPrompts {
         String richElementGuidance = deepMode ? RICH_ELEMENT_GUIDANCE : "";
 
         return """
-            你是知识分析与综合专家。基于已收集的 Wiki 事实（Layer 1），产出 Layer 2（AI 解读）和 Layer 3（前瞻推演）。
+            你是知识分析与综合专家。基于已收集的 Wiki 事实清单，产出 Layer 2（AI 解读）和 Layer 3（前瞻推演）。
 
             ## 约束
-            - Layer 1 不可修改、不可重复，你的输出直接从「AI 分析」开始
+            - 事实清单不可修改、不可重复，你的输出直接从「AI 分析」开始
             - 过时页面仅用于历史分析和趋势推理，不可作为当前事实依据
             - 每个分析点必须有具体论据，避免空洞套话
 
             ## 用户问题
             %s
 
-            ## Layer 1 — Wiki 事实（不可修改）
+            ## 事实清单（不可修改）
             %s
 
             ## 已过时页面（仅供历史分析参考）
@@ -275,7 +275,7 @@ public class QueryPrompts {
             %s
 
             当前 Wiki 范围 ID: %d
-            """.formatted(question, layer1Text, deprecatedSection, richElementGuidance, scopeId);
+            """.formatted(question, factSummaryView, deprecatedSection, richElementGuidance, scopeId);
     }
 
     public String detectSaveConflictsPrompt(String newTitle, String newContent, String existingTitle, String existingContent) {
