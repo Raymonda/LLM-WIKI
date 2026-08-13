@@ -18,7 +18,7 @@ llmwiki:
   ai:
     multimodal-model: qwen3.7-plus
     query-multimodal-model: deepseek-v4-flash-0731
-    deep-analysis-model: deepseek-v4-flash-0731
+    deep-analysis-model: ${AI_DEEP_ANALYSIS_MODEL:deepseek-v4-pro}
     deep-multimodal-model: qwen3.7-plus
   rocketmq:
     enabled: ${ROCKETMQ_ENABLED:false}
