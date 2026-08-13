@@ -59,6 +59,8 @@ public class AgentRunner {
     @Value("${llmwiki.query.clarifier.enabled:true}")
     private boolean clarifierEnabled;
 
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     @Autowired(required = false)
     private ChatModel chatModel;
 
@@ -182,14 +184,17 @@ public class AgentRunner {
                         PromptRegistry.forQuery().clarificationPrompt(scopeId));
                     QueryClarifier.ClarificationResult clarification = queryClarifier.assess(
                         clarifyClient, clarifyPrompt, question, sessionId);
-                    if ("AMBIGUOUS".equals(clarification.clarity())) {
+                    if ("AMBIGUOUS".equals(clarification.clarity())
+                        && clarification.clarification() != null
+                        && !clarification.clarification().isBlank()
+                        && clarification.reason() != null) {
                         String payload;
                         try {
-                            payload = new ObjectMapper().writeValueAsString(Map.of(
+                            payload = MAPPER.writeValueAsString(Map.of(
                                 "question", clarification.clarification(),
                                 "reason", clarification.reason()));
                         } catch (Exception e) {
-                            payload = "{\"question\":\"" + clarification.clarification() + "\"}";
+                            payload = "{\"question\":\"\"}";
                         }
                         return Flux.just(QuerySseProtocol.CLARIFY_PREFIX + payload);
                     }
@@ -322,14 +327,17 @@ public class AgentRunner {
                         PromptRegistry.forQuery().clarificationPrompt(primaryScopeId));
                     QueryClarifier.ClarificationResult clarification = queryClarifier.assess(
                         clarifyClient, clarifyPrompt, question, sessionId);
-                    if ("AMBIGUOUS".equals(clarification.clarity())) {
+                    if ("AMBIGUOUS".equals(clarification.clarity())
+                        && clarification.clarification() != null
+                        && !clarification.clarification().isBlank()
+                        && clarification.reason() != null) {
                         String payload;
                         try {
-                            payload = new ObjectMapper().writeValueAsString(Map.of(
+                            payload = MAPPER.writeValueAsString(Map.of(
                                 "question", clarification.clarification(),
                                 "reason", clarification.reason()));
                         } catch (Exception e) {
-                            payload = "{\"question\":\"" + clarification.clarification() + "\"}";
+                            payload = "{\"question\":\"\"}";
                         }
                         return Flux.just(QuerySseProtocol.CLARIFY_PREFIX + payload);
                     }

@@ -62,6 +62,8 @@ public class QueryController {
                                    @RequestParam(required = false, defaultValue = "quick") String mode,
                                    @RequestParam(required = false) String scopeIds,
                                    @RequestParam(required = false) String assumedIntent) {
+        log.debug("Query stream: mode={} scopeIds={} clarifierEnabled={} factBlockEnabled={} hasAssumedIntent={}",
+            mode, scopeIds, clarifierEnabled, factBlockEnabled, assumedIntent != null && !assumedIntent.isBlank());
         if (question == null || question.trim().isEmpty()) {
             SseEmitter emitter = new SseEmitter(5000L);
             try {
