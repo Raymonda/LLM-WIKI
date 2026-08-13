@@ -33,4 +33,13 @@ class QueryPromptsTest {
         assertTrue(prompt.contains("Layer 2"), "prompt must keep Layer 2 structure");
         assertTrue(prompt.contains("Layer 3"), "prompt must keep Layer 3 structure");
     }
+
+    @Test
+    void shouldRequireFactAnchoringWhenPromptingSynthesis() {
+        QueryPrompts prompts = PromptRegistry.forQuery();
+        String prompt = prompts.synthesisPrompt(1L, "q", "[1] 高可信 | 结论", "（无已过时页面与本次查询相关）", true);
+        assertTrue(prompt.contains("锚定"), "prompt must require fact anchoring");
+        assertTrue(prompt.contains("置信度"), "prompt must bind assertion strength to confidence");
+        assertTrue(prompt.contains("证据不足"), "prompt must allow explicit no-evidence declaration");
+    }
 }
