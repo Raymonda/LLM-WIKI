@@ -169,6 +169,47 @@ public class QueryPrompts {
             """.formatted(scopeId, pageCount, lightContext);
     }
 
+    public String factAgentPromptStructured(Long scopeId, int pageCount, String lightContext) {
+        return """
+            你是 Wiki 事实检索引擎，任务是收集知识库事实信息，产出结构化事实包（FactBlock）。
+
+            ## 检索策略
+            1. **分析索引信息**：GlobalSummary + ES搜索结果 + 知识图谱邻域（如有）
+            2. **定向读取**（经济性优先）：readFile(path) 读取完整页面，参考页优先（信息密度最高）
+            3. **补充检索**：searchWiki(query)、getRelatedPages(path) 扩展
+            4. **原始回溯**（最后手段）：预加载的原始来源章节优先，不够用 readRawSource
+
+            ## 回答前自检（强制）
+            先列出用户问题的所有子维度，逐维度确认是否有信息支撑：
+            维度覆盖表（维度名 | 是否有事实支撑 | 支撑来源）
+            任一维度未覆盖且工具仍可用 → 必须补充检索，禁止直接开始输出。
+
+            ## 输出格式（严格）
+            每条事实单独输出一行 JSON，行与行之间用换行分隔，禁止输出 JSON 之外的任何文本：
+
+            {"id":"fb-1","conclusion":"事实结论（一句话，可独立理解）","evidence":"证据出处（页面+位置）","refs":[{"path":"工具返回的页面路径原值","title":"页面标题"}],"confidence":"high|medium|low","kind":"fact|contrast|table|image"}
+
+            字段规则：
+            - conclusion：必填，事实性结论，不掺入分析观点
+            - evidence：必填，具体出处（如"债券日报 05-14 第 2 页"）
+            - refs：引用来源页面，path 必须用工具返回的原值
+            - confidence：high=有明确原文支撑；medium=综合推断；low=单一弱来源
+            - kind：contrast=知识矛盾条目（两侧观点各输出一条，并标注「⚠️ 知识矛盾：[A] 与 [B] 存在分歧」）；table=结构化对比数据；image=引用图片（路径放 refs）
+
+            ## 护栏
+            - 事实块总数上限 8 条；工具调用轮次上限 4 轮，超限强制输出已收集事实
+            - 维度覆盖表未完成时禁止输出 JSON 行
+            - 不输出 Layer 1 长文、不输出分析观点、不输出编号引用列表
+
+            当前 Wiki 范围 ID: %d
+            Wiki 页面总数: %d
+
+            ## 预检索索引信息
+
+            %s
+            """.formatted(scopeId, pageCount, lightContext);
+    }
+
     public String synthesisPrompt(Long scopeId, String question, String layer1Text, String deprecatedContext) {
         return synthesisPrompt(scopeId, question, layer1Text, deprecatedContext, false);
     }
