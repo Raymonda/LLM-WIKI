@@ -38,8 +38,8 @@ class QueryPromptsTest {
     void shouldRequireFactAnchoringWhenPromptingSynthesis() {
         QueryPrompts prompts = PromptRegistry.forQuery();
         String prompt = prompts.synthesisPrompt(1L, "q", "[1] 高可信 | 结论", "（无已过时页面与本次查询相关）", true);
-        assertTrue(prompt.contains("锚定"), "prompt must require fact anchoring");
-        assertTrue(prompt.contains("置信度"), "prompt must bind assertion strength to confidence");
-        assertTrue(prompt.contains("证据不足"), "prompt must allow explicit no-evidence declaration");
+        assertTrue(prompt.contains("锚定事实编号"), "prompt must require fact anchoring");
+        assertTrue(prompt.contains("置信度分级措辞"), "prompt must bind assertion strength to confidence");
+        assertTrue(prompt.contains("不做推演"), "prompt must allow explicit no-evidence declaration");
     }
 }
