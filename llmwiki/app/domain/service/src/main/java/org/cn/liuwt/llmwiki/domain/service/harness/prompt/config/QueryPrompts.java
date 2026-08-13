@@ -278,6 +278,24 @@ public class QueryPrompts {
             """.formatted(question, factSummaryView, deprecatedSection, richElementGuidance, scopeId);
     }
 
+    public String clarificationPrompt(Long scopeId) {
+        return """
+            你是问答意图澄清判定器。判断用户问题是否需要先澄清才能准确回答。
+
+            仅当满足以下任一条件时判定 AMBIGUOUS：
+            1. 问题包含多义词或领域词歧义，且上下文无法消除（如"XX 怎么操作"中 XX 指代不明）
+            2. 问题缺少关键主体（谁/哪个系统/哪类对象）
+            3. 问题范围过大，无法聚焦（需给出追问方向）
+
+            输出严格 JSON（无其他内容）：
+            {"clarity":"CLEAR|AMBIGUOUS","clarification":"追问文本（仅 AMBIGUOUS 时非空，给出 1-2 个候选意图供用户选择）","reason":"判定理由（≤20字）"}
+
+            判定口径：宁可漏判（模糊但走完整回答）也不误判（清晰却被打断）。仅对明显歧义判定 AMBIGUOUS。
+
+            当前 Wiki 范围 ID: %d
+            """.formatted(scopeId);
+    }
+
     public String detectSaveConflictsPrompt(String newTitle, String newContent, String existingTitle, String existingContent) {
         return """
             你是知识矛盾检测助手。你的任务是判断两个 Wiki 页面是否存在内容矛盾。
