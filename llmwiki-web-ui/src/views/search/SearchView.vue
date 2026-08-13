@@ -4,7 +4,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import WikiPageRenderer from '@/components/wiki/WikiPageRenderer.vue'
 import FunFactTips from '@/components/wiki/FunFactTips.vue'
-import { Search, MessageCircle, Loader2, BookOpen, BookmarkPlus, Bot, FileText, AlertTriangle, CheckCircle, Filter, X, ExternalLink, Info, Copy, Send, Pencil, Sparkles, Check, Zap, Brain, ChevronDown, Library } from 'lucide-vue-next'
+import { Search, MessageCircle, Loader2, BookOpen, BookmarkPlus, Bot, FileText, AlertTriangle, CheckCircle, Filter, HelpCircle, X, ExternalLink, Info, Copy, Send, Pencil, Sparkles, Check, Zap, Brain, ChevronDown, Library } from 'lucide-vue-next'
 import { searchPages, searchSuggest, listCategories, type WikiPageInfo, type SearchResultInfo } from '@/api/wiki'
 import { useAuthStore } from '@/stores/auth'
 import { saveAnswer, resolveLinks, type QueryAnalysisMode } from '@/api/query'
@@ -37,6 +37,8 @@ const refineInput = ref('')
 const isRefining = ref(false)
 const answerLinkResolution = ref<Record<string, number>>({})
 const queryAnalysisMode = ref<QueryAnalysisMode>('quick')
+const clarifyInput = ref('')
+const clarification = computed(() => sse.clarification.value)
 
 const isLoading = computed(() => localLoading.value || sse.isLoading.value)
 const isStreaming = computed(() => sse.isStreaming.value)
@@ -314,6 +316,14 @@ function handleQuery() {
   isSaving.value = false
   didScrollToProspectiveStart = false
   sse.startQuery(q, queryAnalysisMode.value)
+}
+
+function submitIntent(intentText: string) {
+  if (!clarification.value) return
+  const extra = clarifyInput.value.trim()
+  const question = clarification.value.question + (extra ? ` ${extra}` : '')
+  sse.startQuery(question, queryAnalysisMode.value, undefined, intentText.trim())
+  clarifyInput.value = ''
 }
 
 function handleRefine() {
@@ -619,6 +629,39 @@ onUnmounted(() => {
       <div v-if="queryError && !aiAnswer" class="search-page__error">
         <AlertTriangle :size="16" />
         {{ queryError }}
+      </div>
+
+      <div v-if="clarification" class="search-page__clarify-card">
+        <div class="search-page__clarify-header">
+          <HelpCircle :size="16" class="search-page__clarify-icon" />
+          <span class="search-page__clarify-question">{{ clarification.question }}</span>
+        </div>
+        <div v-if="clarification.options.length > 0" class="search-page__clarify-options">
+          <button
+            v-for="opt in clarification.options"
+            :key="opt"
+            class="search-page__clarify-option"
+            @click="submitIntent(opt)"
+          >
+            {{ opt }}
+          </button>
+        </div>
+        <div class="search-page__clarify-input-row">
+          <input
+            v-model="clarifyInput"
+            class="search-page__clarify-input"
+            placeholder="补充你的意图，或直接发送"
+            @keydown.enter="submitIntent(clarifyInput)"
+          />
+          <button
+            class="search-page__clarify-send"
+            :disabled="!clarifyInput.trim()"
+            @click="submitIntent(clarifyInput)"
+            aria-label="发送意图"
+          >
+            <Send :size="14" />
+          </button>
+        </div>
       </div>
 
       <div v-if="hasAnswer" class="search-page__answer">
@@ -1776,5 +1819,101 @@ onUnmounted(() => {
   border-color: var(--accent-primary);
   color: var(--accent-primary);
   background: var(--accent-light);
+}
+
+.search-page__clarify-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--accent-light);
+  border: 1px solid var(--accent-border, var(--input-border));
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-4);
+  animation: answerFadeIn 0.2s ease;
+}
+
+.search-page__clarify-header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.search-page__clarify-icon {
+  color: var(--accent-primary);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.search-page__clarify-question {
+  font-size: var(--font-body);
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+.search-page__clarify-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.search-page__clarify-option {
+  padding: var(--space-1) var(--space-3);
+  background: var(--bg-elevated, var(--input-bg));
+  border: 1px solid var(--accent-border, var(--input-border));
+  border-radius: var(--radius-full, var(--radius-md));
+  color: var(--accent-primary);
+  font-size: var(--font-body-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.search-page__clarify-option:hover {
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
+}
+
+.search-page__clarify-input-row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.search-page__clarify-input {
+  flex: 1;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: var(--font-body);
+  outline: none;
+  padding: var(--space-2) var(--space-3);
+}
+
+.search-page__clarify-input:focus {
+  border-color: var(--input-focus-border);
+}
+
+.search-page__clarify-send {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2) var(--space-3);
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.search-page__clarify-send:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.search-page__clarify-send--disabled,
+.search-page__clarify-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 </style>

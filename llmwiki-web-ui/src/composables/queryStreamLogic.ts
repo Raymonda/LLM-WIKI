@@ -14,6 +14,26 @@ export interface FactBlockView {
 
 const PROSPECTIVE_MARKER = '前瞻分析'
 
+export interface ClarificationView {
+  question: string
+  options: string[]
+  assumedIntentId: string | null
+}
+
+export function parseClarification(payload: string): ClarificationView {
+  try {
+    const data = JSON.parse(payload)
+    if (data && typeof data.question === 'string') {
+      return {
+        question: data.question,
+        options: Array.isArray(data.options) ? data.options : [],
+        assumedIntentId: data.assumedIntentId ?? null,
+      }
+    }
+  } catch {}
+  return { question: payload, options: [], assumedIntentId: null }
+}
+
 export function splitSynthesisAndProspective(full: string): [string, string] {
   const idx = full.indexOf(PROSPECTIVE_MARKER)
   if (idx < 0) return [full, '']

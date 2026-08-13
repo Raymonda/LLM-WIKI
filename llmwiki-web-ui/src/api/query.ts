@@ -7,12 +7,14 @@ export type QueryAnalysisMode = 'quick' | 'deep'
 export function createQuerySSE(
   question: string,
   sessionId?: string,
-  mode: QueryAnalysisMode = 'quick'
+  mode: QueryAnalysisMode = 'quick',
+  assumedIntent?: string
 ): EventSource {
   const authStore = useAuthStore()
   const token = authStore.token || ''
   const params = new URLSearchParams({ question, token, mode })
   if (sessionId) params.set('sessionId', sessionId)
+  if (assumedIntent) params.set('assumedIntent', assumedIntent)
   const scopes = authStore.effectiveQueryScopes()
   if (scopes.length > 0) params.set('scopeIds', scopes.join(','))
   else if (authStore.scopeId && authStore.scopeId > 0) params.set('scopeIds', String(authStore.scopeId))

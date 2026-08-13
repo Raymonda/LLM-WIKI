@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { reduceFactBlockJson, splitSynthesisAndProspective, buildFactBlocksMarkdown } from '../queryStreamLogic'
+import { reduceFactBlockJson, splitSynthesisAndProspective, buildFactBlocksMarkdown, parseClarification } from '../queryStreamLogic'
 
 describe('reduceFactBlockJson', () => {
   it('should append a parsed fact block', () => {
@@ -37,5 +37,19 @@ describe('buildFactBlocksMarkdown', () => {
     expect(md).toContain('结论A')
     expect(md).toContain('页面A')
     expect(md).toContain('wiki/pages/a.md')
+  })
+})
+
+describe('parseClarification', () => {
+  it('should parse question payload', () => {
+    const view = parseClarification('{"question":"您想了解的是？","reason":"指代不明"}')
+    expect(view.question).toBe('您想了解的是？')
+    expect(view.options).toEqual([])
+    expect(view.assumedIntentId).toBeNull()
+  })
+
+  it('should fall back to raw text on invalid json', () => {
+    const view = parseClarification('not json')
+    expect(view.question).toBe('not json')
   })
 })

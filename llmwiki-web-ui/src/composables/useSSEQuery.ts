@@ -1,6 +1,6 @@
 import { ref, onUnmounted } from 'vue'
 import { createQuerySSE, type QueryAnalysisMode } from '@/api/query'
-import { reduceFactBlockJson, splitSynthesisAndProspective, type FactBlockView } from './queryStreamLogic'
+import { reduceFactBlockJson, splitSynthesisAndProspective, parseClarification, type FactBlockView, type ClarificationView } from './queryStreamLogic'
 
 export type QueryMode = 'tool-calling' | 'fallback' | 'rate-limited' | 'no-ai' | ''
 
@@ -35,9 +35,13 @@ export function useSSEQuery() {
   const isSynthesizing = ref(false)
   const funFacts = ref<FunFact[]>([])
   const factBlocks = ref<FactBlockView[]>([])
+  const clarification = ref<ClarificationView | null>(null)
+  const lastQuestion = ref('')
+  const queryAnalysisModeForRetry = ref<QueryAnalysisMode>('quick')
 
   let eventSource: EventSource | null = null
   let progressTimers: ReturnType<typeof setTimeout>[] = []
+  let clarificationTimer: ReturnType<typeof setTimeout> | null = null
 
   function closeEventSource() {
     if (eventSource) {
@@ -133,6 +137,19 @@ export function useSSEQuery() {
       factBlocks.value = reduceFactBlockJson(e.data, factBlocks.value)
     })
 
+    es.addEventListener('clarification', (e: MessageEvent) => {
+      clarification.value = parseClarification(e.data)
+      isLoading.value = false
+      isStreaming.value = false
+      isSynthesizing.value = false
+      clearProgressTimers()
+      closeEventSource()
+      clarificationTimer = setTimeout(() => {
+        clarification.value = null
+        startQuery(lastQuestion.value, queryAnalysisModeForRetry.value)
+      }, 60000)
+    })
+
     es.addEventListener('answer-complete', () => {
       ;[synthesisDisplayContent.value, prospectiveAnswer.value] = splitSynthesisAndProspective(synthesisStreamContent.value)
       isLoading.value = false
@@ -176,9 +193,16 @@ export function useSSEQuery() {
     }
   }
 
-  function startQuery(question: string, mode: QueryAnalysisMode = 'quick', onComplete?: () => void) {
+  function startQuery(question: string, mode: QueryAnalysisMode = 'quick', onComplete?: () => void, assumedIntent?: string) {
     if (!question || isStreaming.value) return
 
+    lastQuestion.value = question
+    queryAnalysisModeForRetry.value = mode
+    clarification.value = null
+    if (clarificationTimer) {
+      clearTimeout(clarificationTimer)
+      clarificationTimer = null
+    }
     factAnswer.value = ''
     synthesisStreamContent.value = ''
     synthesisDisplayContent.value = ''
@@ -195,13 +219,25 @@ export function useSSEQuery() {
 
     startProgress()
 
-    eventSource = createQuerySSE(question, undefined, mode)
+    eventSource = createQuerySSE(question, undefined, mode, assumedIntent)
     attachSSEListeners(eventSource, onComplete)
+  }
+
+  function retryWithIntent(intent: string, question?: string) {
+    if (clarificationTimer) {
+      clearTimeout(clarificationTimer)
+      clarificationTimer = null
+    }
+    startQuery(question || lastQuestion.value, queryAnalysisModeForRetry.value, undefined, intent)
   }
 
   function reset() {
     closeEventSource()
     clearProgressTimers()
+    if (clarificationTimer) {
+      clearTimeout(clarificationTimer)
+      clarificationTimer = null
+    }
     resetProgress()
     factAnswer.value = ''
     synthesisStreamContent.value = ''
@@ -215,11 +251,16 @@ export function useSSEQuery() {
     isSynthesizing.value = false
     funFacts.value = []
     factBlocks.value = []
+    clarification.value = null
   }
 
   onUnmounted(() => {
     closeEventSource()
     clearProgressTimers()
+    if (clarificationTimer) {
+      clearTimeout(clarificationTimer)
+      clarificationTimer = null
+    }
   })
 
   return {
@@ -236,9 +277,11 @@ export function useSSEQuery() {
     isSynthesizing,
     funFacts,
     factBlocks,
+    clarification,
     startQuery,
     reset,
     completeProgress,
     closeEventSource,
+    retryWithIntent,
   }
 }
