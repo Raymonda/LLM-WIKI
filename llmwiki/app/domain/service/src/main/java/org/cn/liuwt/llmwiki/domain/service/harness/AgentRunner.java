@@ -433,16 +433,18 @@ public class AgentRunner {
     private List<String> extractImagePathsFromFactBlocks(List<FactBlock> factBlocks) {
         List<String> paths = new ArrayList<>();
         if (factBlocks == null) return paths;
+        java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
         for (FactBlock block : factBlocks) {
             if (!"image".equals(block.kind())) continue;
             if (block.refs() == null) continue;
             for (FactBlock.FactRef ref : block.refs()) {
                 String path = ref.path();
                 if (path != null && !path.isBlank() && !path.startsWith("http") && !path.startsWith("data:")) {
-                    paths.add(path);
+                    seen.add(path);
                 }
             }
         }
+        paths.addAll(seen);
         return paths;
     }
 
