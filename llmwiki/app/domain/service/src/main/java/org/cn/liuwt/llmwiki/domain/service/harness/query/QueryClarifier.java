@@ -5,12 +5,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+@Component
 public class QueryClarifier {
 
     private static final Logger log = LoggerFactory.getLogger(QueryClarifier.class);
@@ -22,7 +26,8 @@ public class QueryClarifier {
     private final int maxClarifications;
     private final Map<String, SessionState> sessionStates = new ConcurrentHashMap<>();
 
-    public QueryClarifier(int maxClarifications) {
+    @Autowired
+    public QueryClarifier(@Value("${llmwiki.query.clarifier.max-rounds:1}") int maxClarifications) {
         this.maxClarifications = maxClarifications;
     }
 

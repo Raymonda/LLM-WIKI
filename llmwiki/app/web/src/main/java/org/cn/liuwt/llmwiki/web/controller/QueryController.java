@@ -51,13 +51,17 @@ public class QueryController {
     @Value("${llmwiki.query.fact-block.enabled:true}")
     private boolean factBlockEnabled;
 
+    @Value("${llmwiki.query.clarifier.enabled:true}")
+    private boolean clarifierEnabled;
+
     private final Map<String, SseEmitter> emitters = new ConcurrentHashMap<>();
 
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamQuery(@RequestParam String question,
                                    @RequestParam(required = false) String sessionId,
                                    @RequestParam(required = false, defaultValue = "quick") String mode,
-                                   @RequestParam(required = false) String scopeIds) {
+                                   @RequestParam(required = false) String scopeIds,
+                                   @RequestParam(required = false) String assumedIntent) {
         if (question == null || question.trim().isEmpty()) {
             SseEmitter emitter = new SseEmitter(5000L);
             try {
@@ -103,8 +107,8 @@ public class QueryController {
         });
 
         Flux<String> answerStream = resolvedScopeIds.size() == 1
-            ? queryService.queryWikiStreaming(resolvedScopeIds.get(0), question, sessionKey, isDeepMode)
-            : queryService.queryWikiStreamingMultiScope(resolvedScopeIds, question, sessionKey, isDeepMode);
+            ? queryService.queryWikiStreaming(resolvedScopeIds.get(0), question, sessionKey, isDeepMode, assumedIntent)
+            : queryService.queryWikiStreamingMultiScope(resolvedScopeIds, question, sessionKey, isDeepMode, assumedIntent);
 
         answerStream
             .doOnNext(chunk -> {
@@ -114,6 +118,8 @@ public class QueryController {
                         emitter.send(SseEmitter.event().name("fact-block").data(event.payload()));
                     } else if ("step".equals(event.eventName())) {
                         emitter.send(SseEmitter.event().name("step").data(Map.of("step", event.payload())));
+                    } else if ("clarification".equals(event.eventName())) {
+                        emitter.send(SseEmitter.event().name("clarification").data(event.payload()));
                     } else {
                         emitter.send(SseEmitter.event().name("answer-chunk").data(Map.of("content", event.payload())));
                     }

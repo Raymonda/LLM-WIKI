@@ -1,8 +1,10 @@
 package org.cn.liuwt.llmwiki.domain.service.harness;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.cn.liuwt.llmwiki.domain.model.harness.FactBlock;
 import org.cn.liuwt.llmwiki.domain.service.harness.prompt.PromptRegistry;
 import org.cn.liuwt.llmwiki.domain.service.harness.query.FactBlockParser;
+import org.cn.liuwt.llmwiki.domain.service.harness.query.QueryClarifier;
 import org.cn.liuwt.llmwiki.domain.service.harness.query.QuerySseProtocol;
 import org.cn.liuwt.llmwiki.domain.service.harness.tool.ReadFileTool;
 import org.cn.liuwt.llmwiki.domain.service.harness.tool.ReadRawSourceTool;
@@ -41,6 +43,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -52,6 +55,9 @@ public class AgentRunner {
 
     @Value("${llmwiki.query.fact-block.enabled:true}")
     private boolean factBlockEnabled;
+
+    @Value("${llmwiki.query.clarifier.enabled:true}")
+    private boolean clarifierEnabled;
 
     @Autowired(required = false)
     private ChatModel chatModel;
@@ -70,6 +76,9 @@ public class AgentRunner {
 
     @Autowired
     private SchemaInjector schemaInjector;
+
+    @Autowired
+    private QueryClarifier queryClarifier;
 
     @Autowired
     private ReadFileTool readFileTool;
@@ -147,6 +156,10 @@ public class AgentRunner {
     }
 
     public Flux<String> runQueryAgentStreaming(Long scopeId, String question, String sessionId, boolean deepMode) {
+        return runQueryAgentStreaming(scopeId, question, sessionId, deepMode, null);
+    }
+
+    public Flux<String> runQueryAgentStreaming(Long scopeId, String question, String sessionId, boolean deepMode, String assumedIntent) {
         TokenUsageContext.set(scopeId, "query");
         if (!rateLimitService.checkCallRate(scopeId)) {
             TokenUsageContext.clear();
@@ -163,6 +176,24 @@ public class AgentRunner {
 
         return Flux.defer(() -> {
             try {
+                if (clarifierEnabled && (assumedIntent == null || assumedIntent.isBlank())) {
+                    ChatClient clarifyClient = (deepMode && deepNoToolsClient != null) ? deepNoToolsClient : noToolsClient;
+                    String clarifyPrompt = schemaInjector.prependForQuery(scopeId,
+                        PromptRegistry.forQuery().clarificationPrompt(scopeId));
+                    QueryClarifier.ClarificationResult clarification = queryClarifier.assess(
+                        clarifyClient, clarifyPrompt, question, sessionId);
+                    if ("AMBIGUOUS".equals(clarification.clarity())) {
+                        String payload;
+                        try {
+                            payload = new ObjectMapper().writeValueAsString(Map.of(
+                                "question", clarification.clarification(),
+                                "reason", clarification.reason()));
+                        } catch (Exception e) {
+                            payload = "{\"question\":\"" + clarification.clarification() + "\"}";
+                        }
+                        return Flux.just(QuerySseProtocol.CLARIFY_PREFIX + payload);
+                    }
+                }
                 long phase1Start = System.currentTimeMillis();
                 RetrievalContext retrievalContext = retrievalService.preRetrieveLight(scopeId, question);
                 long phase1Elapsed = System.currentTimeMillis() - phase1Start;
@@ -181,6 +212,11 @@ public class AgentRunner {
                         PromptRegistry.forQuery().factAgentPromptStructured(scopeId, pageCount, factContext))
                     : schemaInjector.prependForQuery(scopeId,
                         PromptRegistry.forQuery().factAgentPrompt(scopeId, pageCount, factContext));
+
+                if (assumedIntent != null && !assumedIntent.isBlank()) {
+                    factSystemPrompt = factSystemPrompt + "\n\n## 已确认的用户意图\n" + assumedIntent
+                        + "\n检索与回答请聚焦此意图，无需再次澄清。";
+                }
 
                 StringBuilder lineBuffer = new StringBuilder();
                 StringBuilder layer1Buffer = new StringBuilder();
@@ -260,8 +296,12 @@ public class AgentRunner {
     }
 
     public Flux<String> runQueryAgentStreamingMultiScope(List<Long> scopeIds, String question, String sessionId, boolean deepMode) {
+        return runQueryAgentStreamingMultiScope(scopeIds, question, sessionId, deepMode, null);
+    }
+
+    public Flux<String> runQueryAgentStreamingMultiScope(List<Long> scopeIds, String question, String sessionId, boolean deepMode, String assumedIntent) {
         if (scopeIds.size() == 1) {
-            return runQueryAgentStreaming(scopeIds.get(0), question, sessionId, deepMode);
+            return runQueryAgentStreaming(scopeIds.get(0), question, sessionId, deepMode, assumedIntent);
         }
         Long primaryScopeId = scopeIds.get(0);
         TokenUsageContext.set(primaryScopeId, "query");
@@ -276,12 +316,35 @@ public class AgentRunner {
         ChatClient activeQueryClient = (deepMode && deepQueryReadOnlyClient != null) ? deepQueryReadOnlyClient : queryReadOnlyClient;
         return Flux.defer(() -> {
             try {
+                if (clarifierEnabled && (assumedIntent == null || assumedIntent.isBlank())) {
+                    ChatClient clarifyClient = (deepMode && deepNoToolsClient != null) ? deepNoToolsClient : noToolsClient;
+                    String clarifyPrompt = schemaInjector.prependForQuery(primaryScopeId,
+                        PromptRegistry.forQuery().clarificationPrompt(primaryScopeId));
+                    QueryClarifier.ClarificationResult clarification = queryClarifier.assess(
+                        clarifyClient, clarifyPrompt, question, sessionId);
+                    if ("AMBIGUOUS".equals(clarification.clarity())) {
+                        String payload;
+                        try {
+                            payload = new ObjectMapper().writeValueAsString(Map.of(
+                                "question", clarification.clarification(),
+                                "reason", clarification.reason()));
+                        } catch (Exception e) {
+                            payload = "{\"question\":\"" + clarification.clarification() + "\"}";
+                        }
+                        return Flux.just(QuerySseProtocol.CLARIFY_PREFIX + payload);
+                    }
+                }
                 RetrievalContext retrievalContext = retrievalService.preRetrieveMultiScope(scopeIds, question);
                 String factContext = retrievalContext.toPromptContextLight();
                 int pageCount = retrievalContext.getSearchResults().size();
                 String factSystemPrompt = factBlockEnabled
                     ? PromptRegistry.forQuery().factAgentPromptStructured(primaryScopeId, pageCount, factContext)
                     : PromptRegistry.forQuery().factAgentPrompt(primaryScopeId, pageCount, factContext);
+
+                if (assumedIntent != null && !assumedIntent.isBlank()) {
+                    factSystemPrompt = factSystemPrompt + "\n\n## 已确认的用户意图\n" + assumedIntent
+                        + "\n检索与回答请聚焦此意图，无需再次澄清。";
+                }
                 StringBuilder lineBuffer = new StringBuilder();
                 StringBuilder layer1Buffer = new StringBuilder();
                 List<FactBlock> factBlocks = new ArrayList<>();

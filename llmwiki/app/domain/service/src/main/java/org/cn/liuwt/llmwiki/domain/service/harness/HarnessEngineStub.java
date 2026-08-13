@@ -11,12 +11,12 @@ public class HarnessEngineStub implements HarnessEngine {
     }
 
     @Override
-    public Flux<String> executeQueryStreaming(Long scopeId, String question, String sessionId, boolean deepMode) {
+    public Flux<String> executeQueryStreaming(Long scopeId, String question, String sessionId, boolean deepMode, String assumedIntent) {
         throw new UnsupportedOperationException("HarnessEngine not implemented yet");
     }
 
     @Override
-    public Flux<String> executeQueryStreamingMultiScope(java.util.List<Long> scopeIds, String question, String sessionId, boolean deepMode) {
+    public Flux<String> executeQueryStreamingMultiScope(java.util.List<Long> scopeIds, String question, String sessionId, boolean deepMode, String assumedIntent) {
         throw new UnsupportedOperationException("HarnessEngine not implemented yet");
     }
 

@@ -3,6 +3,7 @@ package org.cn.liuwt.llmwiki.domain.service.harness.query;
 public final class QuerySseProtocol {
 
     public static final String FACT_PREFIX = "__FACT__:";
+    public static final String CLARIFY_PREFIX = "__CLARIFY__:";
 
     private QuerySseProtocol() {}
 
@@ -14,6 +15,9 @@ public final class QuerySseProtocol {
 
     public static SseEvent mapChunk(String chunk, boolean factBlockEnabled) {
         if (chunk == null) return new SseEvent("answer-chunk", "");
+        if (chunk.startsWith(CLARIFY_PREFIX)) {
+            return new SseEvent("clarification", chunk.substring(CLARIFY_PREFIX.length()));
+        }
         if (chunk.startsWith(FACT_PREFIX)) {
             String payload = chunk.substring(FACT_PREFIX.length());
             return factBlockEnabled

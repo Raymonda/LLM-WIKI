@@ -33,4 +33,11 @@ class QuerySseProtocolTest {
         assertEquals("answer-chunk", event.eventName());
         assertEquals("{\"id\":\"x\",\"conclusion\":\"y\"}", event.payload());
     }
+
+    @Test
+    void shouldMapClarifyPrefixToClarificationEvent() {
+        QuerySseProtocol.SseEvent event = QuerySseProtocol.mapChunk("__CLARIFY__:{\"question\":\"追问\"}");
+        assertEquals("clarification", event.eventName());
+        assertEquals("{\"question\":\"追问\"}", event.payload());
+    }
 }
