@@ -52,4 +52,10 @@ describe('parseClarification', () => {
     const view = parseClarification('not json')
     expect(view.question).toBe('not json')
   })
+
+  it('should coerce non-string options and assumedIntentId to safe values', () => {
+    const view = parseClarification('{"question":"q","options":[1, null, "ok"],"assumedIntentId":123}')
+    expect(view.options).toEqual(['ok'])
+    expect(view.assumedIntentId).toBeNull()
+  })
 })

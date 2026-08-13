@@ -26,8 +26,8 @@ export function parseClarification(payload: string): ClarificationView {
     if (data && typeof data.question === 'string') {
       return {
         question: data.question,
-        options: Array.isArray(data.options) ? data.options : [],
-        assumedIntentId: data.assumedIntentId ?? null,
+        options: Array.isArray(data.options) ? data.options.filter((o: unknown) => typeof o === 'string') : [],
+        assumedIntentId: typeof data.assumedIntentId === 'string' ? data.assumedIntentId : null,
       }
     }
   } catch {}

@@ -40,6 +40,10 @@ const queryAnalysisMode = ref<QueryAnalysisMode>('quick')
 const clarifyInput = ref('')
 const clarification = computed(() => sse.clarification.value)
 
+watch(clarification, (current) => {
+  if (!current) clarifyInput.value = ''
+})
+
 const isLoading = computed(() => localLoading.value || sse.isLoading.value)
 const isStreaming = computed(() => sse.isStreaming.value)
 const aiAnswer = computed(() => sse.aiAnswer.value)
@@ -319,7 +323,7 @@ function handleQuery() {
 }
 
 function submitIntent(intentText: string) {
-  if (!clarification.value) return
+  if (!clarification.value || !intentText.trim()) return
   const extra = clarifyInput.value.trim()
   const question = clarification.value.question + (extra ? ` ${extra}` : '')
   sse.startQuery(question, queryAnalysisMode.value, undefined, intentText.trim())
@@ -600,7 +604,7 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <div v-if="!hasAnswer && !isLoading && !queryError" class="search-page__empty">
+      <div v-if="!hasAnswer && !isLoading && !queryError && !clarification" class="search-page__empty">
         <MessageCircle :size="48" class="search-page__empty-icon" />
         <p>{{ t('search.queryEmpty') }}</p>
       </div>
