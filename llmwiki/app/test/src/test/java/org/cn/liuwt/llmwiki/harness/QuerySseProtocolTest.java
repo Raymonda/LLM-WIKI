@@ -26,4 +26,11 @@ class QuerySseProtocolTest {
         assertEquals("answer-chunk", event.eventName());
         assertEquals("普通文本", event.payload());
     }
+
+    @Test
+    void shouldDemoteFactBlockToAnswerChunkWhenSwitchOff() {
+        QuerySseProtocol.SseEvent event = QuerySseProtocol.mapChunk("__FACT__:{\"id\":\"x\",\"conclusion\":\"y\"}", false);
+        assertEquals("answer-chunk", event.eventName());
+        assertEquals("{\"id\":\"x\",\"conclusion\":\"y\"}", event.payload());
+    }
 }

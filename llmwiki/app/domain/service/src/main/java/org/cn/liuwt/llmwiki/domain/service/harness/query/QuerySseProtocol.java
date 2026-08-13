@@ -9,9 +9,16 @@ public final class QuerySseProtocol {
     public record SseEvent(String eventName, String payload) {}
 
     public static SseEvent mapChunk(String chunk) {
+        return mapChunk(chunk, true);
+    }
+
+    public static SseEvent mapChunk(String chunk, boolean factBlockEnabled) {
         if (chunk == null) return new SseEvent("answer-chunk", "");
         if (chunk.startsWith(FACT_PREFIX)) {
-            return new SseEvent("fact-block", chunk.substring(FACT_PREFIX.length()));
+            String payload = chunk.substring(FACT_PREFIX.length());
+            return factBlockEnabled
+                ? new SseEvent("fact-block", payload)
+                : new SseEvent("answer-chunk", payload);
         }
         if (chunk.startsWith("__STEP__:")) {
             return new SseEvent("step", chunk.substring("__STEP__:".length()));

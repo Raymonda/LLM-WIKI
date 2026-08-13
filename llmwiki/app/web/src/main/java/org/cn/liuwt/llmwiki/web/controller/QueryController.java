@@ -4,6 +4,7 @@ import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
 import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
 import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.common.util.result.Result;
+import org.cn.liuwt.llmwiki.domain.service.harness.query.QuerySseProtocol;
 import org.cn.liuwt.llmwiki.domain.service.system.ScopeService;
 import org.cn.liuwt.llmwiki.domain.service.wiki.WikiFileServiceImpl;
 import org.cn.liuwt.llmwiki.facade.model.SaveAnswerRequest;
@@ -14,6 +15,7 @@ import org.cn.liuwt.llmwiki.web.security.JwtTokenProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -45,6 +47,9 @@ public class QueryController {
 
     @Autowired
     private ScopeService scopeService;
+
+    @Value("${llmwiki.query.fact-block.enabled:true}")
+    private boolean factBlockEnabled;
 
     private final Map<String, SseEmitter> emitters = new ConcurrentHashMap<>();
 
@@ -104,11 +109,13 @@ public class QueryController {
         answerStream
             .doOnNext(chunk -> {
                 try {
-                    if (chunk.startsWith("__STEP__:")) {
-                        String stepName = chunk.substring("__STEP__:".length());
-                        emitter.send(SseEmitter.event().name("step").data(Map.of("step", stepName)));
+                    QuerySseProtocol.SseEvent event = QuerySseProtocol.mapChunk(chunk, factBlockEnabled);
+                    if ("fact-block".equals(event.eventName())) {
+                        emitter.send(SseEmitter.event().name("fact-block").data(event.payload()));
+                    } else if ("step".equals(event.eventName())) {
+                        emitter.send(SseEmitter.event().name("step").data(Map.of("step", event.payload())));
                     } else {
-                        emitter.send(SseEmitter.event().name("answer-chunk").data(Map.of("content", chunk)));
+                        emitter.send(SseEmitter.event().name("answer-chunk").data(Map.of("content", event.payload())));
                     }
                 } catch (Exception e) {
                     log.debug("SSE send failed: {}", e.getMessage());
