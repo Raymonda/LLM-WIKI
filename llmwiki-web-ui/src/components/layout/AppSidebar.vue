@@ -11,7 +11,7 @@ import type { SupportedLocale } from '@/locales'
 import { updateUserLanguage } from '@/api/language'
 import {
   BookOpen, Search, Settings, Sun, Moon, ChevronLeft, ChevronRight, LogOut,
-  Bot, Activity, Upload, Zap, ChevronDown, ChevronUp, Users, User, ShieldCheck,
+  Activity, Upload, Zap, ChevronDown, ChevronUp, Users, User, ShieldCheck,
   Network, Trash2, FileEdit, Rss, ScrollText, Globe, Languages
 } from 'lucide-vue-next'
 import ScopeSwitcher from './ScopeSwitcher.vue'
@@ -20,7 +20,6 @@ const { t } = useI18n()
 const { locale, setLocale } = useLocale()
 
 const emit = defineEmits<{
-  openAiPanel: []
   openAddMaterial: []
 }>()
 
@@ -98,10 +97,6 @@ function handleLogout() {
   activityStore.clear()
   authStore.clearAuth()
   router.push('/login')
-}
-
-function handleOpenAiPanel() {
-  emit('openAiPanel')
 }
 
 function handleAddMaterial() {
@@ -200,10 +195,6 @@ function handleLangSwitch(lang: SupportedLocale) {
         <component :is="currentScopeIcon" :size="18" />
       </button>
       <div class="sidebar__footer-actions">
-      <button class="sidebar__ai-btn" @click="handleOpenAiPanel" :title="collapsed ? t('common.aiAssistant') : ''">
-        <Bot :size="18" />
-        <span v-if="!collapsed">{{ t('common.aiAssistant') }}</span>
-      </button>
       <div class="sidebar__lang-wrap">
         <button class="sidebar__theme-toggle" @click="langDropdownOpen = !langDropdownOpen" :title="collapsed ? t('common.language') : ''">
           <Languages :size="18" />
@@ -479,7 +470,6 @@ function handleLangSwitch(lang: SupportedLocale) {
   color: var(--text-primary);
 }
 
-.sidebar__ai-btn,
 .sidebar__theme-toggle,
 .sidebar__logout {
   display: flex;
@@ -494,11 +484,6 @@ function handleLangSwitch(lang: SupportedLocale) {
   transition: all var(--transition-fast);
   white-space: nowrap;
   width: 100%;
-}
-
-.sidebar__ai-btn:hover {
-  background: var(--accent-light);
-  color: var(--accent-primary);
 }
 
 .sidebar__theme-toggle:hover,

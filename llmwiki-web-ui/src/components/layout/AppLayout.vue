@@ -4,7 +4,7 @@ import { RouterView, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import AppSidebar from './AppSidebar.vue'
 import AppTopBar from './AppTopBar.vue'
-import AiAssistantPanel from './AiAssistantPanel.vue'
+// AI 助手面板已下线：原功能无对应后端实现，保留组件文件（AiAssistantPanel.vue / stores/execution.ts）待重新规划后再开放
 import IngestProgressFloating from './IngestProgressFloating.vue'
 import TaskProgressFloating from './TaskProgressFloating.vue'
 import SchemaBootstrapDialog from '@/components/common/SchemaBootstrapDialog.vue'
@@ -19,21 +19,8 @@ const { t } = useI18n()
 const auth = useAuthStore()
 const ingestStore = useIngestProgressStore()
 const taskStore = useTaskProgressStore()
-const aiPanelOpen = ref(false)
 const bootstrapOpen = ref(false)
 const aiNotConfigured = ref(false)
-
-function toggleAiPanel() {
-  aiPanelOpen.value = !aiPanelOpen.value
-}
-
-function openAiPanel() {
-  aiPanelOpen.value = true
-}
-
-function closeAiPanel() {
-  aiPanelOpen.value = false
-}
 
 function openAddMaterial() {
   if (router.currentRoute.value.path === '/ingest') {
@@ -89,9 +76,9 @@ watch(() => auth.scopeId, async (newScopeId) => {
 
 <template>
   <div class="app-layout">
-    <AppSidebar @open-ai-panel="openAiPanel" @open-add-material="openAddMaterial" />
+    <AppSidebar @open-add-material="openAddMaterial" />
     <div class="app-layout__main">
-      <AppTopBar @toggle-ai-panel="toggleAiPanel" :ai-panel-open="aiPanelOpen" />
+      <AppTopBar />
       <div class="app-layout__content">
         <RouterView v-slot="{ Component }">
           <Transition name="scope-switch" mode="out-in">
@@ -102,7 +89,7 @@ watch(() => auth.scopeId, async (newScopeId) => {
         </RouterView>
       </div>
     </div>
-    <AiAssistantPanel :open="aiPanelOpen" @close="closeAiPanel" />
+    <!-- AI 助手（AiAssistantPanel）已下线：无对应后端实现，待重新规划后再开放 -->
     <IngestProgressFloating />
     <TaskProgressFloating :ingest-floating-active="ingestStore.active" />
     <SchemaBootstrapDialog :open="bootstrapOpen" @done="onBootstrapDone" />

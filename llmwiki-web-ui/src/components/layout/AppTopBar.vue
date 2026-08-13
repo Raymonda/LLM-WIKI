@@ -4,7 +4,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useActivityCenterStore } from '@/stores/activityCenter'
-import { Search, Bot, Activity, GitPullRequest } from 'lucide-vue-next'
+import { Search, Activity, GitPullRequest } from 'lucide-vue-next'
 import { getUnreadCount } from '@/api/notification'
 import { countPendingPatches } from '@/api/harness'
 import KnowledgePulsePanel from './KnowledgePulsePanel.vue'
@@ -12,13 +12,7 @@ import SchemaPatchDrawer from '@/components/common/SchemaPatchDrawer.vue'
 
 const { t } = useI18n()
 
-const props = defineProps<{
-  aiPanelOpen: boolean
-}>()
-
-const emit = defineEmits<{
-  toggleAiPanel: []
-}>()
+// AI 助手开关（topbar__ai-toggle）已下线：无对应后端实现，待重新规划后再开放
 
 const router = useRouter()
 const route = useRoute()
@@ -124,14 +118,6 @@ function onPatchApplied() {
       />
     </div>
     <div class="topbar__actions">
-      <button
-        class="topbar__ai-toggle"
-        :class="{ 'topbar__ai-toggle--active': props.aiPanelOpen }"
-        @click="emit('toggleAiPanel')"
-        :title="t('common.aiAssistant')"
-      >
-        <Bot :size="18" />
-      </button>
       <div class="topbar__pulse-wrap" @click.stop>
         <button
           class="topbar__pulse-btn"
@@ -263,30 +249,6 @@ function onPatchApplied() {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-}
-
-.topbar__ai-toggle {
-  background: none;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: var(--space-2);
-  display: flex;
-  align-items: center;
-  transition: all var(--transition-fast);
-}
-
-.topbar__ai-toggle:hover {
-  background: var(--accent-light);
-  color: var(--accent-primary);
-  border-color: var(--accent-primary);
-}
-
-.topbar__ai-toggle--active {
-  background: var(--accent-light);
-  color: var(--accent-primary);
-  border-color: var(--accent-primary);
 }
 
 .topbar__pulse-wrap {
