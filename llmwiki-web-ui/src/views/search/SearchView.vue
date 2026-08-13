@@ -652,8 +652,8 @@ onUnmounted(() => {
               <p class="search-page__fact-card-conclusion">{{ block.conclusion }}</p>
               <p v-if="block.evidence" class="search-page__fact-card-evidence">{{ block.evidence }}</p>
               <div v-if="block.refs.length > 0" class="search-page__fact-card-refs">
-                <template v-for="ref in block.refs" :key="block.id + '-' + ref.path">
-                  <router-link v-if="factRefPath(ref.path).startsWith('pages/')" :to="`/wiki/p/${factRefPath(ref.path)}`" class="search-page__fact-card-ref">
+                <template v-for="ref in block.refs" :key="block.id + '-' + (ref.path || ref.title)">
+                  <router-link v-if="ref.path && factRefPath(ref.path).startsWith('pages/')" :to="`/wiki/p/${factRefPath(ref.path)}`" class="search-page__fact-card-ref">
                     {{ ref.title }}
                   </router-link>
                 </template>
