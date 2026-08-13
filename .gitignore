@@ -53,6 +53,9 @@ target/
 .env.*
 !.env.example
 
+# Spring Boot local profile (contains machine-specific credentials, never commit)
+**/application-local.yml
+
 # OS artifacts
 nul
 Thumbs.db
