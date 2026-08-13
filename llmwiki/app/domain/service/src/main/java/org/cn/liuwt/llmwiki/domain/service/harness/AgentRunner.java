@@ -1,6 +1,9 @@
 package org.cn.liuwt.llmwiki.domain.service.harness;
 
+import org.cn.liuwt.llmwiki.domain.model.harness.FactBlock;
 import org.cn.liuwt.llmwiki.domain.service.harness.prompt.PromptRegistry;
+import org.cn.liuwt.llmwiki.domain.service.harness.query.FactBlockParser;
+import org.cn.liuwt.llmwiki.domain.service.harness.query.QuerySseProtocol;
 import org.cn.liuwt.llmwiki.domain.service.harness.tool.ReadFileTool;
 import org.cn.liuwt.llmwiki.domain.service.harness.tool.ReadRawSourceTool;
 import org.cn.liuwt.llmwiki.domain.service.harness.tool.GetSourceInfoTool;
@@ -31,6 +34,7 @@ import org.springframework.core.io.ByteArrayResource;
 import org.springframework.util.MimeType;
 import org.springframework.util.MimeTypeUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
@@ -45,6 +49,9 @@ import java.util.regex.Pattern;
 public class AgentRunner {
 
     private static final Logger log = LoggerFactory.getLogger(AgentRunner.class);
+
+    @Value("${llmwiki.query.fact-block.enabled:true}")
+    private boolean factBlockEnabled;
 
     @Autowired(required = false)
     private ChatModel chatModel;
@@ -169,30 +176,62 @@ public class AgentRunner {
                     factContext.length(), retrievalContext.getDeprecatedPages().size(), phase1Elapsed);
 
                 // Phase 1: Fact Agent (tools, ACTIVE-only, generates Layer 1)
-                String factSystemPrompt = schemaInjector.prependForQuery(scopeId,
-                    PromptRegistry.forQuery().factAgentPrompt(scopeId, pageCount, factContext));
+                String factSystemPrompt = factBlockEnabled
+                    ? schemaInjector.prependForQuery(scopeId,
+                        PromptRegistry.forQuery().factAgentPromptStructured(scopeId, pageCount, factContext))
+                    : schemaInjector.prependForQuery(scopeId,
+                        PromptRegistry.forQuery().factAgentPrompt(scopeId, pageCount, factContext));
 
+                StringBuilder lineBuffer = new StringBuilder();
                 StringBuilder layer1Buffer = new StringBuilder();
+                List<FactBlock> factBlocks = new ArrayList<>();
                 AtomicInteger charCount = new AtomicInteger(0);
 
                 Flux<String> generatingMarker = Flux.just("__STEP__:generating");
 
-                Flux<String> layer1Stream = activeQueryClient.prompt()
-                    .system(factSystemPrompt)
-                    .user(question)
-                    .stream()
-                    .content()
-                    .doOnNext(chunk -> layer1Buffer.append(chunk));
+                Flux<String> layer1Stream = factBlockEnabled
+                    ? activeQueryClient.prompt()
+                        .system(factSystemPrompt)
+                        .user(question)
+                        .stream()
+                        .content()
+                        .concatMap(chunk -> {
+                            lineBuffer.append(chunk);
+                            List<String> lines = FactBlockParser.extractCompleteLines(lineBuffer);
+                            List<String> out = new ArrayList<>();
+                            for (String line : lines) {
+                                FactBlock block = FactBlockParser.tryParse(line);
+                                if (block != null) {
+                                    factBlocks.add(block);
+                                    out.add(QuerySseProtocol.FACT_PREFIX + line);
+                                } else if (!line.isBlank()) {
+                                    out.add(line);
+                                }
+                            }
+                            return Flux.fromIterable(out);
+                        })
+                        .doOnComplete(() -> {
+                            String rest = lineBuffer.toString().trim();
+                            if (!rest.isEmpty()) {
+                                FactBlock block = FactBlockParser.tryParse(rest);
+                                if (block != null) factBlocks.add(block);
+                            }
+                        })
+                    : activeQueryClient.prompt()
+                        .system(factSystemPrompt)
+                        .user(question)
+                        .stream()
+                        .content()
+                        .doOnNext(layer1Buffer::append);
 
                 // Phase 2: Synthesis Agent (no tools, uses Layer 1 + DEPRECATED context, generates Layer 2/3)
                 Flux<String> layer23Stream = Flux.defer(() -> {
-                    String layer1Text = layer1Buffer.toString();
-                    log.info("Fact Agent completed: scopeId={} layer1Len={}", scopeId, layer1Text.length());
-
+                    log.info("Fact Agent completed: scopeId={} factBlocks={}", scopeId, factBlocks.size());
                     String synthesisUserPrompt = PromptRegistry.forQuery()
-                        .synthesisPrompt(scopeId, question, layer1Text, deprecatedContext, deepMode);
+                        .synthesisPrompt(scopeId, question,
+                            FactBlockParser.toFactInput(factBlocks, layer1Buffer.toString()), deprecatedContext, deepMode);
 
-                    return synthesizeWithImages(scopeId, synthesisUserPrompt, layer1Text, deepMode);
+                    return synthesizeWithImages(scopeId, synthesisUserPrompt, "", deepMode);
                 });
 
                 Flux<String> synthesisMarker = Flux.just("\n\n", "__STEP__:synthesizing");
@@ -234,20 +273,53 @@ public class AgentRunner {
                 RetrievalContext retrievalContext = retrievalService.preRetrieveMultiScope(scopeIds, question);
                 String factContext = retrievalContext.toPromptContextLight();
                 int pageCount = retrievalContext.getSearchResults().size();
-                String factSystemPrompt = PromptRegistry.forQuery().factAgentPrompt(primaryScopeId, pageCount, factContext);
+                String factSystemPrompt = factBlockEnabled
+                    ? PromptRegistry.forQuery().factAgentPromptStructured(primaryScopeId, pageCount, factContext)
+                    : PromptRegistry.forQuery().factAgentPrompt(primaryScopeId, pageCount, factContext);
+                StringBuilder lineBuffer = new StringBuilder();
                 StringBuilder layer1Buffer = new StringBuilder();
+                List<FactBlock> factBlocks = new ArrayList<>();
                 Flux<String> generatingMarker = Flux.just("__STEP__:generating");
-                Flux<String> layer1Stream = activeQueryClient.prompt()
-                    .system(factSystemPrompt)
-                    .user(question)
-                    .stream()
-                    .content()
-                    .doOnNext(layer1Buffer::append);
+                Flux<String> layer1Stream = factBlockEnabled
+                    ? activeQueryClient.prompt()
+                        .system(factSystemPrompt)
+                        .user(question)
+                        .stream()
+                        .content()
+                        .concatMap(chunk -> {
+                            lineBuffer.append(chunk);
+                            List<String> lines = FactBlockParser.extractCompleteLines(lineBuffer);
+                            List<String> out = new ArrayList<>();
+                            for (String line : lines) {
+                                FactBlock block = FactBlockParser.tryParse(line);
+                                if (block != null) {
+                                    factBlocks.add(block);
+                                    out.add(QuerySseProtocol.FACT_PREFIX + line);
+                                } else if (!line.isBlank()) {
+                                    out.add(line);
+                                }
+                            }
+                            return Flux.fromIterable(out);
+                        })
+                        .doOnComplete(() -> {
+                            String rest = lineBuffer.toString().trim();
+                            if (!rest.isEmpty()) {
+                                FactBlock block = FactBlockParser.tryParse(rest);
+                                if (block != null) factBlocks.add(block);
+                            }
+                        })
+                    : activeQueryClient.prompt()
+                        .system(factSystemPrompt)
+                        .user(question)
+                        .stream()
+                        .content()
+                        .doOnNext(layer1Buffer::append);
                 Flux<String> layer23Stream = Flux.defer(() -> {
-                    String layer1Text = layer1Buffer.toString();
+                    log.info("Fact Agent completed: scopeId={} factBlocks={}", primaryScopeId, factBlocks.size());
                     String synthesisUserPrompt = PromptRegistry.forQuery()
-                        .synthesisPrompt(primaryScopeId, question, layer1Text, "", deepMode);
-                    return synthesizeWithImages(primaryScopeId, synthesisUserPrompt, layer1Text, deepMode);
+                        .synthesisPrompt(primaryScopeId, question,
+                            FactBlockParser.toFactInput(factBlocks, layer1Buffer.toString()), "", deepMode);
+                    return synthesizeWithImages(primaryScopeId, synthesisUserPrompt, "", deepMode);
                 });
                 Flux<String> synthesisMarker = Flux.just("\n\n", "__STEP__:synthesizing");
                 return Flux.concat(generatingMarker, layer1Stream, synthesisMarker, layer23Stream)
