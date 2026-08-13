@@ -2,6 +2,7 @@ package org.cn.liuwt.llmwiki.harness;
 
 import org.cn.liuwt.llmwiki.domain.service.harness.query.QueryClarifier;
 import org.junit.jupiter.api.Test;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -49,6 +50,28 @@ class QueryClarifierTest {
         QueryClarifier.ClarificationResult result = clarifier.assessForTest("s-bad", "{not json", new AtomicBoolean());
         assertEquals("CLEAR", result.clarity());
         assertEquals("parse-failed", result.reason());
+    }
+
+    @Test
+    void shouldParseOptionsWhenAmbiguousJudgmentContainsOptions() {
+        QueryClarifier clarifier = new QueryClarifier(5);
+        QueryClarifier.ClarificationResult result = clarifier.assessForTest(
+            "s-opt",
+            "{\"clarity\":\"AMBIGUOUS\",\"clarification\":\"请选择目标公司\",\"reason\":\"missing-subject\",\"options\":[\"公司A\",\"公司B\"]}",
+            new AtomicBoolean());
+        assertEquals("AMBIGUOUS", result.clarity());
+        assertEquals(List.of("公司A", "公司B"), result.options());
+    }
+
+    @Test
+    void shouldDefaultToEmptyOptionsWhenMissing() {
+        QueryClarifier clarifier = new QueryClarifier(5);
+        QueryClarifier.ClarificationResult result = clarifier.assessForTest(
+            "s-noopt",
+            "{\"clarity\":\"AMBIGUOUS\",\"clarification\":\"请补充公司名称\",\"reason\":\"missing-subject\"}",
+            new AtomicBoolean());
+        assertEquals("AMBIGUOUS", result.clarity());
+        assertEquals(List.of(), result.options());
     }
 
     @Test

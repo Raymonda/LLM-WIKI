@@ -294,7 +294,8 @@ public class QueryPrompts {
             3. 问题范围过大，无法聚焦（需给出追问方向）
 
             输出严格 JSON（无其他内容）：
-            {"clarity":"CLEAR|AMBIGUOUS","clarification":"追问文本（仅 AMBIGUOUS 时非空，给出 1-2 个候选意图供用户选择）","reason":"判定理由（≤20字）"}
+            {"clarity":"CLEAR|AMBIGUOUS","clarification":"追问正文（仅 AMBIGUOUS 时非空，直接面向用户提问，不含候选列表）","options":["候选意图1","候选意图2"],"reason":"判定理由（≤20字）"}
+            options 说明：仅 AMBIGUOUS 时给出 1-2 个候选意图（每个 ≤15字，用户点选即作为已确认意图）；CLEAR 时 options 为空数组 []。无法给出合理候选意图时也必须输出空数组 []。
 
             判定口径：宁可漏判（模糊但走完整回答）也不误判（清晰却被打断）。仅对明显歧义判定 AMBIGUOUS。
 

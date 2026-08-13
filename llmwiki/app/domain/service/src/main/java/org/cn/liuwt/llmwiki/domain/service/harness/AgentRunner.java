@@ -42,6 +42,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -178,7 +179,8 @@ public class AgentRunner {
 
         return Flux.defer(() -> {
             try {
-                if (clarifierEnabled && (assumedIntent == null || assumedIntent.isBlank())) {
+                String effectiveAssumed = assumedIntent;
+                if (clarifierEnabled && (effectiveAssumed == null || effectiveAssumed.isBlank())) {
                     ChatClient clarifyClient = (deepMode && deepNoToolsClient != null) ? deepNoToolsClient : noToolsClient;
                     String clarifyPrompt = schemaInjector.prependForQuery(scopeId,
                         PromptRegistry.forQuery().clarificationPrompt(scopeId));
@@ -188,15 +190,14 @@ public class AgentRunner {
                         && clarification.clarification() != null
                         && !clarification.clarification().isBlank()
                         && clarification.reason() != null) {
-                        String payload;
-                        try {
-                            payload = MAPPER.writeValueAsString(Map.of(
-                                "question", clarification.clarification(),
-                                "reason", clarification.reason()));
-                        } catch (Exception e) {
-                            payload = "{\"question\":\"\"}";
-                        }
+                        String payload = buildClarifyPayload(clarification);
                         return Flux.just(QuerySseProtocol.CLARIFY_PREFIX + payload);
+                    }
+                    if ("CLEAR".equals(clarification.clarity())
+                        && "forced-clear".equals(clarification.reason())
+                        && clarification.clarification() != null
+                        && !clarification.clarification().isBlank()) {
+                        effectiveAssumed = "（澄清次数超限，自动采用）" + clarification.clarification();
                     }
                 }
                 long phase1Start = System.currentTimeMillis();
@@ -218,8 +219,8 @@ public class AgentRunner {
                     : schemaInjector.prependForQuery(scopeId,
                         PromptRegistry.forQuery().factAgentPrompt(scopeId, pageCount, factContext));
 
-                if (assumedIntent != null && !assumedIntent.isBlank()) {
-                    factSystemPrompt = factSystemPrompt + "\n\n## 已确认的用户意图\n" + assumedIntent
+                if (effectiveAssumed != null && !effectiveAssumed.isBlank()) {
+                    factSystemPrompt = factSystemPrompt + "\n\n## 已确认的用户意图\n" + effectiveAssumed
                         + "\n检索与回答请聚焦此意图，无需再次澄清。";
                 }
 
@@ -253,17 +254,7 @@ public class AgentRunner {
                             }
                             return Flux.fromIterable(out);
                         })
-                        .doOnComplete(() -> {
-                            String rest = lineBuffer.toString().trim();
-                            if (!rest.isEmpty()) {
-                                FactBlock block = FactBlockParser.tryParse(rest);
-                                if (block != null) {
-                                    factBlocks.add(block);
-                                } else {
-                                    layer1Buffer.append(rest).append('\n');
-                                }
-                            }
-                        })
+                        .concatWith(Flux.defer(() -> emitPendingLine(lineBuffer, layer1Buffer, factBlocks)))
                     : activeQueryClient.prompt()
                         .system(factSystemPrompt)
                         .user(question)
@@ -278,7 +269,7 @@ public class AgentRunner {
                         .synthesisPrompt(scopeId, question,
                             FactBlockParser.toFactInput(factBlocks, layer1Buffer.toString()), deprecatedContext, deepMode);
 
-                    return synthesizeWithImages(scopeId, synthesisUserPrompt, factBlocks, deepMode);
+                    return synthesizeWithImages(scopeId, synthesisUserPrompt, factBlocks, layer1Buffer.toString(), deepMode);
                 });
 
                 Flux<String> synthesisMarker = Flux.just("\n\n", "__STEP__:synthesizing");
@@ -321,7 +312,8 @@ public class AgentRunner {
         ChatClient activeQueryClient = (deepMode && deepQueryReadOnlyClient != null) ? deepQueryReadOnlyClient : queryReadOnlyClient;
         return Flux.defer(() -> {
             try {
-                if (clarifierEnabled && (assumedIntent == null || assumedIntent.isBlank())) {
+                String effectiveAssumed = assumedIntent;
+                if (clarifierEnabled && (effectiveAssumed == null || effectiveAssumed.isBlank())) {
                     ChatClient clarifyClient = (deepMode && deepNoToolsClient != null) ? deepNoToolsClient : noToolsClient;
                     String clarifyPrompt = schemaInjector.prependForQuery(primaryScopeId,
                         PromptRegistry.forQuery().clarificationPrompt(primaryScopeId));
@@ -331,15 +323,14 @@ public class AgentRunner {
                         && clarification.clarification() != null
                         && !clarification.clarification().isBlank()
                         && clarification.reason() != null) {
-                        String payload;
-                        try {
-                            payload = MAPPER.writeValueAsString(Map.of(
-                                "question", clarification.clarification(),
-                                "reason", clarification.reason()));
-                        } catch (Exception e) {
-                            payload = "{\"question\":\"\"}";
-                        }
+                        String payload = buildClarifyPayload(clarification);
                         return Flux.just(QuerySseProtocol.CLARIFY_PREFIX + payload);
+                    }
+                    if ("CLEAR".equals(clarification.clarity())
+                        && "forced-clear".equals(clarification.reason())
+                        && clarification.clarification() != null
+                        && !clarification.clarification().isBlank()) {
+                        effectiveAssumed = "（澄清次数超限，自动采用）" + clarification.clarification();
                     }
                 }
                 RetrievalContext retrievalContext = retrievalService.preRetrieveMultiScope(scopeIds, question);
@@ -349,8 +340,8 @@ public class AgentRunner {
                     ? PromptRegistry.forQuery().factAgentPromptStructured(primaryScopeId, pageCount, factContext)
                     : PromptRegistry.forQuery().factAgentPrompt(primaryScopeId, pageCount, factContext);
 
-                if (assumedIntent != null && !assumedIntent.isBlank()) {
-                    factSystemPrompt = factSystemPrompt + "\n\n## 已确认的用户意图\n" + assumedIntent
+                if (effectiveAssumed != null && !effectiveAssumed.isBlank()) {
+                    factSystemPrompt = factSystemPrompt + "\n\n## 已确认的用户意图\n" + effectiveAssumed
                         + "\n检索与回答请聚焦此意图，无需再次澄清。";
                 }
                 StringBuilder lineBuffer = new StringBuilder();
@@ -380,17 +371,7 @@ public class AgentRunner {
                             }
                             return Flux.fromIterable(out);
                         })
-                        .doOnComplete(() -> {
-                            String rest = lineBuffer.toString().trim();
-                            if (!rest.isEmpty()) {
-                                FactBlock block = FactBlockParser.tryParse(rest);
-                                if (block != null) {
-                                    factBlocks.add(block);
-                                } else {
-                                    layer1Buffer.append(rest).append('\n');
-                                }
-                            }
-                        })
+                        .concatWith(Flux.defer(() -> emitPendingLine(lineBuffer, layer1Buffer, factBlocks)))
                     : activeQueryClient.prompt()
                         .system(factSystemPrompt)
                         .user(question)
@@ -402,7 +383,7 @@ public class AgentRunner {
                     String synthesisUserPrompt = PromptRegistry.forQuery()
                         .synthesisPrompt(primaryScopeId, question,
                             FactBlockParser.toFactInput(factBlocks, layer1Buffer.toString()), "", deepMode);
-                    return synthesizeWithImages(primaryScopeId, synthesisUserPrompt, factBlocks, deepMode);
+                    return synthesizeWithImages(primaryScopeId, synthesisUserPrompt, factBlocks, layer1Buffer.toString(), deepMode);
                 });
                 Flux<String> synthesisMarker = Flux.just("\n\n", "__STEP__:synthesizing");
                 return Flux.concat(generatingMarker, layer1Stream, synthesisMarker, layer23Stream)
@@ -428,9 +409,35 @@ public class AgentRunner {
         return "AI 服务未配置，无法回答问题。请设置 AI_DASHSCOPE_API_KEY 环境变量。";
     }
 
+    private String buildClarifyPayload(QueryClarifier.ClarificationResult clarification) {
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("question", clarification.clarification());
+            payload.put("options", clarification.options() != null ? clarification.options() : List.of());
+            payload.put("assumedIntentId", clarification.options() != null && !clarification.options().isEmpty()
+                ? clarification.options().get(0) : null);
+            payload.put("reason", clarification.reason());
+            return MAPPER.writeValueAsString(payload);
+        } catch (Exception e) {
+            return "{\"question\":\"\"}";
+        }
+    }
+
+    private Flux<String> emitPendingLine(StringBuilder lineBuffer, StringBuilder layer1Buffer, List<FactBlock> factBlocks) {
+        String rest = lineBuffer.toString().trim();
+        if (rest.isEmpty()) return Flux.empty();
+        FactBlock block = FactBlockParser.tryParse(rest);
+        if (block != null) {
+            factBlocks.add(block);
+            return Flux.just(QuerySseProtocol.FACT_PREFIX + rest);
+        }
+        layer1Buffer.append(rest).append('\n');
+        return Flux.just(rest);
+    }
+
     private static final Pattern IMG_EXTRACT_PATTERN = Pattern.compile("!\\[[^\\]]*?\\]\\(([^)]+?)\\)");
 
-    private Flux<String> synthesizeWithImages(Long scopeId, String synthesisPrompt, List<FactBlock> factBlocks, boolean deepMode) {
+    private Flux<String> synthesizeWithImages(Long scopeId, String synthesisPrompt, List<FactBlock> factBlocks, String layer1Text, boolean deepMode) {
         ChatClient activeNoToolsClient = (deepMode && deepNoToolsClient != null) ? deepNoToolsClient : noToolsClient;
         
         if (chatModel == null) {
@@ -441,7 +448,10 @@ public class AgentRunner {
                 .content();
         }
 
-        List<String> imagePaths = extractImagePathsFromFactBlocks(factBlocks);
+        java.util.LinkedHashSet<String> mergedPaths = new java.util.LinkedHashSet<>();
+        mergedPaths.addAll(extractImagePathsFromFactBlocks(factBlocks));
+        mergedPaths.addAll(extractImagePaths(layer1Text));
+        List<String> imagePaths = new ArrayList<>(mergedPaths);
         log.info("Image extraction: scopeId={} deepMode={} foundPaths={} factBlockCount={}",
             scopeId, deepMode, imagePaths.size(), factBlocks == null ? 0 : factBlocks.size());
 

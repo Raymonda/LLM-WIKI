@@ -9,6 +9,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -21,7 +23,7 @@ public class QueryClarifier {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final long SESSION_TTL_MILLIS = 30 * 60 * 1000L;
 
-    public record ClarificationResult(String clarity, String clarification, String reason) {}
+    public record ClarificationResult(String clarity, String clarification, String reason, List<String> options) {}
 
     private final int maxClarifications;
     private final Map<String, SessionState> sessionStates = new ConcurrentHashMap<>();
@@ -41,7 +43,7 @@ public class QueryClarifier {
                 .content();
         } catch (Exception e) {
             log.warn("Clarification LLM call failed, defaulting to CLEAR: {}", e.getMessage());
-            return new ClarificationResult("CLEAR", "", "llm-failed");
+            return new ClarificationResult("CLEAR", "", "llm-failed", List.of());
         }
         return applySessionGuard(sessionId, parseRaw(raw));
     }
@@ -53,23 +55,29 @@ public class QueryClarifier {
 
     private ClarificationResult parseRaw(String raw) {
         if (raw == null || raw.isBlank()) {
-            return new ClarificationResult("CLEAR", "", "parse-failed");
+            return new ClarificationResult("CLEAR", "", "parse-failed", List.of());
         }
         String trimmed = raw.trim();
         if (!trimmed.startsWith("{")) {
             String clarity = "AMBIGUOUS".equalsIgnoreCase(trimmed) ? "AMBIGUOUS" : "CLEAR";
-            return new ClarificationResult(clarity, "", trimmed);
+            return new ClarificationResult(clarity, "", trimmed, List.of());
         }
         try {
             JsonNode node = MAPPER.readTree(trimmed);
             String clarity = node.has("clarity") ? node.get("clarity").asText() : "CLEAR";
             String clarification = node.has("clarification") ? node.get("clarification").asText() : "";
             String reason = node.has("reason") ? node.get("reason").asText() : "";
+            List<String> options = new ArrayList<>();
+            if (node.has("options") && node.get("options").isArray()) {
+                for (JsonNode opt : node.get("options")) {
+                    if (opt.isTextual() && !opt.asText().isBlank()) options.add(opt.asText());
+                }
+            }
             if (!"AMBIGUOUS".equals(clarity)) clarity = "CLEAR";
-            return new ClarificationResult(clarity, clarification, reason);
+            return new ClarificationResult(clarity, clarification, reason, options);
         } catch (Exception e) {
             log.warn("Failed to parse clarification JSON, defaulting to CLEAR: raw={}", raw);
-            return new ClarificationResult("CLEAR", "", "parse-failed");
+            return new ClarificationResult("CLEAR", "", "parse-failed", List.of());
         }
     }
 
@@ -86,7 +94,7 @@ public class QueryClarifier {
             return result;
         }
         if (forcedClearFlag != null) forcedClearFlag.set(true);
-        return new ClarificationResult("CLEAR", result.clarification(), "forced-clear");
+        return new ClarificationResult("CLEAR", result.clarification(), "forced-clear", result.options());
     }
 
     private static final class SessionState {

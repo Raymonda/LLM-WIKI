@@ -58,6 +58,11 @@ const synthesisStream = computed(() => sse.synthesisStreamContent.value)
 const prospectiveContent = computed(() => sse.prospectiveAnswer.value)
 const factBlocks = computed(() => sse.factBlocks.value)
 
+const answerBody = computed(() => {
+  const factMd = factBlocks.value.length > 0 ? buildFactBlocksMarkdown(factBlocks.value) : factContent.value
+  return factMd.trim() ? `${factMd}\n\n${aiAnswer.value}` : aiAnswer.value
+})
+
 function confidenceLabel(confidence: string): string {
   return confidence === 'high' ? '高可信' : confidence === 'low' ? '低可信' : '中可信'
 }
@@ -178,7 +183,7 @@ const hasNoWikiInfo = computed(() => {
   return aiAnswer.value.includes(t('search.noWikiInfoCheck'))
 })
 
-const hasAnswer = computed(() => aiAnswer.value.length > 0 || hasSavedAnswer.value)
+const hasAnswer = computed(() => aiAnswer.value.length > 0 || hasSavedAnswer.value || factBlocks.value.length > 0)
 const hasSavedAnswer = computed(() => isSaved.value && !!savedPage.value)
 
 watch(searchQuery, (val) => {
@@ -325,8 +330,8 @@ function handleQuery() {
 function submitIntent(intentText: string) {
   if (!clarification.value || !intentText.trim()) return
   const extra = clarifyInput.value.trim()
-  const question = clarification.value.question + (extra ? ` ${extra}` : '')
-  sse.startQuery(question, queryAnalysisMode.value, undefined, intentText.trim())
+  const assumed = extra ? `${intentText.trim()} ${extra}` : intentText.trim()
+  sse.startQuery(lastQuestion.value, queryAnalysisMode.value, undefined, assumed, true)
   clarifyInput.value = ''
 }
 
@@ -337,7 +342,7 @@ function handleRefine() {
   refineInput.value = ''
   showRefineInput.value = false
 
-  const combinedQuestion = `当前文档内容：\n\n${aiAnswer.value}\n\n用户的完善要求：${instruction}\n\n请基于以上信息，更新和完善这份文档，保持原有结构，补充和完善用户要求的内容。直接输出更新后的完整文档。`
+  const combinedQuestion = `当前文档内容：\n\n${answerBody.value}\n\n用户的完善要求：${instruction}\n\n请基于以上信息，更新和完善这份文档，保持原有结构，补充和完善用户要求的内容。直接输出更新后的完整文档。`
 
   isSaved.value = false
   savedPage.value = null
@@ -363,10 +368,10 @@ async function handleSave() {
 
 async function handleCopy() {
   try {
-    await navigator.clipboard.writeText(aiAnswer.value)
+    await navigator.clipboard.writeText(answerBody.value)
   } catch {
     const textarea = document.createElement('textarea')
-    textarea.value = aiAnswer.value
+    textarea.value = answerBody.value
     document.body.appendChild(textarea)
     textarea.select()
     document.execCommand('copy')

@@ -38,6 +38,7 @@ export function useSSEQuery() {
   const clarification = ref<ClarificationView | null>(null)
   const lastQuestion = ref('')
   const queryAnalysisModeForRetry = ref<QueryAnalysisMode>('quick')
+  const sessionId = ref('')
 
   let eventSource: EventSource | null = null
   let progressTimers: ReturnType<typeof setTimeout>[] = []
@@ -71,9 +72,13 @@ export function useSSEQuery() {
   }
 
   function attachSSEListeners(es: EventSource, onComplete?: () => void) {
-    es.addEventListener('start', () => {
+    es.addEventListener('start', (e: MessageEvent) => {
       isLoading.value = true
       isStreaming.value = true
+      try {
+        const data = JSON.parse(e.data)
+        if (data.sessionId) sessionId.value = data.sessionId
+      } catch {}
     })
 
     es.addEventListener('mode', (e: MessageEvent) => {
@@ -146,7 +151,7 @@ export function useSSEQuery() {
       closeEventSource()
       clarificationTimer = setTimeout(() => {
         clarification.value = null
-        startQuery(lastQuestion.value, queryAnalysisModeForRetry.value)
+        startQuery(lastQuestion.value, queryAnalysisModeForRetry.value, undefined, undefined, true)
       }, 60000)
     })
 
@@ -193,11 +198,12 @@ export function useSSEQuery() {
     }
   }
 
-  function startQuery(question: string, mode: QueryAnalysisMode = 'quick', onComplete?: () => void, assumedIntent?: string) {
+  function startQuery(question: string, mode: QueryAnalysisMode = 'quick', onComplete?: () => void, assumedIntent?: string, preserveSession?: boolean) {
     if (!question || isStreaming.value) return
 
     lastQuestion.value = question
     queryAnalysisModeForRetry.value = mode
+    if (!preserveSession) sessionId.value = ''
     clarification.value = null
     if (clarificationTimer) {
       clearTimeout(clarificationTimer)
@@ -219,16 +225,8 @@ export function useSSEQuery() {
 
     startProgress()
 
-    eventSource = createQuerySSE(question, undefined, mode, assumedIntent)
+    eventSource = createQuerySSE(question, preserveSession ? sessionId.value : undefined, mode, assumedIntent)
     attachSSEListeners(eventSource, onComplete)
-  }
-
-  function retryWithIntent(intent: string, question?: string) {
-    if (clarificationTimer) {
-      clearTimeout(clarificationTimer)
-      clarificationTimer = null
-    }
-    startQuery(question || lastQuestion.value, queryAnalysisModeForRetry.value, undefined, intent)
   }
 
   function reset() {
@@ -282,6 +280,5 @@ export function useSSEQuery() {
     reset,
     completeProgress,
     closeEventSource,
-    retryWithIntent,
   }
 }
