@@ -86,7 +86,7 @@ mvn clean package -DskipTests -pl app/bootstrap -am
 
 # 运行（dev profile 连接 localhost 服务，API Key 通过环境变量传入）
 AI_DASHSCOPE_API_KEY=sk-your-key-here \
-  java -jar target/boot/llmwiki-bootstrap-0.0.1-SNAPSHOT.jar --spring.profiles.active=dev
+  java -jar target/boot/llmwiki-bootstrap-1.1.0-SNAPSHOT.jar --spring.profiles.active=dev
 ```
 
 或者用 Maven 直接运行：

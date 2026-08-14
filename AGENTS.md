@@ -9,7 +9,7 @@
 > - Frontend: Vue 3 + TypeScript + Vite + Element Plus (under `llmwiki-web-ui/`)
 > - Package root: `org.cn.liuwt.llmwiki`
 > - Build: `cd llmwiki && mvn clean package -DskipTests -pl app/bootstrap -am`
-> - Run: `java -jar target/boot/llmwiki-bootstrap-0.0.1-SNAPSHOT.jar --spring.profiles.active=dev`
+> - Run: `java -jar target/boot/llmwiki-bootstrap-1.1.0-SNAPSHOT.jar --spring.profiles.active=dev`
 > - Frontend dev: `cd llmwiki-web-ui && npm install && npm run dev` (http://localhost:5173)
 > - Deploy: `docker-compose up -d` (MySQL + ES + App + Web UI); `docker-compose.full.yml` adds MinIO + RocketMQ
 >
@@ -131,7 +131,7 @@ cd llmwiki
 mvn clean package -DskipTests -pl app/bootstrap -am
 
 # 开发环境启动（需要 MySQL + Elasticsearch）
-java -jar target/boot/llmwiki-bootstrap-0.0.1-SNAPSHOT.jar --spring.profiles.active=dev
+java -jar target/boot/llmwiki-bootstrap-1.1.0-SNAPSHOT.jar --spring.profiles.active=dev
 
 # 运行测试
 mvn test                          # 全量

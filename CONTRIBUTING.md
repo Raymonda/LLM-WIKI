@@ -26,7 +26,7 @@ Thank you for your interest in contributing to LLM Wiki! This document provides 
 ```bash
 cd llmwiki
 mvn clean package -DskipTests -pl app/bootstrap -am
-java -jar target/boot/llmwiki-bootstrap-0.0.1-SNAPSHOT.jar --spring.profiles.active=dev
+java -jar target/boot/llmwiki-bootstrap-1.1.0-SNAPSHOT.jar --spring.profiles.active=dev
 ```
 
 ### Frontend
