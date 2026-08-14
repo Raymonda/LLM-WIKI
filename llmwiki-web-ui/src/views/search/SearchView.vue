@@ -67,7 +67,7 @@ const answerBody = computed(() => {
     const body = synthesisStream.value || aiAnswer.value
     return factMd.trim() ? `${body}\n\n${factMd}` : body
   }
-  return factMd.trim() ? `${factMd}\n\n${aiAnswer.value}` : aiAnswer.value
+  return factMd.trim() ? `${factMd}\n\n${synthesisStream.value}` : (synthesisStream.value || aiAnswer.value)
 })
 
 const isStreamingSynthesis = computed(() => isStreaming.value && isSynthesizing.value)
