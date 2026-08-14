@@ -690,8 +690,11 @@ function handleContentClick(e: MouseEvent) {
 
   const factBadge = target.closest('.fact-ref-badge') as HTMLElement
   if (factBadge) {
-    const index = Number(factBadge.getAttribute('data-fact-index'))
-    if (index >= 0) emit('fact-ref-click', index)
+    const raw = factBadge.getAttribute('data-fact-index')
+    if (raw !== null) {
+      const index = Number(raw)
+      if (index >= 0) emit('fact-ref-click', index)
+    }
     return
   }
 
@@ -744,8 +747,11 @@ function handleContentKeydown(e: KeyboardEvent) {
   const factBadge = target.closest('.fact-ref-badge') as HTMLElement
   if (factBadge) {
     e.preventDefault()
-    const index = Number(factBadge.getAttribute('data-fact-index'))
-    if (index >= 0) emit('fact-ref-click', index)
+    const raw = factBadge.getAttribute('data-fact-index')
+    if (raw !== null) {
+      const index = Number(raw)
+      if (index >= 0) emit('fact-ref-click', index)
+    }
     return
   }
 
