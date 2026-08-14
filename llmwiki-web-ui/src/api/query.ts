@@ -23,7 +23,7 @@ export function createQuerySSE(
 }
 
 export function saveAnswer(question: string, answer: string, sessionId?: string): Promise<WikiPageInfo> {
-  return api.post('/query/save', { question, answer, sessionId })
+  return api.post('/query/save', { question, answer, sessionId }, { timeout: 120000 })
 }
 
 export function resolveLinks(content: string): Promise<Record<string, number>> {

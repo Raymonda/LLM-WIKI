@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { ElMessage } from 'element-plus'
 import WikiPageRenderer from '@/components/wiki/WikiPageRenderer.vue'
 import FunFactTips from '@/components/wiki/FunFactTips.vue'
 import { Search, MessageCircle, Loader2, BookOpen, BookmarkPlus, Bot, FileText, AlertTriangle, CheckCircle, Filter, HelpCircle, X, ExternalLink, Info, Copy, Send, Pencil, Sparkles, Check, Zap, Brain, ChevronDown, Library } from 'lucide-vue-next'
@@ -368,7 +369,7 @@ async function handleSave() {
     savedPage.value = await saveAnswer(lastQuestion.value, answerBody.value)
     isSaved.value = true
   } catch (e: any) {
-    sse.queryError.value = e.message || t('search.saveFailed')
+    ElMessage.error(e.message || t('search.saveFailed'))
   } finally {
     isSaving.value = false
   }
