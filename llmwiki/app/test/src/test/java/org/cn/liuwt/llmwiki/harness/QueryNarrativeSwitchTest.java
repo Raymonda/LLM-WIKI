@@ -12,12 +12,21 @@ import static org.junit.jupiter.api.Assertions.*;
 class QueryNarrativeSwitchTest {
 
     @Test
-    void shouldIncludeNarrativeFlagInStartEventData() {
+    void shouldIncludeNarrativeFlagInStartEventDataWhenSwitchOn() {
         QueryController controller = new QueryController();
         ReflectionTestUtils.setField(controller, "narrativeEnabled", true);
         Map<String, Object> data = controller.buildStartEventData("query-1-123");
         assertEquals("query-1-123", data.get("sessionId"));
         assertEquals(true, data.get("narrative"));
+    }
+
+    @Test
+    void shouldSetNarrativeFalseWhenSwitchOff() {
+        QueryController controller = new QueryController();
+        ReflectionTestUtils.setField(controller, "narrativeEnabled", false);
+        Map<String, Object> data = controller.buildStartEventData("query-1-456");
+        assertEquals("query-1-456", data.get("sessionId"));
+        assertEquals(false, data.get("narrative"));
     }
 
     @Test
