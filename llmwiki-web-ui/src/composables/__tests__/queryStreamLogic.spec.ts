@@ -86,6 +86,18 @@ describe('injectFactBadges', () => {
     expect(out).toContain('data-fact-index="0"')
   })
 
+  it('should skip inline code', () => {
+    const out = injectFactBadges('正文 `[1]` 与 [1]', blocks)
+    expect(out).toContain('`[1]`')
+    expect(out).toContain('data-fact-index="0"')
+  })
+
+  it('should keep zero reference as plain text', () => {
+    const out = injectFactBadges('结论 [0]。', blocks)
+    expect(out).not.toContain('data-fact-index')
+    expect(out).toContain('[0]')
+  })
+
   it('should return content unchanged when blocks is null or empty', () => {
     expect(injectFactBadges('正文 [1]', null)).toBe('正文 [1]')
     expect(injectFactBadges('正文 [1]', [])).toBe('正文 [1]')

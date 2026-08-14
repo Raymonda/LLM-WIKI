@@ -205,7 +205,10 @@ export function useSSEQuery() {
 
     lastQuestion.value = question
     queryAnalysisModeForRetry.value = mode
-    if (!preserveSession) sessionId.value = ''
+    if (!preserveSession) {
+      sessionId.value = ''
+      narrativeEnabled.value = false
+    }
     clarification.value = null
     if (clarificationTimer) {
       clearTimeout(clarificationTimer)
