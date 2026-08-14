@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { reduceFactBlockJson, splitSynthesisAndProspective, buildFactBlocksMarkdown, parseClarification } from '../queryStreamLogic'
+import { reduceFactBlockJson, splitSynthesisAndProspective, buildFactBlocksMarkdown, parseClarification, injectFactBadges, type FactBlockView } from '../queryStreamLogic'
 
 describe('reduceFactBlockJson', () => {
   it('should append a parsed fact block', () => {
@@ -57,5 +57,37 @@ describe('parseClarification', () => {
     const view = parseClarification('{"question":"q","options":[1, null, "ok"],"assumedIntentId":123}')
     expect(view.options).toEqual(['ok'])
     expect(view.assumedIntentId).toBeNull()
+  })
+})
+
+const blocks: FactBlockView[] = [
+  { id: 'fb-1', conclusion: 'c1', evidence: 'e1', refs: [], confidence: 'high', kind: 'fact' },
+  { id: 'fb-2', conclusion: 'c2', evidence: 'e2', refs: [], confidence: 'low', kind: 'fact' },
+]
+
+describe('injectFactBadges', () => {
+  it('should inject badges for in-range references', () => {
+    const out = injectFactBadges('结论 [1] 和 [2]。', blocks)
+    expect(out).toContain('data-fact-index="0"')
+    expect(out).toContain('data-fact-index="1"')
+    expect(out).toContain('fact-ref-badge--high')
+    expect(out).toContain('fact-ref-badge--low')
+  })
+
+  it('should keep out-of-range references as plain text', () => {
+    const out = injectFactBadges('结论 [5]。', blocks)
+    expect(out).not.toContain('data-fact-index')
+    expect(out).toContain('[5]')
+  })
+
+  it('should skip code blocks', () => {
+    const out = injectFactBadges('```\ncode [1]\n```\n正文 [1]', blocks)
+    expect(out).toContain('code [1]')
+    expect(out).toContain('data-fact-index="0"')
+  })
+
+  it('should return content unchanged when blocks is null or empty', () => {
+    expect(injectFactBadges('正文 [1]', null)).toBe('正文 [1]')
+    expect(injectFactBadges('正文 [1]', [])).toBe('正文 [1]')
   })
 })

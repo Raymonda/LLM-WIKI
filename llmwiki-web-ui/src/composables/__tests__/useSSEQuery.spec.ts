@@ -46,4 +46,22 @@ describe('useSSEQuery session id', () => {
     expect(createQuerySSE).toHaveBeenCalledTimes(2)
     expect(createQuerySSE.mock.calls[1][1]).toBe('sess-42')
   })
+
+  it('should parse narrative flag from start event', () => {
+    const es = new FakeEventSource()
+    createQuerySSE.mockReturnValue(es as any)
+    const sse = useSSEQuery()
+    sse.startQuery('问题')
+    es.emit('start', JSON.stringify({ sessionId: 's-1', narrative: true }))
+    expect(sse.narrativeEnabled.value).toBe(true)
+  })
+
+  it('should default narrative to false when flag missing', () => {
+    const es = new FakeEventSource()
+    createQuerySSE.mockReturnValue(es as any)
+    const sse = useSSEQuery()
+    sse.startQuery('问题')
+    es.emit('start', JSON.stringify({ sessionId: 's-1' }))
+    expect(sse.narrativeEnabled.value).toBe(false)
+  })
 })

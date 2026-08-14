@@ -81,3 +81,19 @@ export function buildFactBlocksMarkdown(blocks: FactBlockView[]): string {
     })
     .join('\n\n')
 }
+
+export function injectFactBadges(content: string, blocks: FactBlockView[] | null): string {
+  if (!blocks || blocks.length === 0) return content
+  return content
+    .split(/(```[\s\S]*?(?:```|$)|`[^`\n]*`)/g)
+    .map((part, i) => {
+      if (i % 2 === 1) return part
+      return part.replace(/\[(\d+)\]/g, (match, num: string) => {
+        const idx = Number(num) - 1
+        if (idx < 0 || idx >= blocks.length) return match
+        const conf = blocks[idx].confidence === 'high' ? 'high' : blocks[idx].confidence === 'low' ? 'low' : 'medium'
+        return `<span class="fact-ref-badge fact-ref-badge--${conf}" data-fact-index="${idx}" role="button" tabindex="0">[${num}]</span>`
+      })
+    })
+    .join('')
+}

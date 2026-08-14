@@ -39,6 +39,7 @@ export function useSSEQuery() {
   const lastQuestion = ref('')
   const queryAnalysisModeForRetry = ref<QueryAnalysisMode>('quick')
   const sessionId = ref('')
+  const narrativeEnabled = ref(false)
 
   let eventSource: EventSource | null = null
   let progressTimers: ReturnType<typeof setTimeout>[] = []
@@ -78,6 +79,7 @@ export function useSSEQuery() {
       try {
         const data = JSON.parse(e.data)
         if (data.sessionId) sessionId.value = data.sessionId
+        if (typeof data.narrative === 'boolean') narrativeEnabled.value = data.narrative
       } catch {}
     })
 
@@ -251,6 +253,7 @@ export function useSSEQuery() {
     factBlocks.value = []
     clarification.value = null
     sessionId.value = ''
+    narrativeEnabled.value = false
   }
 
   onUnmounted(() => {
@@ -277,6 +280,7 @@ export function useSSEQuery() {
     funFacts,
     factBlocks,
     clarification,
+    narrativeEnabled,
     startQuery,
     reset,
     completeProgress,
