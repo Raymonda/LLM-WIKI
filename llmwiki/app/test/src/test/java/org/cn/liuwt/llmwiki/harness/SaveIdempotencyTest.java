@@ -1,6 +1,7 @@
 package org.cn.liuwt.llmwiki.harness;
 
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageSourceDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageLinkMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageSourceMapper;
@@ -35,6 +36,7 @@ class SaveIdempotencyTest {
     private WikiPageMapper wikiPageMapper;
     private StorageProvider storageProvider;
     private ExecutionTracker executionTracker;
+    private WikiPageSourceMapper wikiPageSourceMapper;
 
     @BeforeEach
     void setUp() {
@@ -60,7 +62,8 @@ class SaveIdempotencyTest {
         ReflectionTestUtils.setField(orchestrator, "executionTracker", executionTracker);
         ReflectionTestUtils.setField(orchestrator, "storageProvider", storageProvider);
         ReflectionTestUtils.setField(orchestrator, "wikiPageMapper", wikiPageMapper);
-        ReflectionTestUtils.setField(orchestrator, "wikiPageSourceMapper", mock(WikiPageSourceMapper.class));
+        wikiPageSourceMapper = mock(WikiPageSourceMapper.class);
+        ReflectionTestUtils.setField(orchestrator, "wikiPageSourceMapper", wikiPageSourceMapper);
         ReflectionTestUtils.setField(orchestrator, "wikiPageLinkMapper", mock(WikiPageLinkMapper.class));
         ReflectionTestUtils.setField(orchestrator, "searchService", mock(SearchService.class));
         ReflectionTestUtils.setField(orchestrator, "globalSummaryService", mock(GlobalSummaryService.class));
@@ -105,5 +108,6 @@ class SaveIdempotencyTest {
         assertEquals("全新标题", result.getTitle());
         verify(wikiPageMapper).insert(any(WikiPageDO.class));
         verify(storageProvider).write(anyString(), anyString(), any(byte[].class));
+        verify(wikiPageSourceMapper, never()).insert(any(WikiPageSourceDO.class));
     }
 }

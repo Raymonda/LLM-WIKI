@@ -372,22 +372,6 @@ public class PipelineOrchestrator {
             wikiPageMapper.insert(pageDO);
             lintFindingService.resolvePageFindingsOnIngest(scopeId, pageDO.getId());
 
-            for (WikiPageDO sourcePage : resolvedSources) {
-                WikiPageSourceDO existingSource = wikiPageSourceMapper.selectOne(
-                    new LambdaQueryWrapper<WikiPageSourceDO>()
-                        .eq(WikiPageSourceDO::getScopeId, scopeId)
-                        .eq(WikiPageSourceDO::getPageId, pageDO.getId())
-                        .eq(WikiPageSourceDO::getSourceId, sourcePage.getId())
-                );
-                if (existingSource == null) {
-                    WikiPageSourceDO psRel = new WikiPageSourceDO();
-                    psRel.setScopeId(scopeId);
-                    psRel.setPageId(pageDO.getId());
-                    psRel.setSourceId(sourcePage.getId());
-                    wikiPageSourceMapper.insert(psRel);
-                }
-            }
-
             try {
                 searchService.indexPage(scopeId, pageDO.getId(), pageDO.getTitle(), pageDO.getFilePath(),
                     pageDO.getCategory(), pageDO.getSummary(), markdownContent,
