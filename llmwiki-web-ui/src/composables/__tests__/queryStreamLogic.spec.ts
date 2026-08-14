@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { reduceFactBlockJson, splitSynthesisAndProspective, buildFactBlocksMarkdown, parseClarification, injectFactBadges, type FactBlockView } from '../queryStreamLogic'
+import { reduceFactBlockJson, splitSynthesisAndProspective, buildFactBlocksMarkdown, parseClarification, injectFactBadges, orderFactBlocksByConfidence, type FactBlockView } from '../queryStreamLogic'
 
 describe('reduceFactBlockJson', () => {
   it('should append a parsed fact block', () => {
@@ -27,6 +27,12 @@ describe('splitSynthesisAndProspective', () => {
     expect(synthesis).toBe('无前瞻段落')
     expect(prospective).toBe('')
   })
+
+  it('should split at looser prospective variants', () => {
+    const [synthesis, prospective] = splitSynthesisAndProspective('内容\n⚡ **前瞻性分析（AI 推演）**\n推演')
+    expect(synthesis).toContain('内容')
+    expect(prospective).toContain('推演')
+  })
 })
 
 describe('buildFactBlocksMarkdown', () => {
@@ -37,6 +43,14 @@ describe('buildFactBlocksMarkdown', () => {
     expect(md).toContain('结论A')
     expect(md).toContain('页面A')
     expect(md).toContain('wiki/pages/a.md')
+  })
+
+  it('should emit single-paren wiki links', () => {
+    const md = buildFactBlocksMarkdown([
+      { id: '1', conclusion: '结论A', evidence: '', refs: [{ path: 'wiki/pages/a.md', title: '页面A' }], confidence: 'high', kind: 'fact' },
+    ])
+    expect(md).toContain('[[页面A]](wiki/pages/a.md)')
+    expect(md).not.toContain(']]((')
   })
 })
 
@@ -101,5 +115,38 @@ describe('injectFactBadges', () => {
   it('should return content unchanged when blocks is null or empty', () => {
     expect(injectFactBadges('正文 [1]', null)).toBe('正文 [1]')
     expect(injectFactBadges('正文 [1]', [])).toBe('正文 [1]')
+  })
+
+  it('should map badges by confidence-sorted order matching backend numbering', () => {
+    const shuffled: FactBlockView[] = [
+      { id: 'fb-1', conclusion: 'c1', evidence: '', refs: [], confidence: 'low', kind: 'fact' },
+      { id: 'fb-2', conclusion: 'c2', evidence: '', refs: [], confidence: 'high', kind: 'fact' },
+    ]
+    const out = injectFactBadges('结论 [1]。', shuffled)
+    expect(out).toContain('data-fact-index="0"')
+    expect(out).toContain('fact-ref-badge--high')
+    expect(out).not.toContain('fact-ref-badge--low')
+  })
+})
+
+describe('orderFactBlocksByConfidence', () => {
+  it('should order high, medium, low keeping stable order within confidence', () => {
+    const blocks: FactBlockView[] = [
+      { id: '1', conclusion: 'a', evidence: '', refs: [], confidence: 'low', kind: 'fact' },
+      { id: '2', conclusion: 'b', evidence: '', refs: [], confidence: 'high', kind: 'fact' },
+      { id: '3', conclusion: 'c', evidence: '', refs: [], confidence: 'medium', kind: 'fact' },
+      { id: '4', conclusion: 'd', evidence: '', refs: [], confidence: 'high', kind: 'fact' },
+    ]
+    const ordered = orderFactBlocksByConfidence(blocks)
+    expect(ordered.map((b) => b.id)).toEqual(['2', '4', '3', '1'])
+  })
+
+  it('should not mutate the input array', () => {
+    const blocks: FactBlockView[] = [
+      { id: '1', conclusion: 'a', evidence: '', refs: [], confidence: 'low', kind: 'fact' },
+      { id: '2', conclusion: 'b', evidence: '', refs: [], confidence: 'high', kind: 'fact' },
+    ]
+    orderFactBlocksByConfidence(blocks)
+    expect(blocks.map((b) => b.id)).toEqual(['1', '2'])
   })
 })

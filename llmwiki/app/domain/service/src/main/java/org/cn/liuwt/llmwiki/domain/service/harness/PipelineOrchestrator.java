@@ -324,8 +324,6 @@ public class PipelineOrchestrator {
         if (existingByTitle != null) {
             log.info("Save idempotent hit: title '{}' already exists as page id={}, returning existing page",
                 title, existingByTitle.getId());
-            executionTracker.completeStep(formatStep.getId(), "idempotent-skip", formatTokens,
-                (int) Math.min(formatDuration, Integer.MAX_VALUE));
             executionTracker.completeExecution(execution.getId(), totalTokens);
             return existingByTitle;
         }
@@ -369,7 +367,24 @@ public class PipelineOrchestrator {
             pageDO.setHealthStatus("healthy");
             pageDO.setLifecycleStatus(PageLifecycle.ACTIVE.name());
             pageDO.setContentUpdatedAt(java.time.LocalDateTime.now());
-            wikiPageMapper.insert(pageDO);
+            try {
+                wikiPageMapper.insert(pageDO);
+            } catch (org.springframework.dao.DuplicateKeyException dupEx) {
+                WikiPageDO winner = wikiPageMapper.selectOne(
+                    new LambdaQueryWrapper<WikiPageDO>()
+                        .eq(WikiPageDO::getScopeId, scopeId)
+                        .eq(WikiPageDO::getTitle, title)
+                        .orderByDesc(WikiPageDO::getCreatedAt)
+                        .last("LIMIT 1")
+                );
+                if (winner != null) {
+                    log.info("Concurrent save race: title '{}' already inserted, returning page id={}",
+                        title, winner.getId());
+                    executionTracker.completeExecution(execution.getId(), totalTokens);
+                    return winner;
+                }
+                throw dupEx;
+            }
             lintFindingService.resolvePageFindingsOnIngest(scopeId, pageDO.getId());
 
             try {

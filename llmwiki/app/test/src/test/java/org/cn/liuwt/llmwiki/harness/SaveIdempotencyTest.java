@@ -21,6 +21,7 @@ import org.cn.liuwt.llmwiki.integration.storage.StorageProvider;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
@@ -109,5 +110,25 @@ class SaveIdempotencyTest {
         verify(wikiPageMapper).insert(any(WikiPageDO.class));
         verify(storageProvider).write(anyString(), anyString(), any(byte[].class));
         verify(wikiPageSourceMapper, never()).insert(any(WikiPageSourceDO.class));
+    }
+
+    @Test
+    void shouldReturnExistingPageWhenInsertHitsDuplicateKey() {
+        String formatted = "{\"title\":\"并发标题\",\"summary\":\"摘要\",\"category\":\"问答沉淀\","
+            + "\"content\":\"# 并发标题\\n\\n内容\"}";
+        when(chatClient.chat(anyString(), anyString())).thenReturn(formatted);
+        WikiPageDO winner = new WikiPageDO();
+        winner.setId(201L);
+        winner.setTitle("并发标题");
+        winner.setFilePath("pages/并发标题.md");
+        when(wikiPageMapper.selectOne(any())).thenReturn(null, winner);
+        when(wikiPageMapper.selectList(any())).thenReturn(List.of());
+        doThrow(new DuplicateKeyException("duplicate")).when(wikiPageMapper).insert(any(WikiPageDO.class));
+
+        WikiPageDO result = orchestrator.runSaveQueryResultPipeline(7L, "问题", "回答", "s1");
+
+        assertSame(winner, result);
+        verify(wikiPageMapper).insert(any(WikiPageDO.class));
+        verify(executionTracker).completeExecution(eq(1L), anyInt());
     }
 }

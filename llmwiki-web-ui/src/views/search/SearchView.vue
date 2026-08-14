@@ -10,7 +10,7 @@ import { searchPages, searchSuggest, listCategories, type WikiPageInfo, type Sea
 import { useAuthStore } from '@/stores/auth'
 import { saveAnswer, resolveLinks, type QueryAnalysisMode } from '@/api/query'
 import { useSSEQuery } from '@/composables/useSSEQuery'
-import { buildFactBlocksMarkdown, type FactBlockView } from '@/composables/queryStreamLogic'
+import { buildFactBlocksMarkdown, orderFactBlocksByConfidence, type FactBlockView } from '@/composables/queryStreamLogic'
 import FactEvidenceList from '@/components/search/FactEvidenceList.vue'
 import { extractWikiSourceRefs, type WikiSourceRef } from '@/utils/wikiSourceRefs'
 
@@ -85,7 +85,7 @@ const factPopupVisible = computed({
 })
 
 function openFactPopup(index: number) {
-  activeFact.value = factBlocks.value[index] ?? null
+  activeFact.value = orderFactBlocksByConfidence(factBlocks.value)[index] ?? null
 }
 
 const wikiSources = computed<WikiSourceRef[]>(() => extractWikiSourceRefs(aiAnswer.value ?? ''))

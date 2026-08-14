@@ -12,7 +12,7 @@ export interface FactBlockView {
   kind: string
 }
 
-const PROSPECTIVE_MARKER = '前瞻分析'
+const PROSPECTIVE_MARKER = /前瞻(?:性)?分析|前瞻推演/
 
 export interface ClarificationView {
   question: string
@@ -35,8 +35,9 @@ export function parseClarification(payload: string): ClarificationView {
 }
 
 export function splitSynthesisAndProspective(full: string): [string, string] {
-  const idx = full.indexOf(PROSPECTIVE_MARKER)
-  if (idx < 0) return [full, '']
+  const match = PROSPECTIVE_MARKER.exec(full)
+  if (!match || match.index === undefined) return [full, '']
+  const idx = match.index
   const splitAt = full.lastIndexOf('\n', idx)
   const pos = splitAt >= 0 ? splitAt : idx
   return [full.slice(0, pos).replace(/\n+$/, ''), full.slice(pos).replace(/^\n+/, '')]
@@ -74,7 +75,7 @@ export function buildFactBlocksMarkdown(blocks: FactBlockView[]): string {
       if (b.kind === 'text') return b.conclusion
       const label = b.confidence === 'high' ? '高可信' : b.confidence === 'low' ? '低可信' : '中可信'
       const refs = b.refs.length
-        ? `\n  - 来源：${b.refs.map((r) => `[[${r.title}]]((${r.path}))`).join('；')}`
+        ? `\n  - 来源：${b.refs.map((r) => `[[${r.title}]](${r.path})`).join('；')}`
         : ''
       const evidence = b.evidence ? `\n  - 依据：${b.evidence}` : ''
       return `- ${b.conclusion}（${label}）${evidence}${refs}`
@@ -82,16 +83,25 @@ export function buildFactBlocksMarkdown(blocks: FactBlockView[]): string {
     .join('\n\n')
 }
 
+const CONFIDENCE_WEIGHT: Record<string, number> = { high: 0, medium: 1, low: 2 }
+
+export function orderFactBlocksByConfidence(blocks: FactBlockView[]): FactBlockView[] {
+  return [...blocks].sort(
+    (a, b) => (CONFIDENCE_WEIGHT[a.confidence] ?? 1) - (CONFIDENCE_WEIGHT[b.confidence] ?? 1),
+  )
+}
+
 export function injectFactBadges(content: string, blocks: FactBlockView[] | null): string {
   if (!blocks || blocks.length === 0) return content
+  const ordered = orderFactBlocksByConfidence(blocks)
   return content
     .split(/(```[\s\S]*?(?:```|$)|`[^`\n]*`)/g)
     .map((part, i) => {
       if (i % 2 === 1) return part
       return part.replace(/\[(\d+)\]/g, (match, num: string) => {
         const idx = Number(num) - 1
-        if (idx < 0 || idx >= blocks.length) return match
-        const conf = blocks[idx].confidence === 'high' ? 'high' : blocks[idx].confidence === 'low' ? 'low' : 'medium'
+        if (idx < 0 || idx >= ordered.length) return match
+        const conf = ordered[idx].confidence === 'high' ? 'high' : ordered[idx].confidence === 'low' ? 'low' : 'medium'
         return `<span class="fact-ref-badge fact-ref-badge--${conf}" data-fact-index="${idx}" role="button" tabindex="0">[${num}]</span>`
       })
     })
