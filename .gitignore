@@ -82,3 +82,6 @@ start-dev.ps1
 # RocketMQ runtime data
 llmwiki/rocketmq/store/
 llmwiki/rocketmq/logs/
+
+# Competition release artifacts
+/release/
