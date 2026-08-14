@@ -3,6 +3,7 @@ package org.cn.liuwt.llmwiki.domain.service.harness;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.cn.liuwt.llmwiki.domain.model.harness.FactBlock;
 import org.cn.liuwt.llmwiki.domain.service.harness.prompt.PromptRegistry;
+import org.cn.liuwt.llmwiki.domain.service.harness.prompt.config.QueryPrompts;
 import org.cn.liuwt.llmwiki.domain.service.harness.query.FactBlockParser;
 import org.cn.liuwt.llmwiki.domain.service.harness.query.QueryClarifier;
 import org.cn.liuwt.llmwiki.domain.service.harness.query.QuerySseProtocol;
@@ -59,6 +60,9 @@ public class AgentRunner {
 
     @Value("${llmwiki.query.clarifier.enabled:true}")
     private boolean clarifierEnabled;
+
+    @Value("${llmwiki.query.narrative.enabled:true}")
+    private boolean narrativeEnabled;
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -265,9 +269,8 @@ public class AgentRunner {
                 // Phase 2: Synthesis Agent (no tools, uses Layer 1 + DEPRECATED context, generates Layer 2/3)
                 Flux<String> layer23Stream = Flux.defer(() -> {
                     log.info("Fact Agent completed: scopeId={} factBlocks={}", scopeId, factBlocks.size());
-                    String synthesisUserPrompt = PromptRegistry.forQuery()
-                        .synthesisPrompt(scopeId, question,
-                            FactBlockParser.toFactInput(factBlocks, layer1Buffer.toString()), deprecatedContext, deepMode);
+                    String synthesisUserPrompt = buildSynthesisUserPrompt(scopeId, question,
+                        FactBlockParser.toFactInput(factBlocks, layer1Buffer.toString()), deprecatedContext, deepMode);
 
                     return synthesizeWithImages(scopeId, synthesisUserPrompt, factBlocks, layer1Buffer.toString(), deepMode);
                 });
@@ -380,9 +383,8 @@ public class AgentRunner {
                         .doOnNext(layer1Buffer::append);
                 Flux<String> layer23Stream = Flux.defer(() -> {
                     log.info("Fact Agent completed: scopeId={} factBlocks={}", primaryScopeId, factBlocks.size());
-                    String synthesisUserPrompt = PromptRegistry.forQuery()
-                        .synthesisPrompt(primaryScopeId, question,
-                            FactBlockParser.toFactInput(factBlocks, layer1Buffer.toString()), "", deepMode);
+                    String synthesisUserPrompt = buildSynthesisUserPrompt(primaryScopeId, question,
+                        FactBlockParser.toFactInput(factBlocks, layer1Buffer.toString()), "", deepMode);
                     return synthesizeWithImages(primaryScopeId, synthesisUserPrompt, factBlocks, layer1Buffer.toString(), deepMode);
                 });
                 Flux<String> synthesisMarker = Flux.just("\n\n", "__STEP__:synthesizing");
@@ -407,6 +409,13 @@ public class AgentRunner {
             return answer;
         }
         return "AI 服务未配置，无法回答问题。请设置 AI_DASHSCOPE_API_KEY 环境变量。";
+    }
+
+    public String buildSynthesisUserPrompt(Long scopeId, String question, String factInput, String deprecatedContext, boolean deepMode) {
+        QueryPrompts registry = PromptRegistry.forQuery();
+        return narrativeEnabled
+            ? registry.narrativePrompt(scopeId, question, factInput, deprecatedContext, deepMode)
+            : registry.synthesisPrompt(scopeId, question, factInput, deprecatedContext, deepMode);
     }
 
     private String buildClarifyPayload(QueryClarifier.ClarificationResult clarification) {

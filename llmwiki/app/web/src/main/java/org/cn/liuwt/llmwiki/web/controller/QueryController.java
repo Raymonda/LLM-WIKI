@@ -54,6 +54,9 @@ public class QueryController {
     @Value("${llmwiki.query.clarifier.enabled:true}")
     private boolean clarifierEnabled;
 
+    @Value("${llmwiki.query.narrative.enabled:true}")
+    private boolean narrativeEnabled;
+
     private final Map<String, SseEmitter> emitters = new ConcurrentHashMap<>();
 
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -85,7 +88,7 @@ public class QueryController {
         emitter.onError(e -> emitters.remove(sessionKey));
 
         try {
-            emitter.send(SseEmitter.event().name("start").data(Map.of("sessionId", sessionKey)));
+            emitter.send(SseEmitter.event().name("start").data(buildStartEventData(sessionKey)));
             emitter.send(SseEmitter.event().name("mode").data(Map.of("mode", "tool-calling")));
             emitter.send(SseEmitter.event().name("step").data(Map.of("step", "retrieving")));
         } catch (Exception e) {
@@ -183,6 +186,10 @@ public class QueryController {
         Long scopeId = jwtTokenProvider.getCurrentScopeId();
         Map<String, Long> resolution = wikiFileService.resolveWikiLinks(content, scopeId);
         return Result.success(resolution);
+    }
+
+    public Map<String, Object> buildStartEventData(String sessionKey) {
+        return Map.of("sessionId", sessionKey, "narrative", narrativeEnabled);
     }
 
     private List<Long> resolveScopeIds(String scopeIdsParam, Long fallbackScopeId) {
