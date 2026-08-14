@@ -284,6 +284,66 @@ public class QueryPrompts {
             """.formatted(question, factSummaryView, deprecatedSection, richElementGuidance, scopeId);
     }
 
+    private static final String NARRATIVE_RICH_ELEMENT_GUIDANCE = """
+
+            ## 富元素表达（准确性为前提）
+            适当使用可视化元素辅助表达，让回答更直观：
+
+            ### 推荐场景
+            - **趋势问题**：用 Markdown 表格或 Mermaid timeline 呈现时间线
+            - **对比问题**：用 Markdown 表格呈现对比
+            - **关键数据**：用 Markdown 表格呈现结构化数据
+
+            ### 使用原则
+            1. **数据真实**：图表中的数据必须源自事实清单，严禁为凑图表而编造数字
+            2. **观点服务**：图表服务于具体论点，不是装饰；一次回答 1-3 个即可
+            3. **自然嵌入**：图表放在相关论述段落之后，不要集中在末尾
+            """;
+
+    public String narrativePrompt(Long scopeId, String question, String factSummaryView, String deprecatedContext, boolean deepMode) {
+        String deprecatedSection = deprecatedContext != null && !deprecatedContext.isEmpty()
+            ? "\n" + deprecatedContext + "\n"
+            : "\n（无已过时页面与本次查询相关）\n";
+
+        return """
+            你是知识分析与综合专家。基于事实清单撰写一篇完整的解答文章。
+
+            ## 输出结构（严格遵循）
+
+            1. **核心结论**（开篇第一段，1-2 句，直接回答用户问题）
+               - 用引用块格式输出：> **核心结论**：……
+               - 供前端渲染为结论高亮框
+
+            2. **论证主体**：按逻辑论证顺序重组事实（禁止按事实编号平铺罗列）
+               - 每个关键论据处标注 [N]（N 严格对应事实清单编号）
+               - 高可信事实 → 肯定句式；中/低可信 → "可能/倾向/有限证据表明"
+               - 矛盾条目必须并置呈现 + 两侧成立条件 + 采信建议
+               - 分析（原理/对标/盲区）融入论证主线，不单独立「AI 分析」节
+
+            3. ⚡ **前瞻分析（AI 推演，仅供参考）**：独立结尾段，保留 ⚡ 标记
+               - 每个推演标注推理链条 + 置信度；无事实支撑时显式声明「证据不足，不做推演」
+
+            4. **回答信心**：覆盖度 / 未覆盖维度
+
+            ## 硬规则
+            - 事实清单是原料不是展示品：禁止复制粘贴事实原文，必须转写为叙事语言
+            - 每个 [N] 引用必须精确对应事实清单编号，禁止引用不存在的编号（事实清单无编号时，禁止编造编号）
+            - 分析点未标注依据编号 = 违规
+
+            ## 用户问题
+            %s
+
+            ## 事实清单（不可修改）
+            %s
+
+            ## 已过时页面（仅供历史分析参考）
+            %s
+            %s
+
+            当前 Wiki 范围 ID: %d
+            """.formatted(question, factSummaryView, deprecatedSection, NARRATIVE_RICH_ELEMENT_GUIDANCE, scopeId);
+    }
+
     public String clarificationPrompt(Long scopeId) {
         return """
             你是问答意图澄清判定器。判断用户问题是否需要先澄清才能准确回答。

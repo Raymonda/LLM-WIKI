@@ -42,4 +42,36 @@ class QueryPromptsTest {
         assertTrue(prompt.contains("置信度分级措辞"), "prompt must bind assertion strength to confidence");
         assertTrue(prompt.contains("不做推演"), "prompt must allow explicit no-evidence declaration");
     }
+
+    @Test
+    void shouldRequireCoreConclusionFirstWhenPromptingNarrative() {
+        QueryPrompts prompts = PromptRegistry.forQuery();
+        String prompt = prompts.narrativePrompt(1L, "问题", "[1] 高可信 | 结论", "（无已过时页面）", false);
+        assertTrue(prompt.contains("核心结论"), "narrative prompt must open with core conclusion");
+        assertTrue(prompt.contains("论证主体"), "narrative prompt must define argument body");
+    }
+
+    @Test
+    void shouldKeepProspectiveSectionWhenPromptingNarrative() {
+        QueryPrompts prompts = PromptRegistry.forQuery();
+        String prompt = prompts.narrativePrompt(1L, "q", "[1] 高可信 | 结论", "（无已过时页面）", true);
+        assertTrue(prompt.contains("前瞻分析"), "narrative prompt must keep prospective section");
+        assertTrue(prompt.contains("仅供参考"), "narrative prompt must keep disclaimer wording");
+    }
+
+    @Test
+    void shouldForbidVerbatimFactPastingWhenPromptingNarrative() {
+        QueryPrompts prompts = PromptRegistry.forQuery();
+        String prompt = prompts.narrativePrompt(1L, "q", "[1] 高可信 | 结论", "（无已过时页面）", false);
+        assertTrue(prompt.contains("原料"), "narrative prompt must forbid pasting fact list verbatim");
+        assertTrue(prompt.contains("叙事语言"), "narrative prompt must require narrative rewriting");
+    }
+
+    @Test
+    void shouldIncludeRichElementGuidanceForAllModesWhenPromptingNarrative() {
+        QueryPrompts prompts = PromptRegistry.forQuery();
+        String prompt = prompts.narrativePrompt(1L, "q", "[1] 高可信 | 结论", "（无已过时页面）", false);
+        assertTrue(prompt.contains("时间线"), "narrative prompt must include rich element guidance in all modes");
+        assertTrue(prompt.contains("编造"), "narrative prompt must forbid fabricating chart data");
+    }
 }
