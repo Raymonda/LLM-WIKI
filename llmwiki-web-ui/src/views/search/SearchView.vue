@@ -12,6 +12,7 @@ import { saveAnswer, resolveLinks, type QueryAnalysisMode } from '@/api/query'
 import { useSSEQuery } from '@/composables/useSSEQuery'
 import { buildFactBlocksMarkdown, type FactBlockView } from '@/composables/queryStreamLogic'
 import FactEvidenceList from '@/components/search/FactEvidenceList.vue'
+import { extractWikiSourceRefs, type WikiSourceRef } from '@/utils/wikiSourceRefs'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -87,44 +88,7 @@ function openFactPopup(index: number) {
   activeFact.value = factBlocks.value[index] ?? null
 }
 
-interface WikiSourceRef {
-  title: string
-  path: string
-}
-
-const wikiSources = computed<WikiSourceRef[]>(() => {
-  if (!aiAnswer.value) return []
-  const refs: WikiSourceRef[] = []
-  const seen = new Set<string>()
-  const wikiLinkRegex = /\[\[([^\]]+)\]\]\(([^)]+)\)/g
-  const mdLinkRegex = /(?<!\[)\[([^\]]+)\]\(([^)]+)\)(?!\])/g
-  const text = aiAnswer.value
-
-  function addMatch(title: string, rawPath: string) {
-    let filePath = rawPath
-    const absUrlMatch = /^https?:\/\/[^/]+\/(?:wiki\/)?pages\/(.+)$/.exec(filePath)
-    if (absUrlMatch) {
-      filePath = 'pages/' + decodeURIComponent(absUrlMatch[1])
-    }
-    if (filePath.startsWith('wiki/')) filePath = filePath.slice(5)
-    if (!filePath.startsWith('pages/')) return
-    if (!filePath.endsWith('.md')) filePath += '.md'
-    if (!filePath.match(/^pages\/.+\.md$/)) return
-    if (!seen.has(filePath)) {
-      seen.add(filePath)
-      refs.push({ title, path: filePath })
-    }
-  }
-
-  let match: RegExpExecArray | null
-  while ((match = wikiLinkRegex.exec(text)) !== null) {
-    addMatch(match[1], match[2])
-  }
-  while ((match = mdLinkRegex.exec(text)) !== null) {
-    addMatch(match[1], match[2])
-  }
-  return refs
-})
+const wikiSources = computed<WikiSourceRef[]>(() => extractWikiSourceRefs(aiAnswer.value ?? ''))
 
 const userScrolledUp = ref(false)
 let scrollTimer: ReturnType<typeof setTimeout> | null = null
