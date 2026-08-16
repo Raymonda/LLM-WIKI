@@ -6,6 +6,8 @@ import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel.ExecutionStepModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.GlobalSummaryService;
+import org.cn.liuwt.llmwiki.domain.service.harness.eventlog.ExecutionEventLogService;
+import org.cn.liuwt.llmwiki.domain.service.harness.eventlog.ExecutionEventTypes;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
 import org.cn.liuwt.llmwiki.domain.service.harness.baseline.ExecutionBaselineService;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.ApprovalService;
@@ -68,6 +70,9 @@ public class IngestOrchestrator {
     @Autowired
     private GlobalSummaryService globalSummaryService;
 
+    @Autowired
+    private ExecutionEventLogService executionEventLog;
+
     public ExecutionModel runIngestPipelineWithExecution(Long executionId, Long scopeId, Long sourceId, String guidance) {
         return runIngestPipelineWithExecution(executionId, scopeId, sourceId, guidance, false);
     }
@@ -113,6 +118,8 @@ public class IngestOrchestrator {
         IngestContext context = new IngestContext(scopeId, sourceId, executionId, guidance);
         context.setSuppressNotifications(suppressNotifications);
         int totalTokens = 0;
+        executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_START,
+            java.util.Map.of("pipeline", "ingest", "scopeId", scopeId, "sourceId", sourceId));
 
         try {
             ExecutionStepModel uploadStep = createAndRunStep(executionId, IngestStep.UPLOAD, scopeId);
@@ -148,6 +155,9 @@ public class IngestOrchestrator {
                 throw e;
             }
             log.error("Ingest pipeline failed: executionId={}, scopeId={}, sourceId={}", executionId, scopeId, sourceId, e);
+            executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.ERROR,
+                java.util.Map.of("pipeline", "ingest",
+                    "message", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
             executionTracker.failExecution(executionId, e.getMessage());
             rateLimitService.releaseConcurrent(scopeId);
             if (!suppressNotifications) {
@@ -163,6 +173,11 @@ public class IngestOrchestrator {
         if (!"failed".equals(exec.getStatus()) && !"cancelled".equals(exec.getStatus()) && !"paused".equals(exec.getStatus())) {
             executionTracker.completeExecution(executionId, totalTokens);
             globalSummaryService.invalidate(scopeId);
+            executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_END,
+                java.util.Map.of("pipeline", "ingest", "status", "completed", "totalTokens", totalTokens));
+        } else {
+            executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_END,
+                java.util.Map.of("pipeline", "ingest", "status", exec.getStatus()));
         }
         rateLimitService.releaseConcurrent(scopeId);
 
@@ -520,6 +535,8 @@ public class IngestOrchestrator {
         int stepOrder = order > 0 ? order : step.ordinal() + 1;
         ExecutionStepModel stepModel = executionTracker.createStep(executionId, step.name(), stepOrder, level.name());
         executionTracker.updateStepStatus(stepModel.getId(), "running");
+        executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.STEP_START,
+            java.util.Map.of("step", step.name(), "scopeId", scopeId == null ? "" : scopeId));
         return stepModel;
     }
 
@@ -539,6 +556,10 @@ public class IngestOrchestrator {
         if (baselineService != null) {
             baselineService.recordSample(scopeId, "unknown", step.getStepName(), durationMs);
         }
+        executionEventLog.append(String.valueOf(step.getExecutionId()), ExecutionEventTypes.STEP_END,
+            java.util.Map.of("step", step.getStepName(),
+                "tokens", tokens,
+                "durationMs", durationMs));
     }
 
     private int estimateTokens(String text) {

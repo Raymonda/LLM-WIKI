@@ -192,6 +192,9 @@ public class LlmClient {
         try {
             if (!llmExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
                 llmExecutor.shutdownNow();
+                if (!llmExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                    log.warn("llmExecutor did not reach quiescence after shutdownNow");
+                }
             }
         } catch (InterruptedException e) {
             llmExecutor.shutdownNow();

@@ -137,6 +137,9 @@ public class WriterAgent {
         try {
             if (!writerExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
                 writerExecutor.shutdownNow();
+                if (!writerExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                    log.warn("writerExecutor did not reach quiescence after shutdownNow");
+                }
             }
         } catch (InterruptedException e) {
             writerExecutor.shutdownNow();

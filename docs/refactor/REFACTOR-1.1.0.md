@@ -75,6 +75,9 @@ v1.0.0 确立了 LLM Wiki 的产品内核：知识编译隐喻、DDD 分层、Sc
 | 修改编译隐喻/三层页面模型 | 业务基石，不动 |
 | 前端大改版 | 前端仅被动适配 SSE 事件格式变化（保持向后兼容） |
 | OTel 全链路追踪 | 候选 1.2.0，本次以事件流 + token 计量替代大部分诉求 |
+| 消息级反馈 sidecar（Query 回答/Ingest 页面质量好评差评） | 数据飞轮价值真实，属产品功能扩展，候选 1.2.0（借鉴 dsh feedback：乐观并发 version + 不进事件流的伴生记录） |
+| user-questions 结构化澄清交互 | Query 澄清场景尚未成型，候选 1.2.0（SchemaPatchDrawer 审批 UI 已覆盖部分诉求） |
+| 凭据热轮换（配置存引用、按操作解析、免重启生效） | 单机部署收益有限，候选 1.2.0（本次仅修 argv 泄漏 + 启动校验） |
 
 ---
 
@@ -88,7 +91,7 @@ v1.0.0 确立了 LLM Wiki 的产品内核：知识编译隐喻、DDD 分层、Sc
 
 ```
 ToolExecutionPipeline（责任链入口）
-├── pre-filter 链：ScopePathGuard（迁移现有逻辑）、ConcurrencyGuard（包装 LlmConcurrencyBarrier）、ApprovalFilter（REVIEW 级审批接入点）
+├── pre-filter 链：ScopePathGuard（迁移现有逻辑）、ConcurrencyGuard（包装 LlmConcurrencyBarrier + scope 级准入——每 scope 并发上限，防单 scope 批量任务饿死其他 scope，借鉴 dsh jobs 的 per-owner 准入）、ApprovalFilter（REVIEW 级审批接入点）
 ├── around：TimeoutGuard（新增）、MetricsCollector（token/耗时计量）
 ├── 工具执行体
 └── post-filter 链：LoopHygieneFilter、ResultNormalizer、SpillFilter（G3）
@@ -108,7 +111,8 @@ ToolExecutionPipeline（责任链入口）
 2. 事件词汇表（首版）：`turn/start`、`step/start`、`tool/call`、`tool/result`、`step/end`、`turn/end`、`error`、`compaction/triggered`、`spill/written`；
 3. `ExecutionTracker` 保留为**投影**角色：从事件流折叠出当前状态，`execution_step` 表降级为投影缓存；
 4. **冷读阶梯**：执行列表页只读投影；SSE 重连只回放 `Last-Event-ID` 之后的事件，不再全量加载；
-5. **编码铁律**："模型可见 ⟺ 已记录"——任何进入 LLM 请求的上下文都必须有对应事件，写入 AGENTS.md 编码约定（直接服务于"准确性 > 一切"红线：可追溯性从页面级提升到上下文级）。
+5. **消费端幂等**：事件投递尽力而为，消费方一律按 `(execution_id, seq)` 幂等去重后应用——重放、重连、MQ 重投产生的重复事件不得造成二次副作用（借鉴 dsh telemetry 接收端约定）；
+6. **编码铁律**："模型可见 ⟺ 已记录"——任何进入 LLM 请求的上下文都必须有对应事件，写入 AGENTS.md 编码约定（直接服务于"准确性 > 一切"红线：可追溯性从页面级提升到上下文级）。
 
 ### G3 上下文治理
 
@@ -132,12 +136,14 @@ ToolExecutionPipeline（责任链入口）
 
 ### G5 工程基线加固
 
-1. **防御式编程约定**：AGENTS.md 新增章节，收录 7 条语言无关规则（正交结果独立报告 / 公共契约双侧尊重 / 异步状态≠同步状态 / Dispose 必须达到静止 / 回调异常容器化 / 不受信任输出环境隔离 / 链接路径清理），重点落地三处：
+1. **防御式编程约定**：AGENTS.md 新增章节，收录 7 条语言无关规则（正交结果独立报告 / 公共契约双侧尊重 / 异步状态≠同步状态 / Dispose 必须达到静止 / 回调异常容器化 / 不受信任输出环境隔离 / 链接路径清理），重点落地五处：
    - `PythonProcessRunner`：子进程 env 清洗（剥离 `*API_KEY*` / `*SECRET*` / `*TOKEN*`，防止 `AI_DASHSCOPE_API_KEY` 泄漏进解析子进程）+ kill 后 await 退出；
+   - 凭据不走 argv：`ParserAgent` 现将 OCR/图表 API Key 经 `--ocr-api-key` / `--diagram-api-key` 命令行参数传入 Python 子进程，`/proc/<pid>/cmdline` 全机可读，比 env 继承泄漏更严重——改为 stdin 首行 JSON 传递（`doc_parser.py` 同步改造：stdin 优先、argv 兼容保留但不再接收真值）；
+   - 线程池 Dispose 静止：`WriterAgent.shutdown()` / `LlmClient.llmExecutor` 的 `shutdownNow()` 后必须二次 `awaitTermination` 达到静止，与 `PythonProcessRunner` 同规；
    - SSE 与执行线程的异步边界：`SseEmitter` 完成/超时/异常三态独立报告；
    - RocketMQ 消费幂等的既有约束补测试。
 2. **文档生成 + 验证闭环**：Maven 插件或脚本扫描 `@RestController` / `@Tool` / `AgentPlugin`，生成 API/工具/Agent 目录 Markdown；CI 校验手写文档引用的端点与工具名在生成目录中存在（`verify-doc-sync`），不通过即 fail；
-3. **测试门控**：JaCoCo 覆盖率门控（harness 核心包 ≥ 80%）；**LLM 快照回放测试**——record/replay 模式录制一次真实 LLM 响应后续回放，既省 token 又能捕捉 prompt 漂移（本次重构的行为等价性验证主要依赖它）；
+3. **测试门控**：JaCoCo 覆盖率门控（harness 核心包 ≥ 80%）；**LLM 快照回放测试**——record/replay 模式录制一次真实 LLM 响应后续回放，既省 token 又能捕捉 prompt 漂移（本次重构的行为等价性验证主要依赖它）。漂移检测的机制锚点：`*Prompts` 类增加 `PROMPT_VERSION` 常量，回放快照绑定 `(promptVersion, provider, model, 关键参数)` 指纹（借鉴 dsh `AssistantProvenance.replayState`）——prompt 变更必须 bump 版本，指纹不匹配即基线失效，漂移自动显形；
 4. **配置启动校验**：关键配置（`JWT_SECRET` 非默认值、主 Provider API Key 存在、ES 可达）用 `@Validated` + `ConfigurationProperties` 在启动时 fail-fast（"误配置大声失败"）。
 
 ---
@@ -181,6 +187,7 @@ ToolExecutionPipeline（责任链入口）
 | R8 | 灰度开关状态组合爆炸 | 鲁棒性 | 中 | 中 | 中 |
 | R9 | 插件 SPI 破坏 Schema 治理 | 鲁棒性 | 低 | 高 | 中 |
 | R10 | Spill 目录清理不彻底占用磁盘 | 性能 | 中 | 低 | 低 |
+| R11 | argv→stdin 凭据传递改造导致 Java/Python 接口错配 | 稳定性 | 低 | 中 | 低 |
 
 ### 7.2 稳定性专项
 
@@ -192,6 +199,9 @@ ToolExecutionPipeline（责任链入口）
 
 **R7 Flyway 迁移（中）**：`execution_event` 建表失败会阻断启动。
 - **缓解**：迁移脚本只新增表、不修改任何既有表结构；在 dev/prod 双 profile 预演；失败时开关关闭即可跑旧路径（新表空转无害）。
+
+**R11 凭据传递接口错配（低）**：stdin 传递要求 Java 与 `doc_parser.py` 同步改造，版本错配时 OCR/图表凭据解析失败。
+- **缓解**：Python 端 stdin 优先、argv 兼容保留（旧 Java + 新 Python 组合仍可用）；新 Java 只发 stdin、argv 一律传空；stdin 解析失败时 Python 端 WARN 并回退 argv；两端同仓库同版本发布，CI 增加组合冒烟用例。
 
 ### 7.3 性能专项
 
@@ -234,7 +244,7 @@ ToolExecutionPipeline（责任链入口）
 
 | Phase | 周期 | 内容 | 退出标准 |
 |-------|------|------|----------|
-| **P1 基线与低风险项** | 第 1–2 周 | G5 防御式约定落 AGENTS.md；PythonProcessRunner env 清洗；配置启动校验；Spill 落地 | 约定评审通过；单测绿；spill 集成测试通过 |
+| **P1 基线与低风险项** | 第 1–2 周 | G5 防御式约定落 AGENTS.md；PythonProcessRunner env 清洗 + argv 凭据改 stdin（含 `doc_parser.py`）；`WriterAgent`/`LlmClient` 线程池静止；配置启动校验；Spill 落地 | 约定评审通过；单测绿；spill 集成测试通过；子进程 argv 无凭据断言通过 |
 | **P2 工具管道** | 第 3–6 周 | G1 管道 + 守卫链 + 结果规范化；QueryAgent 试点灰度 | 回放测试 on/off 等价；误拦率 < 0.1% |
 | **P3 上下文治理** | 第 5–8 周（与 P2 部分并行） | G3 Compaction + Spill 接入管道 post 链 | 长会话 token 消耗下降 ≥ 20%；无准确性回归 |
 | **P4 事件溯源** | 第 7–10 周 | G2 事件表 + 投影 + SSE 数据源切换（Query → Ingest → Lint 顺序灰度） | SSE 重连只回放尾部；崩溃恢复演练通过 |
@@ -251,7 +261,7 @@ ToolExecutionPipeline（责任链入口）
 3. 灰度观察：误拦率 < 0.1%，SSE 重连成功率 ≥ 99%，长会话 token 消耗下降 ≥ 20%；
 4. 崩溃恢复演练：kill -9 后从事件断点恢复成功率 100%（测试环境）；
 5. 文档验证：`verify-doc-sync` 通过；AGENTS.md 防御式编程章节合入；
-6. 安全项：Python 子进程 env 清洗测试通过；spill 目录权限正确。
+6. 安全项：Python 子进程 env 清洗测试通过；子进程 argv 不含任何凭据（`--ocr-api-key` / `--diagram-api-key` 传空，凭据走 stdin）；spill 目录权限正确。
 
 ---
 
@@ -262,6 +272,8 @@ ToolExecutionPipeline（责任链入口）
 - deepseek-harness 能力接缝设计：`docs/capability-seams.md`
 - deepseek-harness 工具管道：`docs/tool-execution-pipeline.md`
 - deepseek-harness 防御式编程：`docs/defensive-patterns.md`（本计划 G5 第 1 条的 7 条规则来源）
+- deepseek-harness 凭据 seam：`docs/subsystems/credentials.zh.md`（"凭据不走 argv/配置"纪律与 R11 来源）
+- deepseek-harness 后台任务准入：`docs/subsystems/jobs.zh.md`（G1 scope 级准入来源）
 - 本项目架构约束：`ARCHITECTURE.md`、`AGENTS.md`（知识编译红线与 Schema 宪法为本次重构的不可触碰边界）
 
 ### 10.2 术语
@@ -275,3 +287,17 @@ ToolExecutionPipeline（责任链入口）
 | Spill | 超大工具结果溢出到文件存储，上下文中只留定位器 |
 | 守卫（Guard） | 管道中"拒绝或弃权"的单向检查点 |
 | 灰度开关 | 控制新旧路径切换的配置开关，默认关闭（走旧路径） |
+
+---
+
+## 11. 变更记录
+
+| 日期 | 变更 | 来源 |
+|------|------|------|
+| 2026-08-16 | 复盘补充五项：① argv 凭据泄漏修复入 P1（G5 + R11 + 验收标准扩展）；② `WriterAgent`/`LlmClient` 线程池 Dispose 静止入 P1；③ G1 ConcurrencyGuard 增加 scope 级准入；④ G2 增加消费端幂等去重规则；⑤ G5 回放测试增加 `PROMPT_VERSION` 指纹锚点。另增补 1.2.0 候选清单（feedback sidecar / user-questions / 凭据热轮换）。复盘排除项：schedule（已有 7 处 `@Scheduled` 覆盖）、system-prompt 注册表（`*Prompts` 类已满足） | 与 deepseek-harness 二次对比复盘（credentials / system-prompt / feedback / jobs / invariants / telemetry / user-questions 主题） |
+| 2026-08-16 | P1 完成验证：全部新单测绿（PythonProcessRunnerTest 9/9 含 argv 无凭据断言、StartupConfigValidatorTest 11/11、SpillServiceTest 8/8）；全量回归无失败；两份 `doc_parser.py` py_compile 通过 + stdin 协议真实行为验证通过（好 JSON 走通 / 坏 JSON 报协议错误） | P1 退出标准四项全部满足（JDK 17.0.20 + Python 3.12.10 环境就绪后验证） |
+| 2026-08-16 | P2 完成验证：G1 工具执行管道落地——`pipeline` 包 14 个新文件（管道编排 + 6 守卫 + AOP 切面 + 配置）；`ToolPipelineAspect` 以 `@ConditionalOnProperty` 挂 `@Tool` 注解（开关 `llmwiki.harness.tool-pipeline.enabled` 默认 false，关闭时零切面零代理走原路径）；domain/service 模块补 spring-boot-starter-aop 依赖；全量 144 测试通过（含 5 个 AOP 集成测试：on/off 等价性、raw/ 与穿越拦截、切面 Bean 不注册验证）。修复一处测试暴露的真实缺陷：TimeoutGuard 线程池由 static 改实例字段（避免上下文重启后静态池 Terminated 拒绝执行） | P2 退出标准前半达成（管道 on/off 等价 + 守卫拦截断言）；回放测试 on/off 等价与误拦率 < 0.1% 需灰度环境观测，属 P2 灰度期任务 |
+| 2026-08-16 | P3 完成验证：G3 上下文治理落地——`SpillFilter`（管道 around 守卫，order 450：工具结果超 `spill.max-inline-bytes` 且有 scopeId 时替换为可回读定位器，executionId 取自 TokenUsageContext 的 operationType，与 TimeoutGuard 的异步上下文复制天然协作）；`CompactionService` + `CompactionProperties`（两段式：低成本槽位摘要优先 `AiSlotRouter.getModel(summary)`，失败/超长/关闭回退按行边界剪枝并将剪掉部分 spill 落盘可回读，替代 ContextBudgetManager 尾部硬截断的不可回读丢失）；AgentRunner 4 处接入（单/多 scope 的 factContext 与 layer1，layer1 压缩版只进 synthesis prompt、图片提取保留原文）；开关 `llmwiki.harness.compaction.enabled` 默认 false（关闭零行为变化）；全量 157 测试通过（新增 SpillFilterTest 6 + CompactionServiceTest 7：定位器回读、无 scope 直通、失败结果直通、摘要成功 30472→3 tokens、摘要失败回退、超长摘要回退、纯剪枝） | P3 退出标准（长会话 token 消耗下降 ≥ 20%、无准确性回归）需灰度环境真实流量观测；压缩/溢出动作的事件化埋点留 P4（G2 事件表）统一落 |
+| 2026-08-16 | P4 完成验证：G2 事件溯源首版落地——V48 迁移新增 `execution_event` 表（只增不改，UNIQUE(execution_id, seq) 幂等定位）；DAL `ExecutionEventDO/Mapper`；`eventlog` 包：`ExecutionEventTypes` 九类词汇表 + `ExecutionEventLogService`（seq 内存分配冷启动从 DB max 恢复、DB 追加 + Spring 事件双发、异常 best-effort 不阻断主流程）+ `ExecutionEventDeduplicator`（(executionId, seq) 严格递增幂等去重）；埋点：管道 tool/call、tool/result、error，SpillFilter spill/written，CompactionService compaction/triggered（summarized/pruned + token 对比），AgentRunner 单/多 scope turn/start、turn/end（doFinally）、error×4（questionPreview 截断 120 字）；web `ExecutionEventController`：冷读查询 + SSE 流（回放 afterSeq/Last-Event-ID 之后事件 + @EventListener 订阅 + 每连接独立去重器 + emitter 生命周期注销）；开关 `llmwiki.harness.event-log.enabled` 默认 false。已知限制（v1 记录）：工具回调运行于 Reactor NIO 线程，ThreadLocal 不可靠传播，故工具级事件按 `scope-{scopeId}` 桶聚合，仅 turn 级事件挂 sessionId；Ingest/Lint 的 executionId 接入与 MQ 化留灰度期；全量 169 测试通过（新增 LogServiceTest 7 含 seq 断点恢复 42→43 与跨 execution 独立、DedupTest 5；适配 4 个既有测试构造签名） | P4 退出标准"SSE 重连只回放尾部"代码层达成（Last-Event-ID + replayAfter）；崩溃恢复演练与 Ingest/Lint 灰度接入待环境；事件流双写策略（v1 SSE 路径完整保留）符合 R1 缓解 |
+| 2026-08-16 | 既有缺陷修复（`mvn verify` 从未可用）：spring-boot-maven-plugin repackage 后 fat jar（BOOT-INF 结构对 javac 不可见）成为 reactor 主构件，下游模块 testCompile 解析不到 bootstrap 类——历史上仅跑 `mvn test`（依赖以 target/classes 目录解析）侥幸通过，故从未暴露。双重修复：① bootstrap repackage 增加 `classifier=exec`（fat jar 转附加构件、主构件恢复 thin jar；Dockerfile 使用 `target/boot/*.jar` 通配不受影响）；② `StartupConfigValidatorTest` 迁至 `bootstrap.validation` 子包并显式 import，消除跨模块 split package | P5 引入覆盖率门控需跑 verify 时发现；git stash 对照实验确认原版 pom 同样失败，属存量缺陷而非本次引入 |
+| 2026-08-16 | P5 完成验证：G4 可扩展性 + CI 门控落地——① AgentPlugin SPI：`plugin` 包（AgentPlugin/Request/Result/Registry + EchoPlugin 示例插件）；注册即校验（schemaConstraint 必须 ⊆ Schema 骨架七段；scope 级注册另验该 scope wiki_schema 实含依赖 section，违规抛 IllegalStateException 阻断注册）；capability 解析 scope 覆盖优先 → 全局 name 字典序最小；execute 全链路 STEP_START/STEP_END 事件；EchoPlugin 开关 `plugin.echo.enabled` 默认 true（示例插件无副作用、不挂工具链，作为 SPI 活体演示；显式关闭设 `PLUGIN_ECHO_ENABLED=false`）。② LoopHygieneFilter（管道 order PRE+150）：同指纹（tool+args 归纳，对象参数记类名）成功次数达 max-repeats、或会话总调用数超 max-calls-per-execution 即拒绝并引导模型基于已有信息收敛；失败调用不计指纹（允许重试）；scope 隔离 + 超 max-tracked-scopes 驱逐防泄漏；默认 false。③ ExecutionPlan/TodoStep 建模 + TodoTool：todoWrite/todoRead 经 ToolContext 注入 sessionId（模型不可见）；AgentRunner 四客户端装配 todoTool + layer1Stream 两处 `.toolContext` + turn/end 事件附 todoDone/todoTotal + 新 turn 清旧清单；IngestOrchestrator 全套 TURN/STEP/ERROR 埋点以真实 executionId 接入（消 P4 已知限制"Ingest executionId 接入"）。④ CI 门控：jacoco prepare-agent + failsafe `HarnessCoverageGateIT`（org.jacoco.core API 直解 jacoco.exec，门控 pipeline/eventlog/plugin 三包 + TodoTool/Spill×2/Compaction×2，共 34 类 LINE 覆盖率 ≥ 0.70，实测 90.55%——604 covered / 63 missed）+ `HarnessConfigDocSyncTest`（application.yml 的 harness 段 ↔ Properties 类字段双向一致，配置漂移即测试红）；全量 198 surefire 用例 + 1 failsafe IT 通过（4 skipped 为 P1 期 PythonProcessRunnerTest 环境跳过，历史遗留） | P5 退出标准（一个示例插件走通注册→校验→执行全链路 + CI 门控全绿）达成；REFACTOR-1.1.0 五个 Phase 全部完成；灰度期候选：插件 API 暴露 REST、事件 MQ 化、Ingest Phase1 显式 ExecutionPlan 产出、Lint 诊断进 todo |

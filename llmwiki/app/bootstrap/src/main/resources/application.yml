@@ -45,6 +45,31 @@ mybatis-plus:
 
 llmwiki:
   wiki-data-path: ${WIKI_DATA_PATH:./wiki-data}
+  harness:
+    spill:
+      max-inline-bytes: ${SPILL_MAX_INLINE_BYTES:65536}
+    tool-pipeline:
+      enabled: ${TOOL_PIPELINE_ENABLED:false}
+      timeout-ms: ${TOOL_PIPELINE_TIMEOUT_MS:30000}
+      slow-tool-warn-ms: ${TOOL_PIPELINE_SLOW_WARN_MS:10000}
+      scope-max-concurrent-tools: ${TOOL_PIPELINE_SCOPE_MAX_CONCURRENT:8}
+    compaction:
+      enabled: ${COMPACTION_ENABLED:false}
+      summarize: ${COMPACTION_SUMMARIZE:true}
+      summary-slot: ${COMPACTION_SUMMARY_SLOT:summary}
+      max-field-tokens: ${COMPACTION_MAX_FIELD_TOKENS:16000}
+      spill-pruned: ${COMPACTION_SPILL_PRUNED:true}
+    event-log:
+      enabled: ${EXECUTION_EVENT_LOG_ENABLED:false}
+      replay-limit: ${EXECUTION_EVENT_REPLAY_LIMIT:500}
+    loop-hygiene:
+      enabled: ${LOOP_HYGIENE_ENABLED:false}
+      max-repeats: ${LOOP_HYGIENE_MAX_REPEATS:3}
+      max-calls-per-execution: ${LOOP_HYGIENE_MAX_CALLS:200}
+      max-tracked-scopes: ${LOOP_HYGIENE_MAX_TRACKED_SCOPES:1000}
+    plugin:
+      echo:
+        enabled: ${PLUGIN_ECHO_ENABLED:true}
   edit:
     context:
       max-chars: ${EDIT_CONTEXT_MAX_CHARS:24000}

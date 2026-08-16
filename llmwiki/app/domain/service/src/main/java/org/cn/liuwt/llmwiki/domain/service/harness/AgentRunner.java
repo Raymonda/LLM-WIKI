@@ -65,6 +65,12 @@ public class AgentRunner {
     private SchemaInjector schemaInjector;
 
     @Autowired
+    private CompactionService compactionService;
+
+    @Autowired
+    private org.cn.liuwt.llmwiki.domain.service.harness.eventlog.ExecutionEventLogService executionEventLog;
+
+    @Autowired
     private ReadFileTool readFileTool;
 
     @Autowired
@@ -87,6 +93,9 @@ public class AgentRunner {
 
     @Autowired
     private UpdateLinksTool updateLinksTool;
+
+    @Autowired
+    private org.cn.liuwt.llmwiki.domain.service.harness.tool.TodoTool todoTool;
 
     @Autowired
     private SearchService searchService;
@@ -112,35 +121,36 @@ public class AgentRunner {
         if (chatModel != null) {
             this.queryReadOnlyClient = ChatClient.builder(chatModel)
                 .defaultTools(readFileTool, readRawSourceTool, getSourceInfoTool,
-                    searchWikiTool, listPagesTool, getRelatedPagesTool)
+                    searchWikiTool, listPagesTool, getRelatedPagesTool, todoTool)
                 .build();
             this.queryReadWriteClient = ChatClient.builder(chatModel)
                 .defaultTools(readFileTool, readRawSourceTool, getSourceInfoTool,
-                    searchWikiTool, listPagesTool, getRelatedPagesTool,
+                    searchWikiTool, listPagesTool, getRelatedPagesTool, todoTool,
                     writeFileTool, updateLinksTool)
                 .build();
             this.noToolsClient = ChatClient.builder(chatModel).build();
-            log.info("Query ChatClient initialized: readOnly(6 tools) + readWrite(8 tools) + noToolsClient");
+            log.info("Query ChatClient initialized: readOnly(7 tools) + readWrite(9 tools) + noToolsClient");
 
             ChatModel deepModel = LlmClient.getDeepAnalysisChatModel();
             if (deepModel != null && deepModel != chatModel) {
                 this.deepQueryReadOnlyClient = ChatClient.builder(deepModel)
                     .defaultTools(readFileTool, readRawSourceTool, getSourceInfoTool,
-                        searchWikiTool, listPagesTool, getRelatedPagesTool)
+                        searchWikiTool, listPagesTool, getRelatedPagesTool, todoTool)
                     .build();
                 this.deepQueryReadWriteClient = ChatClient.builder(deepModel)
                     .defaultTools(readFileTool, readRawSourceTool, getSourceInfoTool,
-                        searchWikiTool, listPagesTool, getRelatedPagesTool,
+                        searchWikiTool, listPagesTool, getRelatedPagesTool, todoTool,
                         writeFileTool, updateLinksTool)
                     .build();
                 this.deepNoToolsClient = ChatClient.builder(deepModel).build();
-                log.info("Deep analysis ChatClient initialized: readOnly(6 tools) + readWrite(8 tools) + noToolsClient");
+                log.info("Deep analysis ChatClient initialized: readOnly(7 tools) + readWrite(9 tools) + noToolsClient");
             }
         }
     }
 
     public Flux<String> runQueryAgentStreaming(Long scopeId, String question, String sessionId, boolean deepMode) {
         TokenUsageContext.set(scopeId, "query");
+        recordTurnStart(sessionId, scopeId, question, deepMode, false);
         if (!rateLimitService.checkCallRate(scopeId)) {
             TokenUsageContext.clear();
             return Flux.just("AI 调用频率过高，请稍后再试。");
@@ -160,7 +170,7 @@ public class AgentRunner {
                 RetrievalContext retrievalContext = retrievalService.preRetrieveLight(scopeId, question);
                 long phase1Elapsed = System.currentTimeMillis() - phase1Start;
 
-                String factContext = retrievalContext.toPromptContextLight();
+                String factContext = compactionService.compressField(sessionId, scopeId, "factContext", retrievalContext.toPromptContextLight());
                 String deprecatedContext = retrievalContext.formatDeprecatedContext();
                 int pageCount = retrievalContext.getPageCount();
 
@@ -180,6 +190,7 @@ public class AgentRunner {
                 Flux<String> layer1Stream = activeQueryClient.prompt()
                     .system(factSystemPrompt)
                     .user(question)
+                    .toolContext(java.util.Map.of("sessionId", sessionId))
                     .stream()
                     .content()
                     .doOnNext(chunk -> layer1Buffer.append(chunk));
@@ -190,7 +201,7 @@ public class AgentRunner {
                     log.info("Fact Agent completed: scopeId={} layer1Len={}", scopeId, layer1Text.length());
 
                     String synthesisUserPrompt = PromptRegistry.forQuery()
-                        .synthesisPrompt(scopeId, question, layer1Text, deprecatedContext, deepMode);
+                        .synthesisPrompt(scopeId, question, compactionService.compressField(sessionId, scopeId, "layer1", layer1Text), deprecatedContext, deepMode);
 
                     return synthesizeWithImages(scopeId, synthesisUserPrompt, layer1Text, deepMode);
                 });
@@ -205,13 +216,16 @@ public class AgentRunner {
                     })
                     .onErrorResume(e -> {
                         log.error("Stream failed, FALLBACK to simple query: scopeId={}, error={}", scopeId, e.getMessage(), e);
+                        recordError(sessionId, "stream", e.getMessage());
                         return Flux.just(runSimpleQuery(scopeId, question));
                     });
             } catch (Exception e) {
                 log.error("Pre-retrieve failed, FALLBACK to simple query: scopeId={}, error={}", scopeId, e.getMessage(), e);
+                recordError(sessionId, "pre-retrieve", e.getMessage());
                 return Flux.just(runSimpleQuery(scopeId, question));
             }
-        }).subscribeOn(Schedulers.boundedElastic());
+        }).subscribeOn(Schedulers.boundedElastic())
+        .doFinally(signal -> recordTurnEnd(sessionId, signal));
     }
 
     public Flux<String> runQueryAgentStreamingMultiScope(List<Long> scopeIds, String question, String sessionId, boolean deepMode) {
@@ -220,6 +234,7 @@ public class AgentRunner {
         }
         Long primaryScopeId = scopeIds.get(0);
         TokenUsageContext.set(primaryScopeId, "query");
+        recordTurnStart(sessionId, primaryScopeId, question, deepMode, true);
         if (!rateLimitService.checkCallRate(primaryScopeId)) {
             TokenUsageContext.clear();
             return Flux.just("AI 调用频率过高，请稍后再试。");
@@ -232,7 +247,7 @@ public class AgentRunner {
         return Flux.defer(() -> {
             try {
                 RetrievalContext retrievalContext = retrievalService.preRetrieveMultiScope(scopeIds, question);
-                String factContext = retrievalContext.toPromptContextLight();
+                String factContext = compactionService.compressField(sessionId, primaryScopeId, "factContext", retrievalContext.toPromptContextLight());
                 int pageCount = retrievalContext.getSearchResults().size();
                 String factSystemPrompt = PromptRegistry.forQuery().factAgentPrompt(primaryScopeId, pageCount, factContext);
                 StringBuilder layer1Buffer = new StringBuilder();
@@ -240,26 +255,57 @@ public class AgentRunner {
                 Flux<String> layer1Stream = activeQueryClient.prompt()
                     .system(factSystemPrompt)
                     .user(question)
+                    .toolContext(java.util.Map.of("sessionId", sessionId))
                     .stream()
                     .content()
                     .doOnNext(layer1Buffer::append);
                 Flux<String> layer23Stream = Flux.defer(() -> {
                     String layer1Text = layer1Buffer.toString();
                     String synthesisUserPrompt = PromptRegistry.forQuery()
-                        .synthesisPrompt(primaryScopeId, question, layer1Text, "", deepMode);
+                        .synthesisPrompt(primaryScopeId, question, compactionService.compressField(sessionId, primaryScopeId, "layer1", layer1Text), "", deepMode);
                     return synthesizeWithImages(primaryScopeId, synthesisUserPrompt, layer1Text, deepMode);
                 });
                 Flux<String> synthesisMarker = Flux.just("\n\n", "__STEP__:synthesizing");
                 return Flux.concat(generatingMarker, layer1Stream, synthesisMarker, layer23Stream)
                     .onErrorResume(e -> {
                         log.error("Multi-scope stream failed: scopeIds={}, error={}", scopeIds, e.getMessage(), e);
+                        recordError(sessionId, "multi-scope-stream", e.getMessage());
                         return Flux.just(runSimpleQuery(primaryScopeId, question));
                     });
             } catch (Exception e) {
                 log.error("Multi-scope pre-retrieve failed: scopeIds={}, error={}", scopeIds, e.getMessage(), e);
+                recordError(sessionId, "multi-scope-pre-retrieve", e.getMessage());
                 return Flux.just(runSimpleQuery(primaryScopeId, question));
             }
-        }).subscribeOn(Schedulers.boundedElastic());
+        }).subscribeOn(Schedulers.boundedElastic())
+        .doFinally(signal -> recordTurnEnd(sessionId, signal));
+    }
+
+    private void recordTurnStart(String sessionId, Long scopeId, String question, boolean deepMode, boolean multiScope) {
+        todoTool.clear(sessionId);
+        executionEventLog.append(sessionId, org.cn.liuwt.llmwiki.domain.service.harness.eventlog.ExecutionEventTypes.TURN_START,
+                java.util.Map.of(
+                        "scopeId", scopeId,
+                        "deepMode", deepMode,
+                        "multiScope", multiScope,
+                        "questionPreview", question == null ? "" : (question.length() > 120 ? question.substring(0, 120) : question)));
+    }
+
+    private void recordTurnEnd(String sessionId, reactor.core.publisher.SignalType signal) {
+        java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("signal", signal.name());
+        org.cn.liuwt.llmwiki.domain.service.harness.tool.TodoTool.Progress todoProgress = todoTool.progressOf(sessionId);
+        if (todoProgress != null && todoProgress.total() > 0) {
+            payload.put("todoDone", todoProgress.done());
+            payload.put("todoTotal", todoProgress.total());
+        }
+        executionEventLog.append(sessionId, org.cn.liuwt.llmwiki.domain.service.harness.eventlog.ExecutionEventTypes.TURN_END,
+                payload);
+    }
+
+    private void recordError(String sessionId, String stage, String message) {
+        executionEventLog.append(sessionId, org.cn.liuwt.llmwiki.domain.service.harness.eventlog.ExecutionEventTypes.ERROR,
+                java.util.Map.of("stage", stage, "message", message != null ? message : "unknown"));
     }
 
     private String runSimpleQuery(Long scopeId, String question) {
