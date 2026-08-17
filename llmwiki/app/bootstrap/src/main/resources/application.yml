@@ -27,6 +27,14 @@ spring:
       chat:
         options:
           model: deepseek-v4-flash-0731
+    mcp:
+      server:
+        name: llmwiki
+        version: 1.1.0
+        type: SYNC
+        streamable-http:
+          enabled: true
+          endpoint: /mcp
 
   servlet:
     multipart:
