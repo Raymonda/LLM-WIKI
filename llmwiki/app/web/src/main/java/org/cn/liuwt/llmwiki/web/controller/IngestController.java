@@ -93,7 +93,10 @@ public class IngestController {
 
     @PostMapping("/start")
     public Result<ExecutionInfo> startIngest(@RequestBody IngestRequest request) {
-        Long scopeId = request.getScopeId();
+        // API key 客户端不传 scopeId：回填认证上下文的 scope（JwtAuthenticationFilter
+        // 或 ApiKeyAuthFilter 写入）。JWT 前端始终显式传值，行为不变。
+        Long scopeId = request.getScopeId() != null ? request.getScopeId()
+                : jwtTokenProvider.getCurrentScopeId();
         SourceModel source = sourceService.getSource(request.getSourceId(), scopeId);
         if (source == null) {
             return Result.failed(ErrorCode.INGEST_SOURCE_NOT_FOUND);
