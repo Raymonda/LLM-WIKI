@@ -30,6 +30,7 @@ import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel.ExecutionStepModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.prompt.PromptRegistry;
 import org.cn.liuwt.llmwiki.domain.service.harness.prompt.PromptTemplate;
+import org.cn.liuwt.llmwiki.domain.service.harness.query.WikiReferencePathParser;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
 import org.cn.liuwt.llmwiki.domain.service.harness.baseline.ExecutionBaselineService;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.ApprovalService;
@@ -313,6 +314,20 @@ public class PipelineOrchestrator {
             markdownContent = "# " + question + "\n\n" + answer + "\n\n---\n*来源：知识问答沉淀*";
         }
 
+        WikiPageDO existingByTitle = wikiPageMapper.selectOne(
+            new LambdaQueryWrapper<WikiPageDO>()
+                .eq(WikiPageDO::getScopeId, scopeId)
+                .eq(WikiPageDO::getTitle, title)
+                .orderByDesc(WikiPageDO::getCreatedAt)
+                .last("LIMIT 1")
+        );
+        if (existingByTitle != null) {
+            log.info("Save idempotent hit: title '{}' already exists as page id={}, returning existing page",
+                title, existingByTitle.getId());
+            executionTracker.completeExecution(execution.getId(), totalTokens);
+            return existingByTitle;
+        }
+
         String normalized = title.toLowerCase();
         String sanitized = normalized.replaceAll("[^a-z0-9\\u4e00-\\u9fff_-]", "-");
         sanitized = sanitized.replaceAll("-+", "-");
@@ -322,7 +337,18 @@ public class PipelineOrchestrator {
         String filePath = "pages/" + sanitized + ".md";
         String scopeIdStr = String.valueOf(scopeId);
 
-        java.util.List<String> sourcePagePaths = extractWikiReferencePaths(answer);
+        java.util.List<String> sourcePagePaths = WikiReferencePathParser.extractPaths(answer);
+        java.util.List<WikiPageDO> resolvedSources = new ArrayList<>();
+        for (String sourcePath : sourcePagePaths) {
+            WikiPageDO sourcePage = wikiPageMapper.selectOne(
+                new LambdaQueryWrapper<WikiPageDO>()
+                    .eq(WikiPageDO::getScopeId, scopeId)
+                    .eq(WikiPageDO::getFilePath, sourcePath)
+            );
+            if (sourcePage != null) {
+                resolvedSources.add(sourcePage);
+            }
+        }
 
         ExecutionStepModel writeStep = executionTracker.createStep(execution.getId(), "WRITE_SAVED_PAGE", 2, "AUTO");
         executionTracker.updateStepStatus(writeStep.getId(), "running");
@@ -337,27 +363,29 @@ public class PipelineOrchestrator {
             pageDO.setCategory(category);
             pageDO.setSummary(summary);
             pageDO.setScopeId(scopeId);
-            pageDO.setSourceCount(sourcePagePaths.size());
+            pageDO.setSourceCount(resolvedSources.size());
             pageDO.setHealthStatus("healthy");
             pageDO.setLifecycleStatus(PageLifecycle.ACTIVE.name());
             pageDO.setContentUpdatedAt(java.time.LocalDateTime.now());
-            wikiPageMapper.insert(pageDO);
-            lintFindingService.resolvePageFindingsOnIngest(scopeId, pageDO.getId());
-
-            for (String sourcePath : sourcePagePaths) {
-                WikiPageDO sourcePage = wikiPageMapper.selectOne(
+            try {
+                wikiPageMapper.insert(pageDO);
+            } catch (org.springframework.dao.DuplicateKeyException dupEx) {
+                WikiPageDO winner = wikiPageMapper.selectOne(
                     new LambdaQueryWrapper<WikiPageDO>()
                         .eq(WikiPageDO::getScopeId, scopeId)
-                        .eq(WikiPageDO::getFilePath, sourcePath)
+                        .eq(WikiPageDO::getTitle, title)
+                        .orderByDesc(WikiPageDO::getCreatedAt)
+                        .last("LIMIT 1")
                 );
-                if (sourcePage != null) {
-                    WikiPageSourceDO psRel = new WikiPageSourceDO();
-                    psRel.setScopeId(scopeId);
-                    psRel.setPageId(pageDO.getId());
-                    psRel.setSourceId(sourcePage.getId());
-                    wikiPageSourceMapper.insert(psRel);
+                if (winner != null) {
+                    log.info("Concurrent save race: title '{}' already inserted, returning page id={}",
+                        title, winner.getId());
+                    executionTracker.completeExecution(execution.getId(), totalTokens);
+                    return winner;
                 }
+                throw dupEx;
             }
+            lintFindingService.resolvePageFindingsOnIngest(scopeId, pageDO.getId());
 
             try {
                 searchService.indexPage(scopeId, pageDO.getId(), pageDO.getTitle(), pageDO.getFilePath(),
@@ -375,28 +403,21 @@ public class PipelineOrchestrator {
             executionTracker.updateStepStatus(linksStep.getId(), "running");
             long linksStart = System.currentTimeMillis();
             int linkCount = 0;
-            for (String sourcePath : sourcePagePaths) {
-                WikiPageDO sourcePage = wikiPageMapper.selectOne(
-                    new LambdaQueryWrapper<WikiPageDO>()
-                        .eq(WikiPageDO::getScopeId, scopeId)
-                        .eq(WikiPageDO::getFilePath, sourcePath)
+            for (WikiPageDO sourcePage : resolvedSources) {
+                WikiPageLinkDO existingLink = wikiPageLinkMapper.selectOne(
+                    new LambdaQueryWrapper<WikiPageLinkDO>()
+                        .eq(WikiPageLinkDO::getScopeId, scopeId)
+                        .eq(WikiPageLinkDO::getFromPageId, pageDO.getId())
+                        .eq(WikiPageLinkDO::getToPageId, sourcePage.getId())
                 );
-                if (sourcePage != null) {
-                    WikiPageLinkDO existingLink = wikiPageLinkMapper.selectOne(
-                        new LambdaQueryWrapper<WikiPageLinkDO>()
-                            .eq(WikiPageLinkDO::getScopeId, scopeId)
-                            .eq(WikiPageLinkDO::getFromPageId, pageDO.getId())
-                            .eq(WikiPageLinkDO::getToPageId, sourcePage.getId())
-                    );
-                    if (existingLink == null) {
-                        WikiPageLinkDO newLink = new WikiPageLinkDO();
-                        newLink.setScopeId(scopeId);
-                        newLink.setFromPageId(pageDO.getId());
-                        newLink.setToPageId(sourcePage.getId());
-                        newLink.setLinkType("query-save");
-                        wikiPageLinkMapper.insert(newLink);
-                        linkCount++;
-                    }
+                if (existingLink == null) {
+                    WikiPageLinkDO newLink = new WikiPageLinkDO();
+                    newLink.setScopeId(scopeId);
+                    newLink.setFromPageId(pageDO.getId());
+                    newLink.setToPageId(sourcePage.getId());
+                    newLink.setLinkType("query-save");
+                    wikiPageLinkMapper.insert(newLink);
+                    linkCount++;
                 }
             }
             long linksDuration = System.currentTimeMillis() - linksStart;
@@ -477,23 +498,6 @@ public class PipelineOrchestrator {
             executionTracker.failExecution(execution.getId(), "WRITE_SAVED_PAGE: " + e.getMessage());
             throw new RuntimeException("WRITE_SAVED_PAGE 失败: " + e.getMessage());
         }
-    }
-
-    private java.util.List<String> extractWikiReferencePaths(String answer) {
-        java.util.List<String> paths = new java.util.ArrayList<>();
-        if (answer == null || answer.isBlank()) return paths;
-        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\\[\\[([^\\]]+)\\]\\]\\(([^)]+)\\)");
-        java.util.regex.Matcher matcher = pattern.matcher(answer);
-        while (matcher.find()) {
-            String path = matcher.group(2);
-            if (path != null && !path.isBlank()) {
-                if (path.startsWith("wiki/")) {
-                    path = path.substring(5);
-                }
-                paths.add(path);
-            }
-        }
-        return paths;
     }
 
     private int runSteps(Long executionId, Long scopeId, Long sourceId, String guidance, String[] steps, int startOrder) {

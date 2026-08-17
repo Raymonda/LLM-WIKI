@@ -1,14 +1,11 @@
 package org.cn.liuwt.llmwiki.integration.search;
 
-import org.apache.http.Header;
 import org.apache.http.HttpHost;
 import org.apache.http.HttpResponse;
 import org.apache.http.HttpResponseInterceptor;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.impl.client.BasicCredentialsProvider;
-import org.apache.http.impl.client.HttpClientBuilder;
-import org.apache.http.message.BasicHeader;
 import org.apache.http.protocol.HttpContext;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -34,12 +31,6 @@ public class ElasticsearchConfig {
         }
 
         RestClientBuilder builder = RestClient.builder(hosts);
-
-        Header[] defaultHeaders = new Header[] {
-            new BasicHeader("Accept", "application/json"),
-            new BasicHeader("Content-Type", "application/json")
-        };
-        builder.setDefaultHeaders(defaultHeaders);
 
         builder.setHttpClientConfigCallback(httpClientBuilder -> {
             if (properties.getUsername() != null && properties.getPassword() != null) {

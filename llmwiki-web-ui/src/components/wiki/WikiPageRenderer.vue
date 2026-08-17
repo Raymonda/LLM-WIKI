@@ -19,6 +19,7 @@ import {
 } from '../../utils/shiki-highlighter'
 import 'katex/dist/katex.min.css'
 import { useAuthStore } from '@/stores/auth'
+import { injectFactBadges, type FactBlockView } from '@/composables/queryStreamLogic'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -29,15 +30,18 @@ const props = withDefaults(defineProps<{
   streaming?: boolean
   linkResolution?: Record<string, number>
   sources?: Array<{ id: number; name: string; format: string }>
+  factRefs?: FactBlockView[] | null
 }>(), {
   streaming: false,
   linkResolution: () => ({}),
   sources: () => [],
+  factRefs: null,
 })
 
 const emit = defineEmits<{
   (e: 'toc', headings: TocItem[]): void
   (e: 'preview-source', sourceId: number, format: string): void
+  (e: 'fact-ref-click', index: number): void
 }>()
 
 export interface TocItem {
@@ -478,7 +482,7 @@ const renderedContent = computed(() => {
   sourceRefCounter.clear()
   codeStore.clear()
   echartsOptionStore.clear()
-  const cleanContent = stripFrontmatter(props.content)
+  const cleanContent = injectFactBadges(stripFrontmatter(props.content), props.factRefs)
   void isStreamingDiagrams.value
   void shikiReadyTrigger.value
 
@@ -684,6 +688,16 @@ function handleCodeToggle(btn: HTMLElement) {
 function handleContentClick(e: MouseEvent) {
   const target = e.target as HTMLElement
 
+  const factBadge = target.closest('.fact-ref-badge') as HTMLElement
+  if (factBadge) {
+    const raw = factBadge.getAttribute('data-fact-index')
+    if (raw !== null) {
+      const index = Number(raw)
+      if (index >= 0) emit('fact-ref-click', index)
+    }
+    return
+  }
+
   const sourceRef = target.closest('.wiki-source-ref') as HTMLElement
   if (sourceRef) {
     const name = sourceRef.getAttribute('data-source-name') || ''
@@ -729,6 +743,18 @@ function handleContentClick(e: MouseEvent) {
 function handleContentKeydown(e: KeyboardEvent) {
   if (e.key !== 'Enter' && e.key !== ' ') return
   const target = e.target as HTMLElement
+
+  const factBadge = target.closest('.fact-ref-badge') as HTMLElement
+  if (factBadge) {
+    e.preventDefault()
+    const raw = factBadge.getAttribute('data-fact-index')
+    if (raw !== null) {
+      const index = Number(raw)
+      if (index >= 0) emit('fact-ref-click', index)
+    }
+    return
+  }
+
   const sourceRef = target.closest('.wiki-source-ref') as HTMLElement
   if (!sourceRef) return
   e.preventDefault()
@@ -845,7 +871,7 @@ onBeforeUnmount(() => {
   <div
     ref="containerRef"
     class="wiki-content wiki-content--enhanced"
-    :class="{ 'wiki-content--streaming': streaming }"
+    :class="{ 'wiki-content--streaming': streaming, 'wiki-content--narrative': factRefs !== null && factRefs.length > 0 }"
     v-html="renderedContent"
     @click="handleContentClick"
     @keydown="handleContentKeydown"
@@ -854,6 +880,34 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.wiki-content :deep(.fact-ref-badge) {
+  display: inline-block;
+  padding: 0 var(--space-1);
+  margin: 0 var(--space-1);
+  font-size: var(--font-body-sm);
+  font-weight: var(--weight-medium);
+  line-height: 1.5;
+  border-radius: var(--radius-sm);
+  background: var(--accent-light);
+  color: var(--accent-primary);
+  cursor: pointer;
+  transition: filter var(--transition-fast);
+}
+.wiki-content :deep(.fact-ref-badge:hover) {
+  filter: brightness(0.92);
+}
+.wiki-content :deep(.fact-ref-badge--high) {
+  background: var(--success-light);
+  color: var(--success);
+}
+.wiki-content :deep(.fact-ref-badge--low) {
+  background: var(--warning-light);
+  color: var(--warning);
+}
+.wiki-content--narrative :deep(blockquote) {
+  background: var(--accent-light);
+  border-left-color: var(--accent-primary);
+}
 .wiki-content--streaming > *:last-child::after {
   content: '';
   display: inline-block;

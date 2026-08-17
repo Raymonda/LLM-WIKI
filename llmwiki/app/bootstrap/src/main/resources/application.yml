@@ -121,7 +121,7 @@ llmwiki:
     multimodal: ${AI_MULTIMODAL:false}
     multimodal-model: ${AI_MULTIMODAL_MODEL:qwen3.7-plus}
     query-multimodal-model: ${AI_QUERY_MULTIMODAL_MODEL:${AI_MULTIMODAL_MODEL:qwen3.7-plus}}
-    deep-analysis-model: ${AI_DEEP_ANALYSIS_MODEL:${spring.ai.openai.chat.options.model:}}
+    deep-analysis-model: ${AI_DEEP_ANALYSIS_MODEL:deepseek-v4-pro}
     deep-multimodal-model: ${AI_DEEP_MULTIMODAL_MODEL:${AI_MULTIMODAL_MODEL:qwen3.7-plus}}
     multimodal-max-images: ${AI_MULTIMODAL_MAX_IMAGES:10}
   llm:

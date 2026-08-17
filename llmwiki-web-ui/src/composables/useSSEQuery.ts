@@ -1,5 +1,6 @@
 import { ref, onUnmounted } from 'vue'
 import { createQuerySSE, type QueryAnalysisMode } from '@/api/query'
+import { reduceFactBlockJson, splitSynthesisAndProspective, parseClarification, type FactBlockView, type ClarificationView } from './queryStreamLogic'
 
 export type QueryMode = 'tool-calling' | 'fallback' | 'rate-limited' | 'no-ai' | ''
 
@@ -20,8 +21,6 @@ const DEFAULT_PROGRESS_STEPS: ProgressStep[] = [
   { id: 'generate-answer', label: '生成回答', status: 'pending' },
 ]
 
-const PROSPECTIVE_MARKER = '前瞻分析'
-
 export function useSSEQuery() {
   const factAnswer = ref('')
   const synthesisStreamContent = ref('')
@@ -35,9 +34,16 @@ export function useSSEQuery() {
   const progressSteps = ref<ProgressStep[]>(DEFAULT_PROGRESS_STEPS.map(s => ({ ...s })))
   const isSynthesizing = ref(false)
   const funFacts = ref<FunFact[]>([])
+  const factBlocks = ref<FactBlockView[]>([])
+  const clarification = ref<ClarificationView | null>(null)
+  const lastQuestion = ref('')
+  const queryAnalysisModeForRetry = ref<QueryAnalysisMode>('quick')
+  const sessionId = ref('')
+  const narrativeEnabled = ref(false)
 
   let eventSource: EventSource | null = null
   let progressTimers: ReturnType<typeof setTimeout>[] = []
+  let clarificationTimer: ReturnType<typeof setTimeout> | null = null
 
   function closeEventSource() {
     if (eventSource) {
@@ -66,24 +72,15 @@ export function useSSEQuery() {
     progressSteps.value.forEach(s => { s.status = 'done' })
   }
 
-  function splitSynthesisAndProspective() {
-    const full = synthesisStreamContent.value
-    const idx = full.indexOf(PROSPECTIVE_MARKER)
-    if (idx >= 0) {
-      const splitAt = full.lastIndexOf('\n', idx)
-      const pos = splitAt >= 0 ? splitAt : idx
-      synthesisDisplayContent.value = full.slice(0, pos).replace(/\n+$/, '')
-      prospectiveAnswer.value = full.slice(pos).replace(/^\n+/, '')
-    } else {
-      synthesisDisplayContent.value = full
-      prospectiveAnswer.value = ''
-    }
-  }
-
   function attachSSEListeners(es: EventSource, onComplete?: () => void) {
-    es.addEventListener('start', () => {
+    es.addEventListener('start', (e: MessageEvent) => {
       isLoading.value = true
       isStreaming.value = true
+      try {
+        const data = JSON.parse(e.data)
+        if (data.sessionId) sessionId.value = data.sessionId
+        if (typeof data.narrative === 'boolean') narrativeEnabled.value = data.narrative
+      } catch {}
     })
 
     es.addEventListener('mode', (e: MessageEvent) => {
@@ -141,8 +138,27 @@ export function useSSEQuery() {
       aiAnswer.value += chunk
     })
 
+    es.addEventListener('fact-block', (e: MessageEvent) => {
+      if (progressSteps.value[2].status === 'running') completeProgress()
+      isLoading.value = false
+      factBlocks.value = reduceFactBlockJson(e.data, factBlocks.value)
+    })
+
+    es.addEventListener('clarification', (e: MessageEvent) => {
+      clarification.value = parseClarification(e.data)
+      isLoading.value = false
+      isStreaming.value = false
+      isSynthesizing.value = false
+      clearProgressTimers()
+      closeEventSource()
+      clarificationTimer = setTimeout(() => {
+        clarification.value = null
+        startQuery(lastQuestion.value, queryAnalysisModeForRetry.value, undefined, undefined, true)
+      }, 60000)
+    })
+
     es.addEventListener('answer-complete', () => {
-      splitSynthesisAndProspective()
+      ;[synthesisDisplayContent.value, prospectiveAnswer.value] = splitSynthesisAndProspective(synthesisStreamContent.value)
       isLoading.value = false
       isStreaming.value = false
       isSynthesizing.value = false
@@ -153,7 +169,7 @@ export function useSSEQuery() {
 
     es.addEventListener('error', (e: MessageEvent) => {
       if (synthesisStreamContent.value) {
-        splitSynthesisAndProspective()
+        ;[synthesisDisplayContent.value, prospectiveAnswer.value] = splitSynthesisAndProspective(synthesisStreamContent.value)
       }
       isLoading.value = false
       isStreaming.value = false
@@ -171,7 +187,7 @@ export function useSSEQuery() {
 
     es.onerror = () => {
       if (synthesisStreamContent.value) {
-        splitSynthesisAndProspective()
+        ;[synthesisDisplayContent.value, prospectiveAnswer.value] = splitSynthesisAndProspective(synthesisStreamContent.value)
       }
       if (isLoading.value) {
         isLoading.value = false
@@ -184,9 +200,20 @@ export function useSSEQuery() {
     }
   }
 
-  function startQuery(question: string, mode: QueryAnalysisMode = 'quick', onComplete?: () => void) {
+  function startQuery(question: string, mode: QueryAnalysisMode = 'quick', onComplete?: () => void, assumedIntent?: string, preserveSession?: boolean) {
     if (!question || isStreaming.value) return
 
+    lastQuestion.value = question
+    queryAnalysisModeForRetry.value = mode
+    if (!preserveSession) {
+      sessionId.value = ''
+      narrativeEnabled.value = false
+    }
+    clarification.value = null
+    if (clarificationTimer) {
+      clearTimeout(clarificationTimer)
+      clarificationTimer = null
+    }
     factAnswer.value = ''
     synthesisStreamContent.value = ''
     synthesisDisplayContent.value = ''
@@ -198,17 +225,22 @@ export function useSSEQuery() {
     isStreaming.value = true
     isSynthesizing.value = false
     funFacts.value = []
+    factBlocks.value = []
     closeEventSource()
 
     startProgress()
 
-    eventSource = createQuerySSE(question, undefined, mode)
+    eventSource = createQuerySSE(question, preserveSession ? sessionId.value : undefined, mode, assumedIntent)
     attachSSEListeners(eventSource, onComplete)
   }
 
   function reset() {
     closeEventSource()
     clearProgressTimers()
+    if (clarificationTimer) {
+      clearTimeout(clarificationTimer)
+      clarificationTimer = null
+    }
     resetProgress()
     factAnswer.value = ''
     synthesisStreamContent.value = ''
@@ -221,11 +253,19 @@ export function useSSEQuery() {
     isLoading.value = false
     isSynthesizing.value = false
     funFacts.value = []
+    factBlocks.value = []
+    clarification.value = null
+    sessionId.value = ''
+    narrativeEnabled.value = false
   }
 
   onUnmounted(() => {
     closeEventSource()
     clearProgressTimers()
+    if (clarificationTimer) {
+      clearTimeout(clarificationTimer)
+      clarificationTimer = null
+    }
   })
 
   return {
@@ -241,6 +281,9 @@ export function useSSEQuery() {
     progressSteps,
     isSynthesizing,
     funFacts,
+    factBlocks,
+    clarification,
+    narrativeEnabled,
     startQuery,
     reset,
     completeProgress,
