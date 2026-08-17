@@ -181,6 +181,27 @@ llmwiki-web-ui/           # Frontend (Vue 3 + Vite)
 └── src/api/              # Axios API layer
 ```
 
+## Agent / MCP Integration
+
+LLM Wiki exposes an MCP server (streamable HTTP at `/mcp`) so agent harnesses can query and extend the knowledge base:
+
+- **Tools (phase 1)**: `wiki_search`, `wiki_read_page`, `wiki_ask`, `wiki_ingest_text`, `wiki_ingest_status`, `wiki_cancel_ingest`
+- **Auth**: issue an API key as an admin (`POST /api/keys`, bearer token starting with `llmwiki_`), then connect any MCP client:
+
+```json
+{
+  "mcpServers": {
+    "llmwiki": {
+      "type": "http",
+      "url": "http://localhost:8080/mcp",
+      "headers": { "Authorization": "Bearer llmwiki_xxx" }
+    }
+  }
+}
+```
+
+- **deepseek-harness users**: additionally load the `plugin-llmwiki` companion plugin for file ingest (`llmwiki_ingest_file`), long-task following (`llmwiki_follow_ingest`) and the `/wiki` command. See the deepseek-harness repo, `packages/extensions/plugin-llmwiki`.
+
 ## License
 
 [MIT](LICENSE)

@@ -1,0 +1,1106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM-WIKI 详细设计报告 · 用例 / 流程 / 时序 / DDD 设计解读</title>
+<script src="./vendor/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-card: #161b22;
+    --bg-code: #0a0e14;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --cyan: #39c5cf;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 15px;
+    line-height: 1.75;
+  }
+  /* ============ 侧边导航 ============ */
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 260px;
+    background: #010409; border-right: 1px solid var(--border);
+    overflow-y: auto; padding: 20px 12px; z-index: 10;
+  }
+  .sidebar .logo { font-weight: 700; font-size: 18px; color: var(--accent); padding: 4px 12px 14px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+  .sidebar .logo small { display:block; font-size: 11px; color: var(--text-dim); font-weight: 400; margin-top: 2px; }
+  .sidebar a { display: block; color: var(--text-dim); text-decoration: none; padding: 6px 12px; border-radius: 6px; font-size: 13px; }
+  .sidebar a:hover { color: var(--text); background: var(--bg-card); }
+  .sidebar a.lv1 { color: var(--text); font-weight: 600; margin-top: 8px; }
+  .sidebar a.lv1::before { content: "▸ "; color: var(--accent); }
+  .sidebar a.lv2 { padding-left: 28px; font-size: 12.5px; }
+  .main { margin-left: 260px; padding: 32px 48px 80px; max-width: 1320px; }
+  @media (max-width: 900px) { .sidebar { display: none; } .main { margin-left: 0; padding: 20px; } th { white-space: normal; } }
+  /* ============ 章节卡片 ============ */
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 28px 32px; margin-bottom: 40px;
+  }
+  h1 { font-size: 30px; margin-bottom: 8px; color: var(--accent); }
+  h1 .sub { font-size: 14px; color: var(--text-dim); font-weight: 400; display: block; margin-top: 6px; }
+  h2 { font-size: 23px; color: var(--accent); margin-bottom: 16px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 17px; color: var(--green); margin: 26px 0 10px; }
+  h4 { font-size: 15px; color: var(--yellow); margin: 20px 0 8px; }
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0 8px 22px; }
+  li { margin: 4px 0; }
+  strong { color: var(--accent); }
+  code {
+    background: var(--bg-code); border: 1px solid var(--border);
+    padding: 1px 6px; border-radius: 4px; font-family: "Cascadia Code", Consolas, monospace; font-size: 12.5px; color: var(--cyan);
+  }
+  pre {
+    background: var(--bg-code); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px; overflow-x: auto; font-family: "Cascadia Code", Consolas, monospace; font-size: 12.5px; color: #c9d1d9;
+    margin: 12px 0; line-height: 1.6;
+  }
+  pre code { background: none; border: none; padding: 0; color: inherit; font-size: inherit; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 7px 12px; text-align: left; vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
+  th { background: #21262d; color: var(--accent); font-weight: 600; white-space: nowrap; }
+  tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  .tag { display: inline-block; padding: 1px 9px; border-radius: 20px; font-size: 11.5px; font-weight: 600; margin-right: 6px; }
+  .tag-core { background: rgba(248,81,73,.15); color: var(--red); border: 1px solid rgba(248,81,73,.4); }
+  .tag-mid { background: rgba(210,153,34,.15); color: var(--yellow); border: 1px solid rgba(210,153,34,.4); }
+  .tag-low { background: rgba(63,185,80,.12); color: var(--green); border: 1px solid rgba(63,185,80,.35); }
+  .tag-blue { background: rgba(88,166,255,.12); color: var(--accent); border: 1px solid rgba(88,166,255,.35); }
+  .mermaid { background: var(--bg-code); border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin: 16px 0; text-align: center; overflow-x: auto; }
+    html[data-mermaid-missing] .mermaid::after { content: "⚠ 图表渲染引擎未加载（vendor/mermaid.min.js 不可用），本图无法显示——页面文字内容不受影响"; display: block; padding: 22px; color: var(--yellow); font-size: 13px; border: 1px dashed var(--yellow); border-radius: 8px; }
+  .figcap { text-align: center; font-size: 12.5px; color: var(--text-dim); margin: -8px 0 18px; }
+  .callout { border-left: 4px solid var(--accent); background: rgba(88,166,255,.07); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 14px 0; font-size: 14px; }
+  .callout.warn { border-color: var(--yellow); background: rgba(210,153,34,.07); }
+  .callout.danger { border-color: var(--red); background: rgba(248,81,73,.07); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 1000px) { .grid2 { grid-template-columns: 1fr; } }
+  .steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+  .step { background: #21262d; border: 1px solid var(--border); padding: 3px 12px; border-radius: 20px; font-size: 12.5px; color: var(--text-dim); }
+  .step::before { content: "◉ "; color: var(--accent); }
+  .klass { color: var(--purple); }
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="logo">LLM-WIKI<small>详细设计报告 · Detailed Design</small></div>
+  <a class="lv1" href="#sec-overview">1. 项目概览与定位</a>
+  <a class="lv1" href="#sec-ddd">2. DDD 分层架构</a>
+  <a class="lv2" href="#sec-layers">2.1 分层与模块依赖</a>
+  <a class="lv2" href="#sec-facade">2.2 门面与编排模式</a>
+    <a class="lv2" href="#sec-classdiagram">2.3 领域边界与类图关系</a>
+  <a class="lv1" href="#sec-usecase">3. 系统用例图</a>
+  <a class="lv1" href="#sec-uc2">4.1 UC2 知识摄入</a>
+  <a class="lv1" href="#sec-uc3">4.2 UC3 知识问答</a>
+  <a class="lv1" href="#sec-uc4">4.3 UC4 知识体检 Lint</a>
+  <a class="lv1" href="#sec-uc5">4.4 UC5 Schema 共治</a>
+  <a class="lv1" href="#sec-uc6">4.5 UC6 人工编辑</a>
+  <a class="lv1" href="#sec-uc7">4.6 UC7 晋升与召回</a>
+  <a class="lv1" href="#sec-cross">5. 跨领域机制</a>
+  <a class="lv1" href="#sec-philosophy">6. 设计理念与为什么</a>
+  <a class="lv1" href="#sec-stack">7. 技术栈与交互契约</a>
+</div>
+
+<div class="main">
+
+<div class="card">
+  <h1>LLM-WIKI 详细设计报告<span class="sub">基于实际代码实现（AGENTS.md：以代码为最终真相来源）· 覆盖用例 / 流程 / 时序 / DDD 设计解读 / 2026-08</span></h1>
+  <p>本报告从<b>详细设计（Detailed Design）</b>视角拆解 LLM-WIKI：一个<b>由 LLM 驱动、可自组织生长的知识库问答系统</b>。系统接收原始文档（raw），通过多阶段 <b>Agent 流水线</b>将其"编译"为结构化的 Wiki 页面，以 <b>Schema 宪法</b>约束 AI 行为的边界，并通过问答、体检、共治等闭环让知识体系持续演进。</p>
+</div>
+
+<!-- ==================== 第一章 ==================== -->
+<div class="card" id="sec-overview">
+  <h2>1. 项目概览与定位</h2>
+
+  <h3>1.1 一句话定位</h3>
+  <p>LLM-WIKI = <strong>知识编译流水线</strong> + <strong>Agent 自主执行引擎（Harness）</strong> + <strong>治理/共治体系</strong>。它不是"聊天机器人 + 文档库"，而是一套把<b>散落资料</b>持续转化为<b>可信、可检索、可演进的组织知识资产</b>的自动化平台。</p>
+
+  <h3>1.2 知识编译隐喻（核心设计隐喻）</h3>
+  <p>整个系统围绕一条"编译链"建模，每一层的产物都是下一层的输入，层级之间严格隔离：</p>
+  <div class="mermaid">
+flowchart LR
+    R["raw 源材料<br/>不可变 · scope 隔离"] -->|"UploadAgent 落盘<br/>Python 子进程解析"| P["parsed 结构化中间产物<br/>元数据 / 大纲 / 事实块"]
+    P -->|"AnalysisAgent 分析<br/>+ 人工 Review 审批"| W["wiki 页面<br/>LLM 编译产物 · 四道验证把关"]
+    W -->|"WritingAgent 写作<br/>合规/质量/一致性校验"| S["schema 构建配置<br/>知识宪法 · 7 段骨架"]
+    S -.->|"SchemaInjector 注入<br/>约束后续所有 Agent"| R
+    S -.->|"注入约束"| W
+  </div>
+  <div class="figcap">图 1.1 知识编译隐喻：raw → parsed → wiki → schema，schema 反向约束编译过程</div>
+
+  <ul>
+    <li><strong>raw → parsed</strong>：源文件不可变（只允许新增），通过 Python 子进程（<code class="klass">doc_parser.py</code>）抽取为结构化中间产物；</li>
+    <li><strong>parsed → wiki</strong>：LLM 编写器（WritingAgent）把中间产物"编译"为 Wiki 页面，必须通过 <span class="klass">WriterOrchestrator</span> 的<b>四道验证把关链</b>（写入 → 合规检查 → 质量验证 → 异步一致性调和）；</li>
+    <li><strong>wiki → schema</strong>：沉淀出的构建规则（Schema）成为"宪法"，经 <span class="klass">SchemaInjector</span> 强制注入所有 Agent 的 Prompt，反向约束解析与写作行为。</li>
+  </ul>
+
+  <h3>1.3 四大硬规则（贯穿全系统）</h3>
+  <table>
+    <tr><th>规则</th><th>含义</th><th>代码证据</th></tr>
+    <tr><td><strong>① 项目隔离</strong></td><td>所有业务表强制携带 <code>scope_id</code>，跨作用域访问一律拒绝</td><td>全表 <code>scope_id</code> 列；<code>ScopeService.canView()</code> 权限校验</td></tr>
+    <tr><td><strong>② 源材料不可变</strong></td><td>raw 文件只写不删不改，知识可回朔到源头</td><td><span class="klass">StorageProvider</span> 只暴露 write/read，无删除语义</td></tr>
+    <tr><td><strong>③ AI 产物必须验证</strong></td><td>LLM 输出不能直接入库，必须经过写入把关链与环境验证</td><td><span class="klass">WriterOrchestrator.writeWithVerification</span> 四道把关；<span class="klass">runComplianceCheck / runQualityVerification / runConsistencyReconciliation</span></td></tr>
+    <tr><td><strong>④ Schema 共治</strong></td><td>Schema 无人手动直编，只能经 Bootstrap / Patch / 回滚产生并版本化</td><td><span class="klass">SchemaManager</span> 四来源常量（BOOTSTRAP/PATCH/MANUAL/ROLLBACK）+ 版本化保存</td></tr>
+  </table>
+
+  <div class="callout">项目代码中 AGENTS.md 明确要求：<strong>"以实际代码实现为最终真相来源，架构文档只作线索"</strong>。因此本报告全部结论均来自源码阅读，而非照抄 README / ARCHITECTURE / DESIGN 文档。</div>
+</div>
+
+<!-- ==================== 第二章 ==================== -->
+<div class="card" id="sec-ddd">
+  <h2>2. DDD 分层架构</h2>
+
+  <h3 id="sec-layers">2.1 分层与模块依赖</h3>
+  <p>后端按 DDD 战术分层拆分为 6 个 Maven 模块，依赖方向严格单向：<strong>bootstrap → web → biz/service → domain/service → domain/model → common</strong>，无循环依赖。越往内越贴近领域本质，越往外越贴近外部世界。</p>
+  <div class="mermaid">
+flowchart TB
+    subgraph BOOT["llmwiki-bootstrap · 启动装配层"]
+        L1["LlmwikiApplication<br/>全局配置 / Flyway 迁移 / 定时调度"]
+    end
+    subgraph WEB["llmwiki-web · 接入层（UI 门面）"]
+        L2a["15 个 RestController<br/>ingest / query / lint / wiki / editor / schema…"]
+        L2b["JWT Security 过滤器链"]
+        L2c["Aspect（TokenUsageAspect）/ 全局异常"]
+    end
+    subgraph BIZ["llmwiki-biz/service · 应用层（薄编排）"]
+        L3a["IngestService"]
+        L3b["QueryService"]
+        L3c["LintService"]
+        L3d["ActionService / AuditService…"]
+    end
+    subgraph DOM["llmwiki-domain · 领域层（核心）"]
+        subgraph SV["service 子层 · 领域服务"]
+            L4a["HarnessEngineImpl（门面）"]
+            L4b["PipelineOrchestrator"]
+            L4c["AgentRunner / LintAgent / WriterAgent"]
+            L4d["IngestOrchestrator / SchemaBootstrapService"]
+        end
+        subgraph MD["model 子层 · 实体"]
+            L4e["领域模型与事件"]
+        end
+    end
+    subgraph COM["llmwiki-common · 基础设施层"]
+        L5a["dal：DO + Mapper（MySQL）"]
+        L5b["integration：AI / Elasticsearch / Storage / MQ"]
+        L5c["facade：DTO 契约"]
+        L5d["util：Exception / Result / 并发工具"]
+    end
+    BOOT --> WEB
+    WEB --> BIZ
+    BIZ --> DOM
+    DOM --> COM
+    L4b -.-> L4c
+  </div>
+  <div class="figcap">图 2.1 DDD 分层与模块依赖（真实模块名与类名）</div>
+
+  <h3>2.2 各层职责与关键类</h3>
+  <table>
+    <tr><th>层</th><th>职责</th><th>关键类（真实代码）</th></tr>
+    <tr>
+      <td><strong>web 接入层</strong></td>
+      <td>参数校验、鉴权、SSE 协议适配、统一 <code>Result&lt;T&gt;</code> 响应；不含业务逻辑</td>
+      <td><span class="klass">QueryController / IngestController / LintController / WikiController / WikiEditorController / SchemaController</span>；<span class="klass">JwtTokenProvider</span></td>
+    </tr>
+    <tr>
+      <td><strong>biz 应用层</strong></td>
+      <td>对用例做事务性编排：创建执行记录、调用领域门面、组合多个领域服务；一用例一服务</td>
+      <td><span class="klass">IngestService / QueryService / LintService / PromotionServiceImpl / SubscriptionService</span></td>
+    </tr>
+    <tr>
+      <td><strong>domain/service 领域层</strong></td>
+      <td>核心业务逻辑：Agent 编排、流水线状态机、治理/审批、Schema 共治</td>
+      <td><span class="klass">HarnessEngineImpl</span>（门面）→ <span class="klass">PipelineOrchestrator</span> / <span class="klass">AgentRunner</span> / <span class="klass">IngestOrchestrator</span> / <span class="klass">LintAgent</span> / <span class="klass">WriterOrchestrator</span> / <span class="klass">SchemaManager</span> / <span class="klass">GovernanceService</span></td>
+    </tr>
+    <tr>
+      <td><strong>domain/model 领域模型</strong></td>
+      <td>实体与值对象：ExecutionModel、Finding、LintReport、SchemaDocument 等</td>
+      <td><span class="klass">domain.model</span> 子包实体</td>
+    </tr>
+    <tr>
+      <td><strong>common 基础设施</strong></td>
+      <td>MySQL 持久化、ES 检索、Spring AI / LLM 客户端、存储抽象、DTO 契约、基础设施实现</td>
+      <td><span class="klass">dal.dataobject.*DO / dal.mapper</span>；<span class="klass">integration.ai.LlmClient / integration.search.SearchService / integration.storage.StorageProvider</span>；<span class="klass">facade.model.*Info</span></td>
+    </tr>
+  </table>
+
+  <h3 id="sec-facade">2.3 门面模式：单一入口的 HarnessEngine</h3>
+  <p>领域层用 <span class="klass">HarnessEngineImpl</span> 作为唯一的"Agent 执行门面"，应用层不直接接触任何 Agent 或流水线细节：</p>
+  <pre><code>public class HarnessEngineImpl {
+    // 摄入流水线：UPLOAD → ANALYZE → REVIEW → EXECUTE
+    public ExecutionModel executeIngest(Long scopeId, Long sourceId) {
+        return pipelineOrchestrator.runIngestPipeline(scopeId, sourceId);
+    }
+    // 问答流式：两 Agent 两阶段（Fact → Synthesis）
+    public Flux&lt;String&gt; executeQueryStreaming(Long scopeId, String question, String sessionId, boolean deepMode) {
+        return agentRunner.runQueryAgentStreaming(scopeId, question, sessionId, deepMode);
+    }
+    // 体检流水线：八步 Lint
+    public ExecutionModel executeLint(Long scopeId, boolean fullScan) {
+        return pipelineOrchestrator.runLintPipeline(scopeId, fullScan);
+    }
+    // 问答结果落库：四步 Save
+    public WikiPageDO executeSaveQueryResult(Long scopeId, String question, String answer, String sessionId) {
+        return pipelineOrchestrator.runSaveQueryResultPipeline(scopeId, question, answer, sessionId);
+    }
+}</code></pre>
+
+  <div class="callout"><strong>为什么用门面？</strong>① 应用层只依赖一个稳定接口，Agent 数量/流水线步骤的增减不影响上层；② 门面内置 <code>rateLimitService.tryAcquireConcurrent(scopeId)</code> 等<b>前置治控</b>，保证所有 AI 执行路径都过同一道闸；③ 便于 TokenUsage 统计与执行追踪切面统一挂载。</div>
+</div>
+
+<!-- ==================== 2.3 领域边界与类图关系 ==================== -->
+<div class="card" id="sec-classdiagram">
+  <h2>2.3 领域边界与类图关系（DDD 视角）</h2>
+  <p>本章从 DDD 限界上下文视角给出系统的<b>领域边界总览</b>与三张<b>类图关系</b>：领域模型（聚合根/Entity）、领域服务执行引擎、治理与工具调用管道。每张图的 <b>namespace 分区即领域边界</b>，<code>note for</code> 注释标注聚合根与关键类的<b>职能、状态机与不变量</b>。事实来源：<code>domain/model</code>（13 个领域模型，按 system / harness / wiki 三子包）与 <code>domain/service</code>（168 个领域服务）。</p>
+
+  <h3>2.3.1 领域边界总览</h3>
+  <p>系统以"知识编译流水线 + Agent 执行"为核心纹理。下表给出<b>领域边界、代码位置与关键不变量</b>——边界不是物理部署分割，而是<b>包目录 + 模型 namespace + 依赖方向</b>三重约束下的逻辑隔水舱：</p>
+  <table>
+    <tr><th>#</th><th>领域 / 子域</th><th>代码位置</th><th>核心类型</th><th>边界职责与关键不变量</th></tr>
+    <tr><td>1</td><td><b>system</b> 身份与租户</td><td><code>domain/model/system</code>、<code>domain/service/system</code></td><td><code>UserModel</code>、<code>ScopeModel</code>、<code>ScopeMemberModel</code>、<code>ScopeSubscriptionModel</code>、<code>AuditLogModel</code>；<code>UserService</code>、<code>ScopeService</code>、<code>SubscriptionService</code>、<code>AuditLogService</code></td><td>用户-工作区-订阅三元组；<b>scopeId 是全系统知识操作的隔离键</b>，AI 执行每条路径都携带；审计日志只读留痕。</td></tr>
+    <tr><td>2</td><td><b>wiki</b> 知识内容</td><td><code>domain/model/wiki</code>、<code>domain/service/wiki</code></td><td><code>WikiPageModel</code>、<code>SourceModel</code>；<code>PromotionService</code>、<code>SourceService</code>、<code>PageSaveService</code>、<code>DraftService</code>、<code>EditSessionService</code></td><td>知识产物的落盘-保存-晋升-召回；<b>health_status 三态（draft/ok/stale）驱动检索召回与晋升</b>；raw 源固化只增不改。</td></tr>
+    <tr><td>3</td><td><b>ingest</b> 知识摄入（编译链）</td><td><code>harness/ingest</code></td><td><code>IngestOrchestrator</code>、<code>UploadAgent</code>、<code>ParserAgent</code>、<code>CompletionAgent</code>、<code>IndexerAgent</code>、<code>WriterOrchestrator</code>、<code>WriterAgent</code>、<code>ConsistencyReconciler</code></td><td>raw→parsed→wiki 的"编译"链路，分步可断点；<b>WRITE 阶段前必须过人工闸门</b>（approvalLevel）；半成品由 cleanupHalfProducts 兜底清理。</td></tr>
+    <tr><td>4</td><td><b>query</b> 知识问答</td><td><code>harness</code> 根（<code>RetrievalService</code>、<code>RetrievalContext</code>、<code>AgentRunner</code>）、<code>domain/service/search</code>（<code>SearchService</code>）</td><td><code>AgentRunner</code>、<code>RetrievalService</code>、<code>ExecutionStrategy</code>、<code>SearchService</code></td><td>混合检索（ES/向量?/标签）+ Agent 推理；SSE 流式返回答案；问答产物可一键落库（executeSaveQueryResult）。</td></tr>
+    <tr><td>5</td><td><b>lint</b> 知识体检</td><td><code>harness</code> 根（<code>LintAgent</code>、<code>LintProbeService</code>、<code>LintFindingService</code>、<code>LintOrphanService</code>）、<code>domain/model/harness</code>（<code>LintRulesConfig</code>）</td><td><code>LintAgent</code>、<code>LintProbeService</code>、<code>LintFindingService</code>、<code>LintOrphanService</code></td><td>8 类体检探针 → finding 分级 → 修复 → 晋升闭环；<b>delta-lint</b>（增量）与全量扫描双模式；孤儿页（orphan）单独治理。</td></tr>
+    <tr><td>6</td><td><b>conflict</b> 内容冲突</td><td><code>harness/conflict</code></td><td><code>ConflictDomainService</code>、<code>ConflictReviewService</code>、<code>ConflictRoutingService</code>、<code>ContentDuplicateDetector</code>、<code>ConflictResolutionStrategy</code></td><td>并发写作（Agent × 人类）冲突的<b>检测-路由-人工仲裁</b>；重复内容检测；冲突不就地解决，永远转人工。</td></tr>
+    <tr><td>7</td><td><b>crossref</b> 交叉引用</td><td><code>harness/crossref</code></td><td><code>CrossRefDomainService</code>、<code>LinkType</code></td><td>双向链接不变量：页面删除/改名时 <code>UpdateLinksTool</code> 批量回写；link repair 是 lint 的输入之一。</td></tr>
+    <tr><td>8</td><td><b>edit / modify</b> 编辑会话</td><td><code>harness/edit</code>、<code>harness/modify</code></td><td><code>AiEditService</code>、<code>SearchReplaceEngine</code>、<code>SelectionAnchorer</code>、<code>CompileSaveOrchestrator</code>；<code>PageModifyOrchestrator</code></td><td>人类编辑会话与 AI 辅助（锚点-搜索替换）；页面级修改编排与冲突域协同。</td></tr>
+    <tr><td>9</td><td><b>governance</b> Schema 共治与执行治控</td><td><code>harness/governance</code>、<code>domain/model/harness</code>（<code>SchemaStructuredModel</code>、<code>SchemaPatchModel</code>）</td><td><code>SchemaManager</code>、<code>SchemaPatchProposer</code>、<code>SchemaPatchService</code>、<code>SchemaInjector</code>、<code>SchemaLintScheduler</code>；<code>RateLimitService</code>、<code>TokenUsageMonitor</code>、<code>TokenUsageDailyService</code>、<code>ApprovalService</code>、<code>SystemConfigService</code></td><td><b>Schema 是"宪法"</b>：结构化模型约束 Agent 写作产物，<code>SchemaInjector</code> 反向注入 Writer/Lint/AgentRunner；治控（并发闸、Token 账、人工审批）常驻所有 AI 路径。</td></tr>
+    <tr><td>10</td><td><b>pipeline</b> 工具调用闸门</td><td><code>harness/pipeline</code></td><td><code>ToolExecutionPipeline</code>、<code>ToolFilter</code> + 8 个过滤器（<code>ApprovalFilter</code>、<code>ScopePathGuardFilter</code>、<code>TimeoutGuard</code>、<code>ConcurrencyGuardFilter</code>、<code>LoopHygieneFilter</code>、<code>SpillFilter</code>、<code>MetricsCollector</code>、<code>ResultNormalizer</code>）</td><td>所有 Agent 工具调用<b>必须经过同一责任链</b>：先审批 → 作用域守界 → 超时/并发 → 循环卫生 → 溢出疏泄 → 度量 → 结果归一。</td></tr>
+    <tr><td>11</td><td><b>tool</b> Agent 工具集</td><td><code>harness/tool</code></td><td><code>SearchWikiTool</code>、<code>ReadFileTool</code>、<code>ListPagesTool</code>、<code>WriteFileTool</code>、<code>UpdateLinksTool</code>、<code>TodoTool</code>、<code>GetRelatedPagesTool</code>、<code>ExtractMetadataTool</code>、<code>ReadRawSourceTool</code>、<code>GetSourceInfoTool</code></td><td>Agent 可执行动作的能力封装：只读（检索/读文件/读源）与写（写页/改链/待办）分离；写动作受管道闸门保护。</td></tr>
+    <tr><td>12</td><td><b>harness core</b> 执行骨架</td><td><code>harness</code> 根 + <code>harness/{tracker,eventlog,baseline,plugin,prompt}</code></td><td><code>HarnessEngine</code>(Impl/Stub)、<code>PipelineOrchestrator</code>、<code>AgentRunner</code>、<code>ExecutionTracker</code>、<code>ExecutionHistoryService</code>、<code>ExecutionBaselineService</code>、<code>AgentPluginRegistry</code>、<code>PromptRegistry</code></td><td>门面-编排-执行三件套；ExecutionModel 状态机 + 事件溯源 + 断点恢复基线；插件（AgentPlugin）扩展 Agent 能力边界。</td></tr>
+  </table>
+  <p><b>依赖铁律</b>：子域之间<b>不直接互相调用</b>（如 conflict 不直接调 ingest），协作一律经 <code>PipelineOrchestrator</code> 编排；模型只属于各自 namespace，跨域只交换标量/DTO。</p>
+
+  <h3>2.3.2 领域模型类图：聚合根与不变量</h3>
+  <p>13 个领域模型按三个 namespace 分区。聚合根只有四个：<code>ExecutionModel</code>（执行状态机）、<code>WikiPageModel</code>（知识产物）、<code>SourceModel</code>（事实基底）、<code>ScopeModel</code>（租户边界）。其余是挂在聚合根下的实体 / 值对象：</p>
+  <div class="mermaid">
+classDiagram
+    namespace system_身份与租户 {
+        class UserModel { +id +username +role +enabled }
+        class ScopeModel { +id +name +budget +configJson +status }
+        class ScopeMemberModel { +scopeId +userId +role }
+        class ScopeSubscriptionModel { +scopeId +sourceId +status }
+        class AuditLogModel { +id +actor +action +detail +createdAt }
+    }
+    namespace harness_执行与治理 {
+        class ExecutionModel { +id +type +status +scopeId +sourceId +totalTokens +steps }
+        class ExecutionStepModel { +stepName +stepOrder +status +approvalLevel +approvedBy +tokensUsed +durationMs }
+        class ExecutionPlan { +steps +doneCount() +renderMarkdown() }
+        class TodoStep { +content +status +dependencies }
+        class LintRulesConfig { +rules +severity +thresholds }
+        class SchemaStructuredModel { +sections +fields +constraints }
+        class SchemaPatchModel { +patchType +target +payload }
+    }
+    namespace wiki_知识内容 {
+        class WikiPageModel { +id +title +content +healthStatus +keywords +links }
+        class SourceModel { +id +fileName +rawPath +parsedPath +sourceType +hash }
+    }
+    ExecutionModel o-- ExecutionStepModel : 1..* 步骤回执（含审批位）
+    ExecutionPlan o-- TodoStep : 1..*
+    ExecutionModel ..> ExecutionPlan : AgentRunner 用其编排工具回路
+    ScopeModel o-- ScopeMemberModel : 1..* 成员
+    ScopeModel o-- ScopeSubscriptionModel : 1..* 订阅源
+    SourceModel o-- WikiPageModel : 1..* 编译产物
+    note for ExecutionModel "聚合根 · 执行状态机\nstatus: awaiting_review/executing/done/failed\n每步携带 approvalLevel/approvedBy 支撑人工闸门\nnodeId 支持分布式调度"
+    note for ExecutionPlan "值对象 · 不可变待办清单\nTodoStep 含依赖图，renderMarkdown 落 Agent 提示词"
+    note for WikiPageModel "聚合根 · 知识产物容器\nhealth_status(draft/ok/stale) 驱动召回与晋升\nkeywords 供检索，links 维护双向引用"
+    note for SourceModel "聚合根 · 事实基底\nraw/parsed 双路径固化存储，哈希防重，只增不改"
+    note for ScopeModel "聚合根 · 租户隔离边界\n预算配额/成员角色/订阅源，scopeId 全链路传递"
+  </div>
+  <div class="figcap">图 2.3.1 领域模型类图：namespace 分区即限界上下文，note 标注聚合根职能与不变量</div>
+
+  <h3>2.3.3 领域服务：门面 → 编排器 → Agent/Orchestrator（执行引擎）</h3>
+  <p>领域服务的执行层呈现清晰的<b>三层协作</b>：门面（HarnessEngineImpl）按用例分派 → 编排器（PipelineOrchestrator / IngestOrchestrator / WriterOrchestrator）定义步骤机 → Agent（Upload/Parser/Writer、LintAgent、AgentRunner）执行原子动作。关系以<b>组合（o--）</b>为主，接口以<b>实现（..|>）</b>标注：</p>
+  <div class="mermaid">
+classDiagram
+    namespace harness_门面与编排 {
+        class HarnessEngine {
+            &lt;&lt;interface&gt;&gt;
+            +executeIngest(scopeId, sourceId)
+            +executeQueryStreaming(scopeId, question)
+            +executeLint(scopeId, fullScan)
+            +executeSaveQueryResult(scopeId, answer)
+            +getExecution(executionId)
+        }
+        class HarnessEngineImpl {
+            +executeIngest()
+            +executeQueryStreaming()
+            +executeLint()
+            +executeSaveQueryResult()
+            +getExecution()
+        }
+        class HarnessEngineStub {
+            +预置桩 · 测试替身
+        }
+        class PipelineOrchestrator {
+            +runIngestPipeline()
+            +runLintPipeline()
+            +runLintPipelineWithExecution()
+            +runSaveQueryResultPipeline()
+            +cleanupHalfProducts()
+        }
+        class AgentRunner {
+            +runQueryAgentStreaming()
+            +runToolLoop()
+            +buildExecutionPlan()
+        }
+    }
+    namespace harness_ingest知识摄入 {
+        class IngestOrchestrator { +runSteps() }
+        class UploadAgent { +下载/哈希/raw 落盘 }
+        class ParserAgent { +解析/分块/子文档 }
+        class WriterOrchestrator { +逐页写作调度 }
+        class WriterAgent { +schema 注入写作 }
+        class ConsistencyReconciler { +交叉一致性核验 }
+    }
+    namespace harness_query知识问答 {
+        class RetrievalService { +混合检索召回 }
+        class ExecutionStrategy { +单/多 scope 策略 }
+    }
+    namespace harness_lint知识体检 {
+        class LintAgent { +八步体检编排 }
+        class LintProbeService { +探针采样 }
+        class LintFindingService { +发现分级/汇总 }
+        class LintOrphanService { +孤儿页治理 }
+    }
+    namespace harness_conflict内容冲突 {
+        class ConflictDomainService { +冲突检测/仲裁 }
+    }
+    note for HarnessEngineImpl "门面：应用层仅依赖此接口\n所有 AI 路径先过 rateLimitService.tryAcquireConcurrent(scopeId)"
+    note for PipelineOrchestrator "编排器(2158行)：步骤机+并发闸+半产物清理+Token 统计挂载"
+    note for AgentRunner "双模式：QueryAgent 流式推理 / ToolLoop 工具回路（循环卫生+溢出疏泄）"
+    note for IngestOrchestrator "知识编译步骤机：UPLOAD→PARSE→ANALYZE→WRITE，支持断点继续"
+    HarnessEngineImpl ..|> HarnessEngine : implements
+    HarnessEngineStub ..|> HarnessEngine : 测试替身
+    HarnessEngineImpl o-- PipelineOrchestrator : ingest/lint/saveQueryResult
+    HarnessEngineImpl o-- AgentRunner : query 流式
+    HarnessEngineImpl o-- ExecutionTracker : getExecution 查询
+    PipelineOrchestrator o-- IngestOrchestrator : runIngestPipeline
+    PipelineOrchestrator o-- AgentRunner : runQueryPipeline
+    PipelineOrchestrator o-- LintAgent : runLintPipeline
+    PipelineOrchestrator o-- ConflictDomainService : 写作前冲突预检
+    IngestOrchestrator o-- UploadAgent
+    IngestOrchestrator o-- ParserAgent
+    IngestOrchestrator o-- WriterOrchestrator
+    WriterOrchestrator o-- WriterAgent
+    WriterOrchestrator o-- ConsistencyReconciler
+    AgentRunner o-- RetrievalService
+    AgentRunner o-- ExecutionStrategy
+    LintAgent o-- LintProbeService
+    LintAgent o-- LintFindingService
+    LintAgent o-- LintOrphanService
+    LintAgent o-- CrossRefDomainService : 链接破损输入
+  </div>
+  <div class="figcap">图 2.3.2 执行引擎类图：门面分派、编排器定义步骤机、Agent 执行原子动作</div>
+
+  <h3>2.3.4 治理与工具管道：Schema 共治 + 执行治控 + 工具调用闸门</h3>
+  <p>治理域分两支：<b>Schema 共治</b>（Schema 作为"宪法"约束所有 Agent 行为）与<b>执行治控</b>（并发/预算/审批/Token 账）。工具调用则是纵向穿过治理的一道<b>责任链闸门</b>——10 个 Agent 工具全部经 ToolExecutionPipeline 与 8 个 ToolFilter：</p>
+  <div class="mermaid">
+classDiagram
+    namespace governance_Schema共治 {
+        class SchemaManager { +加载/版本化/生效 }
+        class SchemaPatchProposer { +差异提案 }
+        class SchemaPatchService { +执行/回滚 Patch }
+        class SchemaInjector { +把约束反向注入 Agent }
+        class AsyncSchemaPatchService { +异步批量应用 }
+        class SchemaLintScheduler { +定时复检合规 }
+    }
+    namespace governance_执行治控 {
+        class RateLimitService { +并发闸/预算闸 }
+        class TokenUsageMonitor { +Token 采集 }
+        class TokenUsageDailyService { +日账汇总 }
+        class ApprovalService {
+            &lt;&lt;interface&gt;&gt;
+            +人工审批链
+        }
+        class ApprovalServiceImpl { +审批实现 }
+        class SystemConfigService { +治理参数动态配置 }
+    }
+    namespace pipeline_工具调用闸门 {
+        class ToolExecutionPipeline { +execute() 责任链 }
+        class ToolFilter {
+            &lt;&lt;interface&gt;&gt;
+            +filter(invocation, next)
+        }
+        class ApprovalFilter
+        class ScopePathGuardFilter
+        class TimeoutGuard
+        class ConcurrencyGuardFilter
+        class LoopHygieneFilter
+        class SpillFilter
+        class MetricsCollector
+        class ResultNormalizer
+    }
+    namespace tool_Agent工具集 {
+        class SearchWikiTool { +直接检索 }
+        class ReadFileTool { +读托管文件 }
+        class ReadRawSourceTool { +读 raw 源 }
+        class ListPagesTool { +按 scope 列页 }
+        class WriteFileTool { +写 wiki 产物 }
+        class UpdateLinksTool { +批量改链 }
+        class TodoTool { +执行计划待办 }
+        class GetRelatedPagesTool { +相关页召回 }
+        class ExtractMetadataTool { +元数据抽取 }
+        class GetSourceInfoTool { +源信息查询 }
+    }
+    note for ToolExecutionPipeline "责任链：先审批→作用域守界→超时/并发→循环卫生→溢出疏泄→度量→结果归一"
+    note for ToolFilter "闸门接口：所有 Agent 工具调用必经，8 个过滤器都是其实现"
+    note for SchemaInjector "共治回路：Schema 变化 → 反向约束 WriterAgent/LintAgent/AgentRunner 的行为边界"
+    ToolExecutionPipeline o-- ToolFilter : 注册 8 个
+    ApprovalFilter ..|> ToolFilter : 人工审批前置
+    ScopePathGuardFilter ..|> ToolFilter : scope 越界拦截
+    TimeoutGuard ..|> ToolFilter : 超时熔断
+    ConcurrencyGuardFilter ..|> ToolFilter : 复用 RateLimitService
+    LoopHygieneFilter ..|> ToolFilter : 循环卫生
+    SpillFilter ..|> ToolFilter : 溢出疏泄
+    MetricsCollector ..|> ToolFilter : Token/耗时
+    ResultNormalizer ..|> ToolFilter : 结构归一
+    SchemaInjector ..> WriterAgent : 写作约束
+    SchemaInjector ..> LintAgent : 体检约束
+    SchemaInjector ..> AgentRunner : 执行约束
+    TokenUsageMonitor ..> TokenUsageDailyService : 落日账
+    ApprovalServiceImpl ..|> ApprovalService
+  </div>
+  <div class="figcap">图 2.3.3 治理与工具管道类图：左右两支治控 + 中部责任链闸门</div>
+
+  <div class="callout warn"><strong>为什么 168 个领域服务都收在 harness 单一主包？</strong>这是"单引擎多域"的战术选择：所有知识子域（摄入/问答/体检/编辑/冲突）都共享<b>同一条 LLM 执行骨架</b>（ExecutionModel 状态机 + HarnessEngine 门面 + 治控 + 工具管道），强行按标准 DDD 拆物理限界上下文会产生大量跨域协调。因此实际布局是：<b>子域边界由子包表达</b>（<code>harness/ingest</code>、<code>harness/conflict</code>…），<b>模型边界由 namespace 表达</b>，依赖方向靠"子域不互调、只经编排器"的铁律维持。理解项目时请把"包=子域、门面=胶囊口、编排器=域间协作的唯一通道"当作文法来读。</div>
+</div>
+
+<!-- ==================== 第三章 用例图 ==================== -->
+<div class="card" id="sec-usecase">
+  <h2>3. 系统用例图</h2>
+  <p>系统有四个参与者：<b>知识工人</b>（日常使用者）、<b>管理员</b>（工作区 / 预算 / 治理决策者）、<b>调度器</b>（定时触发 Lint 等后台任务）、<b>LLM 引擎</b>（被系统编排的执行者，非人机交互方）。核心用例按业务价值排序：</p>
+  <div class="mermaid">
+flowchart LR
+    A1((知识工人)) --- U2
+    A1 --- U3
+    A1 --- U6
+    A1 --- U5
+    A2((管理员)) --- U7
+    A2 --- U1
+    A2 --- U5
+    A3((调度器)) --- U4
+    A1 --- U4
+    A2 --- U4
+    A1 -.-> U8
+    A2 -.-> U8
+
+    U1["UC1 账号与工作区管理<br/>JWT 登录 / Scope 创建与权限 / 预算配额"]
+    U2["UC2 知识摄入（核心）<br/>上传源材料 → 分析 → 人工评审 → 编译成页"]
+    U3["UC3 知识问答（核心）<br/>流式问答 / 多项目联合问答 / 答案存为页面"]
+    U4["UC4 知识体检 Lint（核心）<br/>诊断修复 / 健康报告 / 冲突裁决 / Schema 提案"]
+    U5["UC5 Schema 共治<br/>冷启动引导 / 补丁提案 / 审批应用 / 回滚"]
+    U6["UC6 人工编辑<br/>草稿 / 编辑会话 / AI 辅助 / 步骤提交与撤销"]
+    U7["UC7 知识晋升与召回<br/>可见性切换 / 私密召回 / 团队存根"]
+    U8["UC8 审计与可观测<br/>执行历史 / 事件日志 / Token 用量与成本"]
+  </div>
+  <div class="figcap">图 3.1 系统用例图（虚线：次级参与者）</div>
+
+  <table>
+    <tr><th>用例</th><th>触达契约</th><th>核心行为</th><th>相对重要度</th></tr>
+    <tr><td>UC1 账号与工作区</td><td><code>/api/auth</code>、<code>/api/scope</code></td><td>JWT 登录；Scope 建/改/删；<code>ScopeService.canView</code> 权限；月度预算 <code>scope_budget</code>（默认 50000 token）</td><td><span class="tag tag-mid">支撑型</span></td></tr>
+    <tr><td>UC2 知识摄入</td><td><code>/api/ingest/*</code>（22 端点）</td><td>两阶段（分析 / 执行）+ 人审审批 + 断点续传，把 raw 编译为 wiki</td><td><span class="tag tag-core">核心</span></td></tr>
+    <tr><td>UC3 知识问答</td><td><code>/api/query/stream</code>(SSE)、<code>/api/query/save</code></td><td>两 Agent 两阶段回答；SSE 流式；可落库为新页面</td><td><span class="tag tag-core">核心</span></td></tr>
+    <tr><td>UC4 知识体检</td><td><code>/api/lint/*</code>（25 端点）</td><td>八步流水线诊断 + 自动修复 + 报告 + Schema 提案；<code>@Scheduled</code> 定时巡检</td><td><span class="tag tag-core">核心</span></td></tr>
+    <tr><td>UC5 Schema 共治</td><td><code>/api/schema/*</code></td><td>V2 三轮对话冷启动；补丁提案→审批→版本化应用；注入全部 Agent</td><td><span class="tag tag-mid">治理</span></td></tr>
+    <tr><td>UC6 人工编辑</td><td><code>/api/wiki-editor/*</code></td><td>草稿 CRUD、编辑会话快照、AI 辅助编辑 SSE、commit-step 防并发</td><td><span class="tag tag-mid">补充</span></td></tr>
+    <tr><td>UC7 晋升与召回</td><td><code>PATCH /api/wiki/visibility</code></td><td>页面 open/private 切换；私密化触发目标团队软召回（存根替换）</td><td><span class="tag tag-mid">治理</span></td></tr>
+    <tr><td>UC8 审计可观测</td><td><code>/api/audit</code>、<code>/api/activity</code></td><td>执行历史、步骤事件日志（ExecutionEventLog）、token 用量日报</td><td><span class="tag tag-low">支撑型</span></td></tr>
+  </table>
+</div>
+
+<!-- ==================== 第四章 UC2 摄入 ==================== -->
+<div class="card" id="sec-uc2">
+  <h2>4.1 UC2 知识摄入（Ingest）——核心用例详解</h2>
+  <p class="steps"><span class="step">UPLOAD</span><span class="step">ANALYZE</span><span class="step">REVIEW（人审）</span><span class="step">EXECUTE</span><span class="step">DONE</span></p>
+
+  <h3>4.1.1 用例流程（两阶段人机协同）</h3>
+  <p>摄入被刻意设计为<b>两阶段</b>：<strong>Phase1 分析（LLM + 人审）</strong> → <strong>Phase2 执行（LLM 编译）</strong>。分析结果必须人工确认后才允许进入执行，杜绝"AI 一次跑偏全盘出错"。</p>
+  <div class="mermaid">
+flowchart TB
+    S1["① 上传源材料<br/>POST /api/ingest/start<br/>source 落盘 raw/ 目录（不可变）"] --> S2
+    S2["② 分析 ANALYZE<br/>Python doc_parser.py 解析<br/>AnalysisAgent 抽取元数据/大纲/事实块"] --> S3
+    S3["③ 人工评审（状态机闸门）<br/>status = awaiting_review<br/>前端展示分析产物基线 baselineProfile"] --> S4
+    S4["④ 执行 EXECUTE<br/>POST /api/ingest/{id}/execute<br/>WritingAgent 逐页写作 → 四道验证"] --> S5
+    S5["⑤ 完成 DONE<br/>ES 索引 / 链接解析 / 关联发现"]
+    S4 -.->|"任意步骤失败非阻塞"| S4x["执行记录标记失败<br/>可 resume 断点续传<br/>或 cancel 清理半成品"]
+  </div>
+  <div class="figcap">图 4.1.1 UC2 摄入两阶段流程（黄框=人审闸门，绿框=执行）</div>
+
+  <h3>4.1.2 流水线与状态机（代码级）</h3>
+  <ul>
+    <li><strong>状态机</strong>：<code>uploaded → analyzing → awaiting_review → executing → done</code>｜终止态：<code>failed / cancelled / paused</code>。</li>
+    <li><strong>执行模型</strong>：<span class="klass">ExecutionModel</span> + <span class="klass">ExecutionTracker</span> 记录每一步状态、<code>approval_level</code>（auto / review / approval）、<code>approved_by</code>、<code>tokens_used</code>，写入 <code>execution</code> 与 <code>execution_step</code> 表。</li>
+    <li><strong>步骤执行器</strong>：<span class="klass">PipelineOrchestrator.runSteps(...)</span> 按 <span class="klass">ApprovalService</span> 的审批级别决定某步骤是否需要人工放行。</li>
+    <li><strong>断点续传</strong>：<code>POST /api/ingest/{id}/resume</code> → <code>resumeIngestAnalysis() / resumeIngestExecution()</code>，从失败步骤重新执行。</li>
+    <li><strong>半成品清理</strong>：<code>cancelExecution(cleanupHalfProducts)</code> —— 单来源删除已生成页面；多来源只删除关系线并 <code>source_count--</code>，保留他源已写页面。</li>
+    <li><strong>SSE 进度</strong>：<code>GET /api/ingest/{id}/stream</code> 事件 <code>init / step / done / pause</code>，失败后 <code>startPeriodicSync</code> 轮询补发，弥补断流丢帧。</li>
+  </ul>
+
+  <h3>4.1.3 时序图</h3>
+  <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant U as "知识工人(前端)"
+    participant C as IngestController
+    participant S as IngestService
+    participant H as HarnessEngine
+    participant P as PipelineOrchestrator
+    participant A as "Upload/Analysis/Writer Agent"
+    participant ST as "Storage/MySQL/ES"
+
+    U->>C: POST /api/ingest/start (sourceId)
+    C->>S: startIngest(scopeId, sourceId)
+    S->>S: createExecution(type=ingest)
+    S->>H: executeIngest(scopeId, sourceId)
+    H->>P: runIngestPipeline()
+    P->>A: runSteps([UPLOAD, ANALYZE])
+    A->>ST: 写入 raw/ 源文件 + parsed 中间产物
+    ST-->>P: 步骤回执 + tokens / approval_level
+    P->>ST: updateExecution(status=awaiting_review)
+    P-->>H: ExecutionModel(id, status=awaiting_review)
+    H-->>S: Result&lt;ExecutionModel&gt;
+        S-->>C: 转发 Result
+        C-->>U: HTTP 响应(executionId, status)
+
+    rect rgb(60, 60, 20)
+    U->>U: 【人工闸门】审阅 baselineProfile
+    end
+
+    U->>C: POST /api/ingest/{id}/execute
+    C->>S: executeIngest(executionId)
+    S->>H: 进入执行态
+    H->>P: 恢复流水线进入 EXECUTE
+    P->>A: WriterAgent 逐页写作（schema 注入约束）
+    A->>ST: storageProvider.write(wiki/xxx.md)
+    A->>ST: wikiPageMapper.insert + ES indexPage + resolvePageFindingsOnIngest
+    P->>ST: updateExecution(status=done) + 关联统计
+    C-->>U: 流式 step/done 事件（SSE）
+  </div>
+  <div class="figcap">图 4.1.2 UC2 摄入时序（含人工闸门）</div>
+
+  <div class="callout"><strong>设计意图</strong>：① 两阶段人机协同把"AI 创造性错误"的成本前置——分析阶段错了只是白纸，执行阶段错了会污染知识库；② 断点续传 + 半成品清理保证<b>长耗时流水线可运维</b>（LLM token 昂贵，失败重来会浪费预算）；③ 执行入口 <code>/execute</code> 校验 <code>awaiting_review</code> 状态本身就是<b>状态机即安全边界</b>。</div>
+</div>
+
+<!-- ==================== 第四章 UC3 问答 ==================== -->
+<div class="card" id="sec-uc3">
+  <h2>4.2 UC3 知识问答（Query）——核心用例详解</h2>
+  <p class="steps"><span class="step">preRetrieveLight 预检索</span><span class="step">Phase1 Fact Agent（7 工具）</span><span class="step">Layer1 事实骨架</span><span class="step">Phase2 Synthesis Agent</span><span class="step">Layer2/3 综合答案</span></p>
+
+  <h3>4.2.1 用例流程（两 Agent 两阶段 + 三层答案结构）</h3>
+  <div class="mermaid">
+flowchart TB
+    Q["用户提问<br/>GET /api/query/stream?question="] --> PR["预检索 preRetrieveLight<br/>ES 搜索 + 相关页 + deprecated 上下文"]
+    PR --> C["上下文压缩 compressField<br/>（会话记忆按 field 固化）"]
+    C --> P1["Phase1 · Fact Agent<br/>带 7 工具 · 生成 Layer1 事实骨架<br/>（可自主调用工具检索/读页导航）"]
+    P1 --> P2["Phase2 · Synthesis Agent<br/>无工具 · Layer1 + deprecated 上下文<br/>生成 Layer2 答案 + Layer3 总结/后续"]
+    P2 --> SSE["SSE 流式回传<br/>step / answer-chunk / answer-complete"]
+    SSE -->|"用户点击保存"| SV["save-to-wiki 四步落库"]
+    P1 -.->|"任一步骤异常"| FB["自动回退 runSimpleQuery<br/>简单上下文直接回答"]
+  </div>
+  <div class="figcap">图 4.2.1 UC3 问答两阶段流程（蓝=检索导航，紫=综合）</div>
+
+  <h3>4.2.2 代码级要点</h3>
+  <ul>
+    <li><strong>6 个 ChatClient</strong>（<span class="klass">AgentRunner.init()</span>）：readOnly(7 工具) / readWrite(+writeFile,updateLinks) / noTools，及对应 deep 三件套（<code>LlmClient.getDeepAnalysisChatModel()</code> 深度模型）。工具：readFile / readRawSource / getSourceInfo / searchWiki / listPages / getRelatedPages / todo / writeFile / updateLinks。</li>
+    <li><strong>流式组装</strong>：<code>Flux.concat(generatingMarker, layer1Stream, synthesisMarker, layer23Stream)</code> —— 段标记 <code>__STEP__:generating / synthesizing</code>，Controller 识别后转为 SSE <code>step</code> 事件。</li>
+    <li><strong>上下文工程</strong>：<span class="klass">CompactionService.compressField(sessionId, scopeId, "factContext"|"layer1", text)</span> 对超长上下文做摘要压缩，控制 token 预算；deprecated 页面单独喂给 Synthesis 用于纠偏。</li>
+    <li><strong>降级链</strong>：ChatClient 未初始化 → <code>runSimpleQuery</code>；pre-retrieve 失败 → 回退；流中异常 → <code>onErrorResume</code> 回退。系统永远优先给用户一个答案，而非报错。</li>
+    <li><strong>多项目问答</strong>：<code>queryWikiStreamingMultiScope</code>，Controller 侧 <code>resolveScopeIds</code> 逐个校验 <code>scopeService.canView(id, userId)</code>，未授权抛 <code>AUTH_ACCESS_DENIED</code>。</li>
+  </ul>
+
+  <h3>4.2.3 时序图（含 SSE 契约）</h3>
+  <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant B as "浏览器(EventSource)"
+    participant QC as QueryController
+    participant QS as QueryService
+    participant HE as HarnessEngine
+    participant AR as AgentRunner
+    participant RS as RetrievalService
+    participant CS as CompactionService
+    participant LLM as "LLM (Fact/Synthesis Agent)"
+
+    B->>QC: GET /api/query/stream?question=&scopeIds=&mode=
+    QC->>QC: 解析/校验 scope + SseEmitter(quick 300s / deep 600s)
+    QC-->>B: event:start {sessionId}
+    QC-->>B: event:mode {mode:"tool-calling"}
+    QC-->>B: event:step {step:"retrieving"}
+    QC->>QS: queryWikiStreaming(scopeId, question, sessionKey, deep)
+    QS->>HE: executeQueryStreaming(...)
+    HE->>AR: runQueryAgentStreaming(...)
+    AR->>RS: preRetrieveLight(scopeId, question)
+    RS-->>AR: RetrievalContext(搜索结果 + deprecated 页)
+    AR->>CS: compressField(sessionId,"factContext",ctx)
+    AR->>LLM: Phase1 Fact Agent(schema 注入 + 7 工具)
+    LLM-->>AR: Layer1 流式 chunk
+    AR-->>QC: Flux chunk
+    QC-->>B: event:answer-chunk {content} ×N
+    AR->>LLM: Phase2 Synthesis Agent(Layer1+deprecated, 无工具)
+    LLM-->>AR: Layer2/3 流式 chunk
+    QC-->>B: event:answer-chunk ×N
+    QC-->>B: event:answer-complete {totalTokens}
+    alt 用户点击保存
+        B->>QC: POST /api/query/save
+        QC->>QS: saveAnswerToWiki(scopeId, question, answer, sessionId)
+        QS->>HE: executeSaveQueryResult(...)
+        HE->>HE: ①FORMAT_ANSWER ②WRITE_SAVED_PAGE ③SAVE_LINKS ④DETECT_CONFLICTS
+        QC-->>B: Result&lt;WikiPageInfo&gt;
+    end
+  </div>
+  <div class="figcap">图 4.2.2 UC3 问答时序（两阶段 + SSE 事件契约 + save 四步）</div>
+
+  <h3>4.2.4 save-to-wiki 四步流水线</h3>
+  <table>
+    <tr><th>步</th><th>动作</th><th>关键代码</th></tr>
+    <tr><td>① FORMAT_ANSWER</td><td>LLM 把问答结果格式化为 JSON（title/summary/category/content），失败回退默认标题</td><td><code>FORMAT_ANSWER</code> step；<span class="klass">PromptRegistry.forQuery()</span></td></tr>
+    <tr><td>② WRITE_SAVED_PAGE</td><td>写入 <code>wiki/{filePath}</code> + 插入 wiki_page + 解除相关 findings + ES 索引</td><td><span class="klass">storageProvider.write</span> / <span class="klass">wikiPageMapper.insert</span> / <span class="klass">lintFindingService.resolvePageFindingsOnIngest</span> / <span class="klass">searchService.indexPage</span></td></tr>
+    <tr><td>③ SAVE_LINKS</td><td><code>link_type="query-save"</code> 去重插入链接关系</td><td>links 表 upsert</td></tr>
+    <tr><td>④ DETECT_SAVE_CONFLICTS</td><td>过 <span class="klass">LlmConcurrencyBarrier(Bucket.LINT)</span> 限流闸 → LLM 检测与既有页面矛盾 → <span class="klass">ConflictDomainService.markContradiction</span></td><td>冲突标记为 finding，交 Lint 治理闭环</td></tr>
+  </table>
+</div>
+
+<!-- ==================== 第四章 UC4 体检 ==================== -->
+<div class="card" id="sec-uc4">
+  <h2>4.3 UC4 知识体检（Lint）——核心用例详解</h2>
+  <p class="steps"><span class="step">PROBE_AND_VALIDATE</span><span class="step">AUTO_FIX_ORPHANS</span><span class="step">AUTO_FIX_CROSSREFS</span><span class="step">GENERATE_RULING_BRIEFS</span><span class="step">WRITE_HEALTH_STATUS</span><span class="step">GENERATE_REPORT</span><span class="step">SUGGEST_ACTIONS</span><span class="step">PROPOSE_SCHEMA_PATCH</span></p>
+
+  <h3>4.3.1 用例流程（八步流水线）</h3>
+  <div class="mermaid">
+flowchart LR
+    T["触发：手动 /api/lint/start<br/>或 @Scheduled cron<br/>个人周一03:00 · 团队每日04:00"] --> P["① PROBE_AND_VALIDATE<br/>LintProbeService 增量扫描<br/>五种诊断 × 缓存过滤"]
+    P --> F1["② AUTO_FIX_ORPHANS<br/>孤儿页检测与修复"]
+    P --> F2["③ AUTO_FIX_CROSSREFS<br/>交叉引用修复"]
+    F1 -. 并行(CompletableFuture) .-> F2
+    F1 --> R["④ GENERATE_RULING_BRIEFS<br/>争议裁决简报"]
+    F2 --> R
+    R --> H["⑤ WRITE_HEALTH_STATUS<br/>页面健康度回写"]
+    H --> G["⑥ GENERATE_REPORT<br/>体检报告落库"]
+    G --> A["⑦ SUGGEST_ACTIONS<br/>建议行动清单"]
+    A --> SP["⑧ PROPOSE_SCHEMA_PATCH<br/>Schema 补丁提案"]
+    G -.->|"findingsSignature 与上次一致<br/>→ 报告短路跳过后两步"| END1["结束（成本节约）"]
+  </div>
+  <div class="figcap">图 4.3.1 UC4 Lint 八步流水线（含并行与报告短路）</div>
+
+  <h3>4.3.2 代码级要点</h3>
+  <ul>
+    <li><strong>五种诊断类型</strong>：<code>orphan</code>（孤儿页：无来源/无链接引用）、<code>stale</code>（内容过期：源更新后页面未同步）、<code>missing_crossref</code>（缺失交叉引用）、<code>conflict</code>（语义冲突：与既有页面矛盾）、<code>gap</code>（覆盖缺口）。</li>
+    <li><strong>增量探测</strong>：<span class="klass">LintProbeService</span> 用 <code>filterCacheMissPageIds</code> 只扫描自上次以来变更的页面（delta 模式），全量扫描仅 <code>fullScan=true</code> 时触发。</li>
+    <li><strong>并行修复</strong>：② 与 ③ 通过 <code>CompletableFuture.supplyAsync(..., parallelExecutor)</code> 并行执行，节省耗时。</li>
+    <li><strong>watermark 游标</strong>：<code>lintWatermark(scopeId)</code> 持久化 <code>conflictPartition / gapPartition / crossrefCursor / staleCursor</code> 等游标，支持<b>断点续检</b>。<code>findingsSignature</code>（本次发现指纹）与上一次一致则跳过 SUGGEST_ACTIONS / PROPOSE_SCHEMA_PATCH 两个 LLM 步骤（<code>shouldShortCircuitLintReport</code>）——无变化就少花 token。</li>
+    <li><strong>规则驱动</strong>：<code>LintRulesConfig = schemaSection6Parser.parse(scopeId)</code>，即体检规则（token 软限制、页面数量上限等）<b>来自 Schema 宪法第 6 段</b>，与 Prompt 注入同源共治。</li>
+    <li><strong>失败非阻塞</strong>：单步失败仅标记 <code>hasFailures</code>，流式继续；完成时 <code>notificationService.createNotification("lint_completed")</code> 通知。</li>
+  </ul>
+
+  <h3>4.3.3 时序图</h3>
+  <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant SC as "调度器@Scheduled"
+    participant U as "知识工人/管理员"
+    participant LC as LintController
+    participant LS as LintService
+    participant HE as HarnessEngine
+    participant PO as PipelineOrchestrator
+    participant LB as "LintProbe/LintAgent/FindingService"
+    participant CF as ConflictDomainService
+
+    SC->>PO: cron 触发 runLintPipeline(scopeId, fullScan=false)
+    U->>LC: POST /api/lint/start {fullScan}
+    LC->>LS: startLint(scopeId, fullScan)
+    LS->>HE: executeLintWithExecution(executionId,...)
+    HE->>HE: rateLimitService.tryAcquireConcurrent 前置闸
+    HE->>PO: runLintPipelineWithExecution()
+    PO->>LB: ①PROBE: 增量扫描（filterCacheMissPageIds）
+    LB-->>PO: findings + 增量上下文
+    par 并行修复
+        PO->>LB: ②AUTO_FIX_ORPHANS
+        PO->>LB: ③AUTO_FIX_CROSSREFS
+    end
+    PO->>LB: ④GENERATE_RULING_BRIEFS（裁决建议）
+    PO->>LB: ⑤WRITE_HEALTH_STATUS（健康度回写 wiki_page）
+    PO->>LB: ⑥GENERATE_REPORT
+    alt findingsSignature 已变化
+        PO->>LB: ⑦SUGGEST_ACTIONS + ⑧PROPOSE_SCHEMA_PATCH
+    else 签名一致（短路）
+        PO->>PO: 跳过后两步，写入 watermark
+    end
+    PO->>PO: writeLintWatermark(scopeId)
+    U->>LC: GET /api/lint/{id}/findings
+    LC-->>U: findings 列表（type/status/priority 过滤）
+    U->>LC: PATCH /api/lint/findings/{id}
+    LC->>CF: 冲突裁决（merge/coexist/choose_a/choose_b）
+    CF-->>PO: 新 Schema 补丁 → 交 UC5 共治
+  </div>
+  <div class="figcap">图 4.3.2 UC4 体检时序（含定时调度、并行、短路、裁决）</div>
+
+  <h3>4.3.4 Lint 状态机与调度分发</h3>
+  <table>
+    <tr><th>维度</th><th>实现</th></tr>
+    <tr><td>Finding 状态机</td><td><code>open → repairing → awaiting_approval → auto_resolved / dismissed / failed / pending</code>（<span class="klass">LintFindingService</span>）</td></tr>
+    <tr><td>stale 修复</td><td>轻量 <span class="klass">StaleRefreshService.refreshPage</span>：仅重写过期页面，不重跑全流水线</td></tr>
+    <tr><td>定时分发</td><td><code>@Scheduled</code>：个人级每周一 03:00 / 团队级每日 04:00；<code>skipWindow</code> 跳过窗口；<code>prioritizeScopes</code> 按"最近体检时长 + 新来源数"排序</td></tr>
+    <tr><td>执行分发通道</td><td>RocketMQ（三 Topic：pipeline task / control / lint schedule）或本地线程池（MQ 未启用时）</td></tr>
+    <tr><td>并发闸</td><td><span class="klass">LlmConcurrencyBarrier</span> 按 Bucket（LINT/INGEST/QUERY）限流 LLM 并发，防止预算击穿</td></tr>
+  </table>
+</div>
+
+<!-- ==================== 第四章 UC5 Schema ==================== -->
+<div class="card" id="sec-uc5">
+  <h2>4.4 UC5 Schema 共治——治理级用例详解</h2>
+  <p class="steps"><span class="step">isBootstrapRequired 检测</span><span class="step">V2 三轮对话冷启动</span><span class="step">版本化保存</span><span class="step">SchemaInjector 注入</span><span class="step">补丁提案/审批/回滚</span></p>
+
+  <h3>4.4.1 用例流程（Schema 生命周期）</h3>
+  <div class="mermaid">
+flowchart LR
+    CHK["场景检测<br/>schema_config 无 WIKI_SCHEMA_KEY<br/>或值为空 ⇒ 需要引导"] --> BOOT["startV2 冷启动<br/>UUID session + TTL 2h<br/>ParadigmCatalog 能力范式目录"]
+    BOOT --> R1["第 1 轮：LLM 生成候选 Schema"]
+    R1 --> R2["第 2 轮：对话修订<br/>（LLM 超时上限 120s）"]
+    R2 --> R3["第 3 轮：验收确认"]
+    R3 --> SYN["SchemaJsonSynthesizer<br/>合成 JSON → SchemaSkeletonValidator<br/>校验 7 段固定骨架"]
+    SYN --> SAVE["SchemaManager.saveSchema<br/>版本化 + 来源 SOURCE_BOOTSTRAP"]
+    SAVE --> INJ["SchemaInjector<br/>prependForQuery / 写作 / 探针<br/>强制注入所有 Agent Prompt"]
+    SAVE -.-> PA["日常演进：<br/>补丁提案(SOURCE_PATCH)<br/>→ 审批 → 应用 / 回滚(SOURCE_ROLLBACK)"]
+  </div>
+  <div class="figcap">图 4.4.1 UC5 Schema 共治流程</div>
+
+  <h3>4.4.2 代码级要点</h3>
+  <ul>
+    <li><strong>为什么是"宪法"</strong>：所有 Agent（Fact / Synthesis / Writer / LintProbe）的 System Prompt 都通过 <span class="klass">SchemaInjector.prependForQuery(scopeId, prompt)</span> 前置注入 Schema 内容——<b>没有办法绕过</b>，Schema 就是知识库的"构建配置宪法"。</li>
+    <li><strong>7 段固定骨架</strong>：<span class="klass">SchemaSkeletonValidator</span> 强制 Schema 具备固定段落（知识边界、术语库、写作风格、链接规则、禁忌、体检规则、补丁条款等），防止 LLM 生成自由格式垃圾。</li>
+    <li><strong>四来源版本化</strong>：<span class="klass">SchemaManager</span> 常量 <code>SOURCE_BOOTSTRAP / SOURCE_PATCH / SOURCE_MANUAL / SOURCE_ROLLBACK</code>；<code>saveSchema</code> 记录版本快照，可 <code>listSchemas</code> 审计回滚。</li>
+    <li><strong>三轮冷启动</strong>：<span class="klass">SchemaBootstrapService.startV2</span>（governance/bootstrap 包）用"LLM 起草 → 人机对话修订 → 验收"降低首次空库时的引导成本；session 有 TTL（2h）防止废弃会话占用。</li>
+    <li><strong>补丁闭环</strong>：<span class="klass">SchemaPatchService / SchemaPatchProposer / AsyncSchemaPatchService</span> 支撑 Lint 第⑧步的"体检发现问题 → 自动建议 Schema 补丁 → 审批 → 应用"。Schema 是被知识体系自身演化驱动的，而非写死。</li>
+  </ul>
+
+  <h3>4.4.3 时序图</h3>
+  <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant U as 管理员
+    participant SC as SchemaController
+    participant BS as SchemaBootstrapService
+    participant PC as ParadigmCatalog
+    participant LLM as LLM
+    participant SM as SchemaManager
+    participant SI as SchemaInjector
+
+    U->>SC: POST /api/schema/bootstrap/startV2
+    SC->>BS: startV2(scopeId)
+    BS->>BS: 创建 UUID session（TTL 2h）
+    BS->>PC: listAll() 能力范式目录
+    BS-->>U: 返回 Session + 草稿
+    loop 三轮迭代
+        U->>BS: 对话修订（第 1/2 轮）
+        BS->>LLM: 生成 / 修订候选 Schema JSON
+        LLM-->>BS: JSON（超时上限 120s）
+    end
+    U->>BS: 验收确认（第 3 轮）
+    BS->>SM: saveSchema(json, SOURCE_BOOTSTRAP)
+    SM->>SM: 版本快照 + schema_config 落库
+    BS-->>U: 引导完成
+    U->>SC: POST /api/schema/patch（提案）
+    SC->>BS/SM: SchemaPatchService 审批流
+    SM->>SM: apply（SOURCE_PATCH）
+    SM->>SI: 注入刷新（scoped cache）
+    SI-->>U: schema_config 新版本对所有 Agent 生效
+  </div>
+  <div class="figcap">图 4.4.2 UC5 Schema 共治时序（三轮冷启动 + 补丁闭环）</div>
+</div>
+
+<!-- ==================== 第四章 UC6 编辑 ==================== -->
+<div class="card" id="sec-uc6">
+  <h2>4.5 UC6 人工编辑（Wiki Editor）——补充用例详解</h2>
+  <p class="steps"><span class="step">createDraft</span><span class="step">edit-session（快照）</span><span class="step">AI 辅助 SSE</span><span class="step">commit-step（防冲突）</span><span class="step">undo / undo-all</span></p>
+
+  <h3>4.5.1 用例流程</h3>
+  <div class="mermaid">
+flowchart LR
+    D["POST /api/wiki-editor/drafts<br/>创建/编辑草稿"] --> E["POST /edit-sessions<br/>基于快照建立编辑会话<br/>（content 快照 + 权限校验）"]
+    E --> A["GET /api/wiki-editor/ai/edit<br/>SSE：AI 辅助编辑建议<br/>（AiEditService.editWithContext 流式）"]
+    A --> CM["POST /edit-sessions/{id}/commit-step<br/>newContent + instruction + 选区<br/>expectedHash 防并发冲突校验"]
+    CM --> UN["POST /steps/{stepId}/undo<br/>POST /undo-all 全部回退<br/>编辑过程全量留痕可审计"]
+  </div>
+  <div class="figcap">图 4.5.1 UC6 人工编辑流程</div>
+
+  <h3>4.5.2 代码级要点与设计意图</h3>
+  <ul>
+    <li><strong>会话快照</strong>：编辑开始时记录页面 content 快照——AI 建议与人工修改<b>永不直接写库</b>，全部走"步骤"粒度提交。</li>
+    <li><strong>expectedHash 并发防冲突</strong>：<code>commit-step</code> 携带 <code>expectedHash</code>，服务端比对当前内容哈希，不一致即拒绝——多端并发编辑被显式冲突化，而不是静默覆盖。</li>
+    <li><strong>步骤化撤销</strong>：每一步提交（含 AI 建议应用）都可 <code>undo</code>，全部可 <code>undo-all</code>，配合 <span class="klass">EditStepsHistory</span> 组件。</li>
+    <li><strong>与 AI 流水线互补</strong>：自动流水线覆盖"批量吃料"，人工编辑覆盖"单页精修"，两者共用 Schema 与验证语义。</li>
+    <li><strong>由谁触发</strong>：前端 <span class="klass">SaveBar / DiffOverlay / AiChatPanel</span> 提供编辑态 UI；<code>DiffOverlay</code> 展示提交前后 diff。</li>
+  </ul>
+
+  <h3>4.5.3 时序图</h3>
+  <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant E as "编辑器(前端)"
+    participant WEC as WikiEditorController
+    participant AS as AiEditService
+    participant LLM as LLM
+    participant ST as "存储/MySQL"
+
+    E->>WEC: POST /drafts（草稿 CRUD）
+    WEC-->>E: draftId
+    E->>WEC: POST /edit-sessions {pageId, draftId, content}
+    WEC->>WEC: 会话快照 + 权限校验
+    WEC-->>E: sessionId
+    E->>WEC: GET /ai/edit (SSE, instruction+selectedText)
+    WEC->>AS: editWithContext(sessionId, instruction, selection)
+    AS->>LLM: 流式编辑建议（Schema 注入）
+    LLM-->>E: SSE: 建议 chunks + diff
+    E->>WEC: POST /edit-sessions/{id}/commit-step
+    WEC->>WEC: 校验 expectedHash（并发冲突检测）
+    alt 哈希一致
+        WEC->>ST: 应用步骤 + 审计日志
+        WEC-->>E: stepId
+    else 哈希不一致
+        WEC-->>E: 冲突错误（前端刷新快照）
+    end
+    E->>WEC: POST /steps/{stepId}/undo 或 /undo-all
+    WEC->>ST: 回退 + 审计日志
+    WEC-->>E: OK
+  </div>
+  <div class="figcap">图 4.5.2 UC6 人工编辑时序（含 expectedHash 并发防线）</div>
+</div>
+
+<!-- ==================== 第四章 UC7 晋升召回 ==================== -->
+<div class="card" id="sec-uc7">
+  <h2>4.6 UC7 知识晋升与召回——治理用例详解</h2>
+
+  <h3>4.6.1 用例流程</h3>
+  <div class="mermaid">
+flowchart LR
+    PV["PATCH /api/wiki/visibility<br/>PromotionServiceImpl.updateVisibility"] --> OPEN["切换到 open（公开）<br/>页面在应用内对目标团队可见"]
+    PV --> PRIV["切换到 private（私密/内部）"]
+    PRIV -->|"若改的是 promoted 来源页"| LOCK["promotedFromScopeId != null<br/>⇒ 抛 WIKI_PROMOTED_VISIBILITY_LOCKED<br/>晋升页可见性被锁定"]
+    PRIV -->|"若 open→private"| RECALL["softRecall 软召回<br/>目标团队页面替换 RECALL_STUB_TEMPLATE 存根<br/>health_status=recalled"]
+    RECALL --> NOT["通知团队 owner<br/>page_recalled 通知"]
+    OPEN --> STAT["统计：getPromotionStats / getContributors<br/>晋升贡献者数据"]
+  </div>
+  <div class="figcap">图 4.6.1 UC7 晋升与召回流程</div>
+
+  <h3>4.6.2 代码级要点</h3>
+  <ul>
+    <li><strong>无独立编排器</strong>：Promote 是"状态切换 + 副作用"而非流水线。<span class="klass">PromotionServiceImpl</span>（domain/service/wiki 包）实现全部逻辑——这本身就是一种设计判断：<b>不是所有能力都需要 Agent 流水线</b>。</li>
+    <li><strong>可见性锁定</strong>：已晋升页面（<code>promotedFromScopeId != null</code>）不允许再改回 private，防止"下游团队读着读着内容被抽走"。</li>
+    <li><strong>软召回而非硬删除</strong>：私密化时把下游团队的副本替换为 <code>RECALL_STUB_TEMPLATE</code> 存根（"该内容已被原作者撤回"），保留页面骨架与链接、可回朔，避免死链。</li>
+    <li><strong>通知闭环</strong>：召回必然通知目标团队 owner（<code>notificationService</code>），保证知识变更可感知。</li>
+  </ul>
+</div>
+
+<!-- ==================== 第五章 跨领域机制 ==================== -->
+<div class="card" id="sec-cross">
+  <h2>5. 跨领域机制（贯穿所有用例的骨架）</h2>
+
+  <h3>5.1 AI 治理四件套（Governance）</h3>
+  <div class="mermaid">
+flowchart TB
+    subgraph G["AI 治理层（domain.service.harness.governance）"]
+        R["RateLimitService<br/>并发数 + 调用频率双限流"]
+        B["LlmConcurrencyBarrier<br/>按 Bucket(INGEST/LINT/QUERY)<br/>限流 LLM 并发 + 预算保护"]
+        A["ApprovalService<br/>步骤级审批级别<br/>auto / review / approval"]
+        T["TokenUsageContext + 切面<br/>每次 LLM 调用计量<br/>每日限额 + 月度 scope_budget"]
+    end
+    G -.->|"约束"| H["HarnessEngineImpl 门面"]
+    H --> P0["PipelineOrchestrator"]
+    P0 --> AG["Agent 层（Writer/Lint/Fact/Synthesis…）"]
+    AG --> UN["ToolExecutionPipeline<br/>8 个过滤器"]
+    UN --> TOOLS["工具集（9 个）<br/>readFile/searchWiki/writeFile…"]
+  </div>
+  <div class="figcap">图 5.1 AI 治理分层：所有 AI 执行必经治理闸</div>
+
+  <h3>5.2 工具执行管道：8 个过滤器</h3>
+  <p>Agent 调用的每个工具都穿过 <span class="klass">ToolExecutionPipeline</span>，逐级过滤，保证<b>Agent 有工具但终究被规范约束</b>：</p>
+  <table>
+    <tr><th>过滤器</th><th>职责</th><th>防的是什么</th></tr>
+    <tr><td><code>ApprovalFilter</code></td><td>写操作按审批级别放行</td><td>AI 未经许可改库</td></tr>
+    <tr><td><code>ScopePathGuardFilter</code></td><td>路径必须落在本 scope 的 raw/wiki 目录内</td><td>路径穿越 / 跨项目读写</td></tr>
+    <tr><td><code>TimeoutGuard</code></td><td>单工具调用超时熔断</td><td>死循环工具调用烧 token</td></tr>
+    <tr><td><code>ConcurrencyGuardFilter</code></td><td>工具级并发控制</td><td>并发写同一文件</td></tr>
+    <tr><td><code>LoopHygieneFilter</code></td><td>检测循环依赖 / 重复调用</td><td>Agent 反复读同一页</td></tr>
+    <tr><td><code>SpillFilter</code></td><td>上下文溢出保护</td><td>单次对话上下文爆炸</td></tr>
+    <tr><td><code>MetricsCollector</code></td><td>工具调用埋点（耗时/token/次数）</td><td>不可观测</td></tr>
+    <tr><td><code>ResultNormalizer</code></td><td>工具结果标准化为统一结构</td><td>Agent 解析失败</td></tr>
+  </table>
+
+  <h3>5.3 可靠性三支柱</h3>
+  <div class="grid2">
+    <div>
+      <h4>① 异步分发（MQ 或本地）</h4>
+      <p>执行任务优先投递 <strong>RocketMQ</strong>（pipeline task / control / lint schedule 三个 Topic），MQ 不可用则回退本地线程池 —— <b>外部依赖可降级</b>。<span class="klass">MqHealthService</span> 监测链路健康度。</p>
+      <h4>② 断点续传 + watermark</h4>
+      <p>Ingest 失败可从失败步骤 <code>resume</code>；Lint 用 watermark 游标（cursor / signature）支持增量续检与报告短路 —— <b>长流水线可中断可恢复</b>。</p>
+    </div>
+    <div>
+      <h4>③ 可追溯日志链</h4>
+      <p><span class="klass">ExecutionTracker</span> 管执行状态；<span class="klass">ExecutionHistoryService / ExecutionEventLogService</span> 记事件流（<code>TURN_START / STEP / ERROR / TURN_END</code>）；<span class="klass">TokenUsageDailyService / TokenUsageMonitor</span> 沉淀用量。所有 AI 行为都可回溯到 execution_step 与 token 明细。</p>
+    </div>
+  </div>
+
+  <h3>5.4 数据与存储映射</h3>
+  <div class="mermaid">
+flowchart TB
+    MY["MySQL（元数据真相）<br/>Flyway 迁移（V2__init_schema 起）<br/>user / scope / source / wiki_page<br/>wiki_page_link / tag / keyword<br/>execution / execution_step / schema_config<br/>scope_budget / lint_finding / notification…"] -->|"写入时同步"| ES["Elasticsearch<br/>检索索引（indexPage/search/suggest/rebuild）"]
+    MY -->|"引用"| SP["StorageProvider 抽象<br/>Local / NAS / S3<br/>raw/（不可变源） + wiki/（编译产物）"]
+    MY -->|"可选"| MQ["RocketMQ<br/>pipeline/control/lint 三 Topic"]
+    SP --> PY["Python 子进程<br/>doc_parser.py（解析 raw → parsed）"]
+  </div>
+  <div class="figcap">图 5.2 数据存储映射（MySQL 为真相，ES 为检索视图，Storage 为文件事实）</div>
+  <div class="callout warn"><strong>一致性约定</strong>：MySQL 是<b>唯一权威</b>（页面元数据、状态机、预算）；ES 是<b>可重建的检索视图</b>（<code>rebuildIndex</code> 端点可全量重建）；raw 文件<b>不可变</b>（写后不改）。因此不存在"双写不一致不可恢复"问题。</div>
+
+  <h3>5.5 前端交互契约（Vue3 + TS + Vite 侧）</h3>
+  <ul>
+    <li><strong>统一 axios 契约</strong>（<span class="klass">api/index.ts</span>）：请求注入 <code>Authorization: Bearer</code> + <code>X-Scope-Id</code> + <code>Accept-Language</code>；响应统一 <code>success/data</code> 判断，业务错误码映射 <code>errors.${code}</code> i18n 文案本地化；<b>401 → 清理凭证跳登录</b>。</li>
+    <li><strong>SSE 双通道</strong>：问答用 <code>createQuerySSE</code>（EventSource + token/scopeIds/mode 查询参数）；摄入/体检进度用各自的 stream 端点 + 失败轮询补发。</li>
+    <li><strong>状态流管理</strong>：Pinia stores（execution / ingestProgress / taskProgress）驱动顶部/浮动进度组件，SSE 事件 → store 更新 → UI 组件响应。</li>
+    <li><strong>i18n</strong>：zh-CN / en 双语言，错误码、UI 文案、AI 界面文案统一走 locale 文件。</li>
+  </ul>
+</div>
+
+<!-- ==================== 第六章 设计理念 ==================== -->
+<div class="card" id="sec-philosophy">
+  <h2>6. 设计理念与为什么（架构决策的因果链）</h2>
+
+  <table>
+    <tr><th>#</th><th>设计决策</th><th>解决什么问题</th><th>为什么这么设计（因果）</th></tr>
+    <tr>
+      <td>1</td>
+      <td><strong>知识编译隐喻</strong><br/>raw→parsed→wiki→schema 逐层编译</td>
+      <td>LLM 输出不可信、不可控、不可回溯</td>
+      <td>仿照编译器：源头不可变 + 中间产物 + 目标产物 + 规则约束。任何一层错误可定位到上一层输入，且 schema 反向约束编译过程，形成<b>闭环内省</b>而非单向"生成即丢弃"。</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td><strong>Agent 自主导航，而非静态 RAG</strong><br/>Fact Agent 带 7 个工具自主检索</td>
+      <td>静态检索（top-k 段落）难以回答跨页、多跳、需精确读取源文件的问题</td>
+      <td>预检索（preRetrieveLight）只做<b>轻量起点</b>，真正的导航权交给 Agent（读页/查源/列页/查相关页），Layer1 事实骨架 + Layer2/3 综合的分层产出保证"先立事实、后做综合"，减少幻觉。</td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td><strong>两阶段人机协同</strong><br/>摄入/体检都留人工闸门与审批级别</td>
+      <td>AI 自动化的正确性风险</td>
+      <td>把错误的<b>代价前置</b>：分析阶段（廉价、无副作用）允许失败；执行阶段（贵、有副作用）必须过闸。<code>approval_level</code> 让不同 scope 可配置自动化程度——信任度高的团队可全自动。</td>
+    </tr>
+    <tr>
+      <td>4</td>
+      <td><strong>Schema 共治宪法</strong><br/>无人直接手编、版本化、注入所有 Agent</td>
+      <td>Prompt 漂移、知识库风格失控、规则散落各处</td>
+      <td>Schema 成为单一事实源（SSOT），7 段骨架强制结构，补丁由 Lint 发现驱动 —— 规则随知识库<b>共同演化</b>，而非管理员写死。注入（而非拼接参考）保证不可绕过。</td>
+    </tr>
+    <tr>
+      <td>5</td>
+      <td><strong>增量 + watermark + 报告短路</strong></td>
+      <td>LLM 成本随知识量线性爆炸</td>
+      <td>Lint 只扫变更页（filterCacheMissPageIds）、游标续检、signature 一致则跳过 LLM 重的建议步骤 —— <b>把浪费降到趋近 0</b>，让"每天体检"在经济上可持续。</td>
+    </tr>
+    <tr>
+      <td>6</td>
+      <td><strong>准确性优先的降级链</strong><br/>查询失败自动回退简单模式</td>
+      <td>Agent 管线不稳定会阻塞用户</td>
+      <td>一切外部失败（模型不可用/预检索失败/流中断）都 <code>onErrorResume</code> 回退 <code>runSimpleQuery</code> —— 用户永远得到回答；复杂能力的成功率低于简单模式时，自动降级是<b>产品体验的底线守卫</b>。</td>
+    </tr>
+    <tr>
+      <td>7</td>
+      <td><strong>DDD 分层 + 门面 + 编排器</strong></td>
+      <td>Agent 数量与流水线步骤膨胀导致代码纠缠</td>
+      <td>web→biz→domain 单向依赖、HarnessEngine 门面收敛入口、PipelineOrchestrator 集中状态机 —— <b>把"过程"（pipeline）与"能力"（agent）分离</b>，每类步骤可独立替换、并行、排序，业务语义在 domain 层沉淀。</td>
+    </tr>
+    <tr>
+      <td>8</td>
+      <td><strong>治理四件套全路径闸门</strong></td>
+      <td>多 Agent 并发下预算击穿、越权读写、死循环</td>
+      <td>RateLimit/Barrier/Approval/TokenUsage 不是"可选优化"而是<b>执行前置条件</b>（门面内置 <code>tryAcquireConcurrent</code>），配合 ToolExecutionPipeline 八过滤器 —— 让 LLM 在高自由度下仍处于可预期边界内。</td>
+    </tr>
+  </table>
+
+  <div class="callout"><strong>一句话总结设计哲学</strong>：LLM-WIKI 不是"把 AI 塞进知识库"，而是把知识库建模为<b>一个可编译、可体检、可治控的软件系统</b>——LLM 只是其中受约束的执行单元，正确性靠"编译链 + 闸门 + 验证 + 宪法"系统性保证，而非寄望于单次提示词。</div>
+</div>
+
+<!-- ==================== 第七章 技术栈 ==================== -->
+<div class="card" id="sec-stack">
+  <h2>7. 技术栈与关键契约速查</h2>
+
+  <h3>7.1 技术栈清单</h3>
+  <table>
+    <tr><th>域</th><th>技术选型</th></tr>
+    <tr><td>后端框架</td><td>Java 17 + Spring Boot + Spring AI（ChatClient/ChatModel） + WebFlux（Flux 流式） + Spring Scheduled</td></tr>
+    <tr><td>持久化</td><td>MySQL + MyBatis（common/dal DO+Mapper）+ Flyway 迁移</td></tr>
+    <tr><td>检索</td><td>Elasticsearch（indexPage / search / suggest / rebuildIndex）</td></tr>
+    <tr><td>文件存储</td><td>StorageProvider 抽象：Local / NAS / S3（raw/ 不可变 + wiki/ 产物）</td></tr>
+    <tr><td>消息</td><td>RocketMQ（可选，三 Topic）／本地线程池降级</td></tr>
+    <tr><td>解析器</td><td>Python 子进程 doc_parser.py（PythonProcessRunner 编排）</td></tr>
+    <tr><td>安全</td><td>JWT（JwtTokenProvider）+ 全局 scope_id 隔离 + 401 前端跳转</td></tr>
+    <tr><td>前端</td><td>Vue 3 + TypeScript + Vite + Element Plus + Pinia + EventSource(SSE)</td></tr>
+    <tr><td>模型接入</td><td>DashScope(通义) 系 + 深度分析模型（deepMode 切换）；LlmClient 抽象可扩展</td></tr>
+  </table>
+
+  <h3>7.2 核心契约速查</h3>
+  <table>
+    <tr><th>契约</th><th>说明</th></tr>
+    <tr><td>统一响应</td><td><code>Result&lt;T&gt;</code>：<code>success / code / msg / data / extra</code>；错误码 <code>ErrorCode</code> 枚举 + <code>BusinessException</code></td></tr>
+    <tr><td>SSE 问答事件</td><td><code>start → mode → step(retrieving/generating/synthesizing) → answer-chunk* → answer-complete</code>｜异常 <code>error</code></td></tr>
+    <tr><td>SSE 摄入事件</td><td><code>init / step / done / pause</code> + startPeriodicSync 失败补发</td></tr>
+    <tr><td>鉴权头</td><td><code>Authorization: Bearer &lt;JWT&gt;</code>、<code>X-Scope-Id</code>、<code>Accept-Language</code></td></tr>
+    <tr><td>执行模型</td><td><code>ExecutionModel</code>（id/type/status/steps）；<code>execution_step.approval_level = auto|review|approval</code></td></tr>
+    <tr><td>页面健康</td><td><code>wiki_page.health_status = healthy|degraded|conflicted|recalled|default</code>；<code>source_count</code> 多来源计数</td></tr>
+    <tr><td>Schema</td><td><code>schema_config</code>(WIKI_SCHEMA_KEY) 版本化；来源 BOOTSTRAP/PATCH/MANUAL/ROLLBACK</td></tr>
+  </table>
+
+  <p style="margin-top: 24px; color: var(--text-dim); font-size: 13px;">
+    报告完 · LLM-WIKI Detailed Design（基于源码勘察，2026-08）｜核心代码仓：<code>llmwiki/app/{web,biz/service,domain/service,common}</code> 与 <code>llmwiki-web-ui/src</code>
+  </p>
+</div>
+
+</div><!-- /.main -->
+
+<script>
+  if (typeof window.mermaid === 'undefined') {
+    document.documentElement.setAttribute('data-mermaid-missing', '1');
+  } else {
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      darkMode: true,
+      background: '#0a0e14',
+      primaryColor: '#1f2937',
+      primaryTextColor: '#e6edf3',
+      primaryBorderColor: '#30363d',
+      lineColor: '#8b949e',
+      secondaryColor: '#21262d',
+      tertiaryColor: '#161b22',
+      actorBkg: '#1f2937',
+      actorBorder: '#30363d',
+      actorTextColor: '#e6edf3',
+      activationBkgColor: '#21262d',
+      signalColor: '#8b949e',
+      signalTextColor: '#e6edf3',
+      labelBoxBkgColor: '#1f2937',
+      labelBoxBorderColor: '#58a6ff',
+      labelTextColor: '#e6edf3',
+      loopTextColor: '#8b949e',
+      noteBkgColor: '#2d333b',
+      noteTextColor: '#e6edf3',
+      noteBorderColor: '#30363d'
+    },
+    flowchart: { curve: 'basis', padding: 12 },
+    sequence: { mirrorActors: false, useMaxWidth: false, width: 760 }
+  });
+  }
+</script>
+</body>
+</html>

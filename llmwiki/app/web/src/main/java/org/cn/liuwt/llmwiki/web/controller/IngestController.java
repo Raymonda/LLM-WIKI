@@ -21,6 +21,7 @@ import org.cn.liuwt.llmwiki.service.harness.mq.ControlMessage;
 import org.cn.liuwt.llmwiki.service.harness.mq.ExecutionNodeRegistry;
 import org.cn.liuwt.llmwiki.service.harness.mq.MqHealthService;
 import org.cn.liuwt.llmwiki.service.harness.mq.PipelineTaskMessage;
+import org.cn.liuwt.llmwiki.service.ingest.IngestOrchestrationService;
 import org.cn.liuwt.llmwiki.service.ingest.IngestService;
 import org.cn.liuwt.llmwiki.web.security.JwtTokenProvider;
 import org.slf4j.Logger;
@@ -75,6 +76,9 @@ public class IngestController {
     @Autowired
     private MqHealthService mqHealthService;
 
+    @Autowired
+    private IngestOrchestrationService ingestOrchestrationService;
+
     @Value("${llmwiki.rocketmq.enabled:false}")
     private boolean mqEnabled;
 
@@ -89,32 +93,21 @@ public class IngestController {
 
     @PostMapping("/start")
     public Result<ExecutionInfo> startIngest(@RequestBody IngestRequest request) {
-        Long scopeId = request.getScopeId();
+        // API key 客户端不传 scopeId：回填认证上下文的 scope（JwtAuthenticationFilter
+        // 或 ApiKeyAuthFilter 写入）。JWT 前端始终显式传值，行为不变。
+        Long scopeId = request.getScopeId() != null ? request.getScopeId()
+                : jwtTokenProvider.getCurrentScopeId();
         SourceModel source = sourceService.getSource(request.getSourceId(), scopeId);
         if (source == null) {
             return Result.failed(ErrorCode.INGEST_SOURCE_NOT_FOUND);
         }
         logDuplicateWarning(source, scopeId);
-
-        ExecutionModel execution = ingestService.createExecution(scopeId, request.getSourceId());
-        setNodeOwnership(execution.getId());
-        ExecutionInfo info = toExecutionInfo(execution);
-        String guidance = request.getGuidance();
-
-        dispatchToMqOrLocal(execution.getId(), scopeId, request.getSourceId(), guidance,
-                PipelineTaskMessage.TYPE_INGEST_START,
-                () -> submitLocalTask(execution.getId(), () -> {
-                    try {
-                        ingestService.runIngestPipeline(execution.getId(), scopeId, request.getSourceId(), guidance);
-                    } catch (Exception e) {
-                        log.error("Ingest pipeline failed for executionId={}", execution.getId(), e);
-                        ExecutionModel current = ingestService.getProgress(execution.getId());
-                        if (current == null || !"cancelled".equals(current.getStatus())) {
-                            ingestService.failExecution(execution.getId());
-                        }
-                    }
-                }));
-        return Result.success(info);
+        try {
+            ExecutionModel execution = ingestOrchestrationService.startIngest(scopeId, request.getSourceId(), request.getGuidance());
+            return Result.success(toExecutionInfo(execution));
+        } catch (IllegalArgumentException e) {
+            return Result.failed(ErrorCode.INGEST_SOURCE_NOT_FOUND);
+        }
     }
 
     @PostMapping("/analyze")

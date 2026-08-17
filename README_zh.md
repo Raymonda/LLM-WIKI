@@ -181,6 +181,27 @@ llmwiki-web-ui/           # 前端（Vue 3 + Vite）
 └── src/api/              # Axios API 层
 ```
 
+## Agent / MCP 接入
+
+LLM Wiki 内嵌 MCP server（streamable HTTP，端点 `/mcp`），供 agent harness 检索与扩展知识库：
+
+- **工具（第一期）**：`wiki_search`、`wiki_read_page`、`wiki_ask`、`wiki_ingest_text`、`wiki_ingest_status`、`wiki_cancel_ingest`
+- **认证**：管理员签发 API Key（`POST /api/keys`，`llmwiki_` 前缀的 Bearer token），任意 MCP 客户端按下方样例接入：
+
+```json
+{
+  "mcpServers": {
+    "llmwiki": {
+      "type": "http",
+      "url": "http://localhost:8080/mcp",
+      "headers": { "Authorization": "Bearer llmwiki_xxx" }
+    }
+  }
+}
+```
+
+- **deepseek-harness 用户**：另可加载 `plugin-llmwiki` 伴生插件，获得文件摄入（`llmwiki_ingest_file`）、长任务跟随（`llmwiki_follow_ingest`）与 `/wiki` 命令。见 deepseek-harness 仓库 `packages/extensions/plugin-llmwiki`。
+
 ## License
 
 [MIT](LICENSE)
