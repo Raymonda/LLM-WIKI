@@ -29,7 +29,7 @@ public class ApiKeyService {
     public record ApiKeyCreation(Long id, String rawKey) {}
     public record ApiKeyValidation(Long userId, Long scopeId, String role) {}
 
-    private record CachedValidation(ApiKeyValidation validation, long cachedAtMs) {}
+    private record CachedValidation(ApiKeyValidation validation, LocalDateTime expiresAt, long cachedAtMs) {}
 
     private final ApiKeyMapper apiKeyMapper;
     private final UserService userService;
@@ -72,6 +72,10 @@ public class ApiKeyService {
         String hash = sha256Hex(rawKey);
         CachedValidation cached = validationCache.get(hash);
         if (cached != null && System.currentTimeMillis() - cached.cachedAtMs() < CACHE_TTL_MS) {
+            if (cached.expiresAt() != null && cached.expiresAt().isBefore(LocalDateTime.now())) {
+                validationCache.remove(hash);
+                return null;
+            }
             return cached.validation();
         }
         ApiKeyDO d = apiKeyMapper.selectOne(
@@ -88,7 +92,7 @@ public class ApiKeyService {
         }
         ApiKeyValidation validation = new ApiKeyValidation(
             d.getUserId(), d.getScopeId(), user.getRole() != null ? user.getRole() : "user");
-        validationCache.put(hash, new CachedValidation(validation, System.currentTimeMillis()));
+        validationCache.put(hash, new CachedValidation(validation, d.getExpiresAt(), System.currentTimeMillis()));
         touchLastUsed(d.getId());
         return validation;
     }

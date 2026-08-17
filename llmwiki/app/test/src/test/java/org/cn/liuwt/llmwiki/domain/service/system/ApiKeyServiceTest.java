@@ -112,6 +112,29 @@ class ApiKeyServiceTest {
     }
 
     @Test
+    void shouldReturnNullWhenCachedKeyExpiresWithinTtl() throws InterruptedException {
+        ApiKeyDO d = new ApiKeyDO();
+        d.setUserId(7L);
+        d.setScopeId(5L);
+        d.setStatus("active");
+        d.setExpiresAt(LocalDateTime.now().plusNanos(150_000_000L));
+        when(apiKeyMapper.selectOne(any())).thenReturn(d);
+        UserModel user = new UserModel();
+        user.setId(7L);
+        user.setStatus("active");
+        user.setRole("user");
+        when(userService.getUserById(7L)).thenReturn(user);
+        String rawKey = "llmwiki_" + "x".repeat(43);
+
+        assertThat(apiKeyService.validate(rawKey)).isNotNull();
+
+        Thread.sleep(200L);
+
+        assertThat(apiKeyService.validate(rawKey)).isNull();
+        verify(apiKeyMapper, times(1)).selectOne(any());
+    }
+
+    @Test
     void shouldSetRevokedWhenRevokeKey() {
         ApiKeyDO d = new ApiKeyDO();
         d.setId(3L);
