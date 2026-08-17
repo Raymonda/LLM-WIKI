@@ -69,6 +69,7 @@ LLM Wiki 对知识的处理本质上是 AI 对知识的一次"编译"。以下�
 | 对象存储 | Local（默认）/ NAS / MinIO（S3 兼容） | 可配置切换 |
 | 消息队列 | RocketMQ + rocketmq-spring-boot-starter | 可选，分布式模式 |
 | 文档解析 | Python 子进程（`tools/doc_parser.py`） | PyMuPDF / pandoc 等 |
+| MCP Server | spring-ai MCP server（`spring-ai-starter-mcp-server-webmvc`，streamable-http `/mcp`，工具实现见 `app/web/.../web/mcp/WikiMcpTools.java`） | 1.1.x |
 | 构建 | Maven | 3.9+ |
 
 ### 前端
@@ -157,6 +158,15 @@ npm run lint
 ```
 
 前端可单独启动验证 UI 改动（无需后端），但登录和数据操作需要后端服务。PowerShell 不支持 `&&` 连接命令，用 `;` 代替。
+
+## Agent 接入（MCP 工具）规则
+
+- MCP 工具只增不改语义：新增工具放 `WikiMcpTools`，用 `@Tool`/`@ToolParam` 声明，经 `WikiMcpConfig` 的 `MethodToolCallbackProvider` 注册。
+- scope 红线在 MCP 面同样生效：scope 一律经 `currentScopeId()`（认证 filter 写入的 request attributes）解析，绝不新增接受 `scopeId` 参数的工具。
+- agent 写入知识库必须走完整编译 Pipeline（`wiki_ingest_text` → `IngestOrchestrationService`），禁止任何工具直接写 `wiki/` 或绕过管线改页。
+- `raw/` 不可写语义不变：文本摄入写入 `raw/` 的唯一入口是 `SourceService.uploadTextSource`。
+- 长任务三态独立报告：`wiki_ask` 超时返回 `{answer, steps, timedOut:true}`，不得把超时混入错误信息或吞掉部分答案。
+- API Key 是机器身份凭证：签发/吊销走 `/api/keys`（ADMIN）；环境变量名约定 `LLMWIKI_API_KEY`（DSH 侧插件读取），不要硬编码进任何仓库文件。
 
 ## 编码约定
 
