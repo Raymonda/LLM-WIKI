@@ -1,7 +1,11 @@
 package org.cn.liuwt.llmwiki.web.mcp;
 
+import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
+import org.cn.liuwt.llmwiki.domain.model.wiki.WikiPageModel;
 import org.cn.liuwt.llmwiki.domain.service.search.SearchService;
+import org.cn.liuwt.llmwiki.domain.service.wiki.WikiFileServiceImpl;
 import org.cn.liuwt.llmwiki.facade.model.SearchResultInfo;
+import org.cn.liuwt.llmwiki.service.query.QueryService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -12,11 +16,18 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import reactor.core.publisher.Flux;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -24,6 +35,12 @@ class WikiMcpToolsTest {
 
     @Mock
     private SearchService searchService;
+
+    @Mock
+    private WikiFileServiceImpl wikiFileService;
+
+    @Mock
+    private QueryService queryService;
 
     @InjectMocks
     private WikiMcpTools tools;
@@ -101,5 +118,97 @@ class WikiMcpToolsTest {
 
         assertEquals(1, hits.size());
         assertEquals(9L, hits.get(0).get("pageId"));
+    }
+
+    private WikiPageModel page(long id, String path) {
+        WikiPageModel p = new WikiPageModel();
+        p.setId(id);
+        p.setTitle("页面-" + id);
+        p.setPath(path);
+        p.setCategory("guide");
+        p.setSummary("摘要");
+        p.setContent("# 正文");
+        return p;
+    }
+
+    @Test
+    void shouldReturnPageAndSourcesWhenWikiReadPageCalledWithId() {
+        when(wikiFileService.readPageById(5L, 100L)).thenReturn(page(5L, "docs/quickstart.md"));
+        SourceDO source = new SourceDO();
+        source.setId(42L);
+        source.setName("notes.md");
+        source.setStatus("processed");
+        when(wikiFileService.getPageSources(5L, 100L)).thenReturn(List.of(source));
+
+        Map<String, Object> result = tools.wikiReadPage(5L, null);
+
+        assertEquals("docs/quickstart.md", result.get("path"));
+        assertEquals("# 正文", result.get("content"));
+        assertEquals(1, ((List<?>) result.get("sources")).size());
+    }
+
+    @Test
+    void shouldReturnPageWhenWikiReadPageCalledWithPath() {
+        when(wikiFileService.readPageByFilePath("docs/quickstart.md", 100L))
+                .thenReturn(page(5L, "docs/quickstart.md"));
+        when(wikiFileService.getPageSources(5L, 100L)).thenReturn(List.of());
+
+        Map<String, Object> result = tools.wikiReadPage(null, "docs/quickstart.md");
+
+        assertEquals(5L, result.get("pageId"));
+    }
+
+    @Test
+    void shouldThrowWhenWikiReadPageCalledWithoutIdAndPath() {
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> tools.wikiReadPage(null, "  "));
+        assertTrue(ex.getMessage().contains("pageId"));
+    }
+
+    @Test
+    void shouldThrowWhenWikiReadPageMisses() {
+        when(wikiFileService.readPageById(99L, 100L)).thenReturn(null);
+        assertThrows(IllegalArgumentException.class, () -> tools.wikiReadPage(99L, null));
+    }
+
+    @Test
+    void shouldAggregateAnswerAndStepsWhenWikiAskCalled() {
+        when(queryService.queryWikiStreaming(eq(100L), eq("什么是X？"), anyString(), eq(false)))
+                .thenReturn(Flux.just("__STEP__:retrieve", "X 是 ", "一种设计模式"));
+
+        Map<String, Object> result = tools.wikiAsk("什么是X？", null);
+
+        assertEquals("X 是 一种设计模式", result.get("answer"));
+        assertEquals(List.of("retrieve"), result.get("steps"));
+        assertEquals(false, result.get("timedOut"));
+    }
+
+    @Test
+    void shouldPassDeepModeThroughWhenWikiAskCalledWithDeep() {
+        when(queryService.queryWikiStreaming(eq(100L), anyString(), anyString(), eq(true)))
+                .thenReturn(Flux.just("深度答案"));
+
+        Map<String, Object> result = tools.wikiAsk("复杂问题", "deep");
+
+        assertEquals("深度答案", result.get("answer"));
+    }
+
+    @Test
+    void shouldReportTimeoutWhenStreamNeverCompletes() {
+        WikiMcpTools.AskResult result = WikiMcpTools.collectAnswer(Flux.never(), Duration.ofMillis(50));
+
+        assertTrue(result.timedOut());
+        assertEquals("", result.answer());
+        assertEquals(List.of(), result.steps());
+    }
+
+    @Test
+    void shouldNotTimeoutWhenStreamCompletes() {
+        WikiMcpTools.AskResult result =
+                WikiMcpTools.collectAnswer(Flux.just("a", "__STEP__:s", "b"), Duration.ofSeconds(5));
+
+        assertFalse(result.timedOut());
+        assertEquals("ab", result.answer());
+        assertEquals(List.of("s"), result.steps());
     }
 }
