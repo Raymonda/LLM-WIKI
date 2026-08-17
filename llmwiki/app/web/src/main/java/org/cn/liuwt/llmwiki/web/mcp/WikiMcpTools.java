@@ -61,7 +61,7 @@ public class WikiMcpTools {
     private static final Duration ASK_TIMEOUT_DEEP = Duration.ofSeconds(280);
     private static final String STEP_PREFIX = "__STEP__:";
 
-    @Tool(description = "在当前 scope 的知识库中检索 wiki 页面。返回 pageId、标题、路径、摘要与相关度评分；先用本工具定位，再用 wiki_read_page 精读。")
+    @Tool(name = "wiki_search", description = "在当前 scope 的知识库中检索 wiki 页面。返回 pageId、标题、路径、摘要与相关度评分；先用本工具定位，再用 wiki_read_page 精读。")
     public List<Map<String, Object>> wikiSearch(
             @ToolParam(description = "检索关键词或问题") String query,
             @ToolParam(required = false, description = "分类过滤（如 guide/concept），不填则全部分类") String category,
@@ -95,7 +95,7 @@ public class WikiMcpTools {
         return (Long) currentAttributes().getRequest().getAttribute("userId");
     }
 
-    @Tool(description = "按 pageId 或文件路径读取一个 wiki 页面的完整 Markdown 内容，并列出支撑它的来源。pageId 与 filePath 二选一。")
+    @Tool(name = "wiki_read_page", description = "按 pageId 或文件路径读取一个 wiki 页面的完整 Markdown 内容，并列出支撑它的来源。pageId 与 filePath 二选一。")
     public Map<String, Object> wikiReadPage(
             @ToolParam(required = false, description = "wiki_search 返回的 pageId") Long pageId,
             @ToolParam(required = false, description = "wiki 页面文件路径（如 docs/quickstart.md），与 pageId 二选一") String filePath) {
@@ -133,7 +133,7 @@ public class WikiMcpTools {
         return result;
     }
 
-    @Tool(description = "向知识库提问，获得基于 wiki 内容的生成答案。quick（默认）较快；deep 多步检索更慢但更全面。超时会返回已生成的部分答案与 timedOut=true。")
+    @Tool(name = "wiki_ask", description = "向知识库提问，获得基于 wiki 内容的生成答案。quick（默认）较快；deep 多步检索更慢但更全面。超时会返回已生成的部分答案与 timedOut=true。")
     public Map<String, Object> wikiAsk(
             @ToolParam(description = "问题") String question,
             @ToolParam(required = false, description = "quick（默认）或 deep") String mode) {
@@ -174,7 +174,7 @@ public class WikiMcpTools {
         return new AskResult(answer.toString(), List.copyOf(steps), timedOut[0]);
     }
 
-    @Tool(description = "把一段 Markdown 文本作为新来源摄入知识库：写入 raw/ 存储并启动完整摄入流水线（分析、编译、链接）。摄入是长任务，本工具立即返回 executionId；用 wiki_ingest_status 查询进度。")
+    @Tool(name = "wiki_ingest_text", description = "把一段 Markdown 文本作为新来源摄入知识库：写入 raw/ 存储并启动完整摄入流水线（分析、编译、链接）。摄入是长任务，本工具立即返回 executionId；用 wiki_ingest_status 查询进度。")
     public Map<String, Object> wikiIngestText(
             @ToolParam(description = "来源标题（无需 .md 后缀）") String title,
             @ToolParam(description = "Markdown 正文") String content,
@@ -194,7 +194,7 @@ public class WikiMcpTools {
         return result;
     }
 
-    @Tool(description = "查询一次摄入执行的进度：总体状态、当前步骤、步骤清单与错误信息。")
+    @Tool(name = "wiki_ingest_status", description = "查询一次摄入执行的进度：总体状态、当前步骤、步骤清单与错误信息。")
     public Map<String, Object> wikiIngestStatus(
             @ToolParam(description = "wiki_ingest_text 返回的 executionId") Long executionId) {
         Long scopeId = currentScopeId();
@@ -219,7 +219,7 @@ public class WikiMcpTools {
         return result;
     }
 
-    @Tool(description = "取消一次进行中的摄入执行。已完成/已失败/已取消的执行不可再取消。")
+    @Tool(name = "wiki_cancel_ingest", description = "取消一次进行中的摄入执行。已完成/已失败/已取消的执行不可再取消。")
     public Map<String, Object> wikiCancelIngest(
             @ToolParam(description = "要取消的 executionId") Long executionId) {
         Long scopeId = currentScopeId();

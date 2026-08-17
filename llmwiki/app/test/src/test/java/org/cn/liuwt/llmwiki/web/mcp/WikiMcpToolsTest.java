@@ -19,12 +19,15 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import reactor.core.publisher.Flux;
 
+import java.lang.reflect.Method;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -316,5 +319,20 @@ class WikiMcpToolsTest {
 
         assertThrows(IllegalStateException.class, () -> tools.wikiCancelIngest(123L));
         verify(ingestService, never()).cancelExecution(123L, 100L);
+    }
+
+    @Test
+    void shouldDeclareSnakeCaseNamesOnAllTools() {
+        List<String> names = new ArrayList<>();
+        for (Method method : WikiMcpTools.class.getDeclaredMethods()) {
+            Tool tool = method.getAnnotation(Tool.class);
+            if (tool != null) {
+                names.add(tool.name());
+            }
+        }
+        assertEquals(6, names.size());
+        assertEquals(List.of("wiki_ask", "wiki_cancel_ingest", "wiki_ingest_status",
+                "wiki_ingest_text", "wiki_read_page", "wiki_search"),
+                names.stream().sorted().toList());
     }
 }
