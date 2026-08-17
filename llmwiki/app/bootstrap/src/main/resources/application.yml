@@ -32,9 +32,7 @@ spring:
         name: llmwiki
         version: 1.1.0
         type: SYNC
-        streamable-http:
-          enabled: true
-          endpoint: /mcp
+        protocol: STREAMABLE
 
   servlet:
     multipart:
