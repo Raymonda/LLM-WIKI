@@ -1,10 +1,16 @@
 package org.cn.liuwt.llmwiki.web.mcp;
 
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
+import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.model.wiki.WikiPageModel;
 import org.cn.liuwt.llmwiki.domain.service.search.SearchService;
+import org.cn.liuwt.llmwiki.domain.service.wiki.SourceService;
 import org.cn.liuwt.llmwiki.domain.service.wiki.WikiFileServiceImpl;
+import org.cn.liuwt.llmwiki.facade.model.DuplicateInfo;
 import org.cn.liuwt.llmwiki.facade.model.SearchResultInfo;
+import org.cn.liuwt.llmwiki.service.harness.mq.ExecutionNodeRegistry;
+import org.cn.liuwt.llmwiki.service.ingest.IngestOrchestrationService;
+import org.cn.liuwt.llmwiki.service.ingest.IngestService;
 import org.cn.liuwt.llmwiki.service.query.QueryService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,9 +31,12 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -41,6 +50,18 @@ class WikiMcpToolsTest {
 
     @Mock
     private QueryService queryService;
+
+    @Mock
+    private SourceService sourceService;
+
+    @Mock
+    private IngestOrchestrationService ingestOrchestrationService;
+
+    @Mock
+    private IngestService ingestService;
+
+    @Mock
+    private ExecutionNodeRegistry executionNodeRegistry;
 
     @InjectMocks
     private WikiMcpTools tools;
@@ -210,5 +231,90 @@ class WikiMcpToolsTest {
         assertFalse(result.timedOut());
         assertEquals("ab", result.answer());
         assertEquals(List.of("s"), result.steps());
+    }
+
+    private ExecutionModel execution(long id, Long scopeId, String status) {
+        ExecutionModel e = new ExecutionModel();
+        e.setId(id);
+        e.setScopeId(scopeId);
+        e.setStatus(status);
+        return e;
+    }
+
+    @Test
+    void shouldStartIngestAndReturnIdsWhenWikiIngestTextCalled() {
+        org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel source = new org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel();
+        source.setId(42L);
+        when(sourceService.uploadTextSource("笔记", "# 内容", 100L, 7L)).thenReturn(source);
+        when(ingestOrchestrationService.startIngest(100L, 42L, "补充指引"))
+                .thenReturn(execution(123L, 100L, "pending"));
+
+        Map<String, Object> result = tools.wikiIngestText("笔记", "# 内容", "补充指引");
+
+        assertEquals(123L, result.get("executionId"));
+        assertEquals(42L, result.get("sourceId"));
+        assertEquals("pending", result.get("status"));
+        assertNull(result.get("duplicateWarning"));
+    }
+
+    @Test
+    void shouldWarnDuplicateWhenUploadMatchesExistingSource() {
+        org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel source = new org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel();
+        source.setId(42L);
+        DuplicateInfo duplicateInfo = new DuplicateInfo();
+        duplicateInfo.setMessage("此内容与已有来源「旧文档」相同");
+        source.setDuplicateInfo(duplicateInfo);
+        when(sourceService.uploadTextSource("笔记", "# 内容", 100L, 7L)).thenReturn(source);
+        when(ingestOrchestrationService.startIngest(100L, 42L, null))
+                .thenReturn(execution(124L, 100L, "pending"));
+
+        Map<String, Object> result = tools.wikiIngestText("笔记", "# 内容", null);
+
+        assertEquals("此内容与已有来源「旧文档」相同", result.get("duplicateWarning"));
+    }
+
+    @Test
+    void shouldReportStatusAndCurrentStepWhenWikiIngestStatusCalled() {
+        ExecutionModel e = execution(123L, 100L, "running");
+        ExecutionModel.ExecutionStepModel done = new ExecutionModel.ExecutionStepModel();
+        done.setStepName("UPLOAD");
+        done.setStatus("completed");
+        ExecutionModel.ExecutionStepModel active = new ExecutionModel.ExecutionStepModel();
+        active.setStepName("ANALYZE");
+        active.setStatus("running");
+        e.setSteps(List.of(done, active));
+        when(ingestService.getProgress(123L)).thenReturn(e);
+
+        Map<String, Object> result = tools.wikiIngestStatus(123L);
+
+        assertEquals("running", result.get("status"));
+        assertEquals("ANALYZE", result.get("currentStep"));
+        assertEquals(List.of("UPLOAD:completed", "ANALYZE:running"), result.get("steps"));
+    }
+
+    @Test
+    void shouldThrowWhenIngestStatusAskedForForeignScope() {
+        when(ingestService.getProgress(123L)).thenReturn(execution(123L, 999L, "running"));
+
+        assertThrows(IllegalArgumentException.class, () -> tools.wikiIngestStatus(123L));
+    }
+
+    @Test
+    void shouldCancelRunningExecutionWhenWikiCancelIngestCalled() {
+        when(ingestService.getProgress(123L)).thenReturn(execution(123L, 100L, "running"));
+
+        Map<String, Object> result = tools.wikiCancelIngest(123L);
+
+        assertEquals("cancelled", result.get("status"));
+        verify(ingestService).cancelExecution(123L, 100L);
+        verify(executionNodeRegistry).cancelAndRemoveFuture(123L);
+    }
+
+    @Test
+    void shouldThrowWhenCancelRequestedForFinishedExecution() {
+        when(ingestService.getProgress(123L)).thenReturn(execution(123L, 100L, "completed"));
+
+        assertThrows(IllegalStateException.class, () -> tools.wikiCancelIngest(123L));
+        verify(ingestService, never()).cancelExecution(123L, 100L);
     }
 }

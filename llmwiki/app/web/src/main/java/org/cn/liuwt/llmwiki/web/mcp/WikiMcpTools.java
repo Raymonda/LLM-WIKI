@@ -1,10 +1,16 @@
 package org.cn.liuwt.llmwiki.web.mcp;
 
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
+import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
+import org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel;
 import org.cn.liuwt.llmwiki.domain.model.wiki.WikiPageModel;
 import org.cn.liuwt.llmwiki.domain.service.search.SearchService;
+import org.cn.liuwt.llmwiki.domain.service.wiki.SourceService;
 import org.cn.liuwt.llmwiki.domain.service.wiki.WikiFileServiceImpl;
 import org.cn.liuwt.llmwiki.facade.model.SearchResultInfo;
+import org.cn.liuwt.llmwiki.service.harness.mq.ExecutionNodeRegistry;
+import org.cn.liuwt.llmwiki.service.ingest.IngestOrchestrationService;
+import org.cn.liuwt.llmwiki.service.ingest.IngestService;
 import org.cn.liuwt.llmwiki.service.query.QueryService;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -38,6 +44,18 @@ public class WikiMcpTools {
 
     @Autowired
     private QueryService queryService;
+
+    @Autowired
+    private SourceService sourceService;
+
+    @Autowired
+    private IngestOrchestrationService ingestOrchestrationService;
+
+    @Autowired
+    private IngestService ingestService;
+
+    @Autowired
+    private ExecutionNodeRegistry registry;
 
     private static final Duration ASK_TIMEOUT_QUICK = Duration.ofSeconds(55);
     private static final Duration ASK_TIMEOUT_DEEP = Duration.ofSeconds(280);
@@ -154,6 +172,87 @@ public class WikiMcpTools {
             timedOut[0] = true;
         }
         return new AskResult(answer.toString(), List.copyOf(steps), timedOut[0]);
+    }
+
+    @Tool(description = "把一段 Markdown 文本作为新来源摄入知识库：写入 raw/ 存储并启动完整摄入流水线（分析、编译、链接）。摄入是长任务，本工具立即返回 executionId；用 wiki_ingest_status 查询进度。")
+    public Map<String, Object> wikiIngestText(
+            @ToolParam(description = "来源标题（无需 .md 后缀）") String title,
+            @ToolParam(description = "Markdown 正文") String content,
+            @ToolParam(required = false, description = "给摄入管线的额外指引（如重点提取什么）") String guidance) {
+        Long scopeId = currentScopeId();
+        Long userId = currentUserId();
+        SourceModel source = sourceService.uploadTextSource(title, content, scopeId, userId);
+        ExecutionModel execution = ingestOrchestrationService.startIngest(scopeId, source.getId(), guidance);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("executionId", execution.getId());
+        result.put("sourceId", source.getId());
+        result.put("status", execution.getStatus());
+        if (source.getDuplicateInfo() != null) {
+            result.put("duplicateWarning", source.getDuplicateInfo().getMessage());
+        }
+        result.put("hint", "摄入为长任务：用 wiki_ingest_status 轮询，或在 deepseek-harness 侧用 llmwiki_follow_ingest 跟随完成事件。");
+        return result;
+    }
+
+    @Tool(description = "查询一次摄入执行的进度：总体状态、当前步骤、步骤清单与错误信息。")
+    public Map<String, Object> wikiIngestStatus(
+            @ToolParam(description = "wiki_ingest_text 返回的 executionId") Long executionId) {
+        Long scopeId = currentScopeId();
+        ExecutionModel execution = ingestService.getProgress(executionId);
+        if (execution == null || !scopeId.equals(execution.getScopeId())) {
+            throw new IllegalArgumentException("execution 不存在或不在当前 scope 内: " + executionId);
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("executionId", executionId);
+        result.put("status", execution.getStatus());
+        result.put("currentStep", currentStepName(execution));
+        if (execution.getErrorMessage() != null) {
+            result.put("errorMessage", execution.getErrorMessage());
+        }
+        List<String> steps = new ArrayList<>();
+        if (execution.getSteps() != null) {
+            for (ExecutionModel.ExecutionStepModel s : execution.getSteps()) {
+                steps.add(s.getStepName() + ":" + s.getStatus());
+            }
+        }
+        result.put("steps", steps);
+        return result;
+    }
+
+    @Tool(description = "取消一次进行中的摄入执行。已完成/已失败/已取消的执行不可再取消。")
+    public Map<String, Object> wikiCancelIngest(
+            @ToolParam(description = "要取消的 executionId") Long executionId) {
+        Long scopeId = currentScopeId();
+        ExecutionModel execution = ingestService.getProgress(executionId);
+        if (execution == null || !scopeId.equals(execution.getScopeId())) {
+            throw new IllegalArgumentException("execution 不存在或不在当前 scope 内: " + executionId);
+        }
+        String status = execution.getStatus();
+        if ("completed".equals(status) || "failed".equals(status)
+                || "cancelled".equals(status) || "budget_exhausted".equals(status)) {
+            throw new IllegalStateException("execution 已结束，状态为 " + status + "，不可取消");
+        }
+        // 与 IngestController.cancelIngest 的单机路径对齐：落库取消 + 中断本地线程。
+        // 已知限制：多机 MQ 部署下跨节点中断依赖 ControlMessage 广播（仅 Web 端点发送），
+        // 多机部署请用 Web UI 取消——首期分期决策（读写优先）。
+        ingestService.cancelExecution(executionId, execution.getScopeId());
+        registry.cancelAndRemoveFuture(executionId);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("executionId", executionId);
+        result.put("status", "cancelled");
+        return result;
+    }
+
+    private String currentStepName(ExecutionModel execution) {
+        List<ExecutionModel.ExecutionStepModel> steps = execution.getSteps();
+        if (steps == null || steps.isEmpty()) {
+            return null;
+        }
+        return steps.stream()
+                .filter(s -> !"completed".equals(s.getStatus()))
+                .map(ExecutionModel.ExecutionStepModel::getStepName)
+                .findFirst()
+                .orElseGet(() -> steps.get(steps.size() - 1).getStepName());
     }
 
     private static ServletRequestAttributes currentAttributes() {
