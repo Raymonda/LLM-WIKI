@@ -3,6 +3,7 @@ package org.cn.liuwt.llmwiki.web.mcp;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Lazy;
 
 /**
  * 把 WikiMcpTools 的 @Tool 方法挂到 spring-ai MCP server（streamable-http /mcp）。
@@ -11,7 +12,7 @@ import org.springframework.context.annotation.Configuration;
 public class WikiMcpConfig {
 
     @Bean
-    public MethodToolCallbackProvider wikiMcpToolProvider(WikiMcpTools wikiMcpTools) {
+    public MethodToolCallbackProvider wikiMcpToolProvider(@Lazy WikiMcpTools wikiMcpTools) {
         return MethodToolCallbackProvider.builder().toolObjects(wikiMcpTools).build();
     }
 }
