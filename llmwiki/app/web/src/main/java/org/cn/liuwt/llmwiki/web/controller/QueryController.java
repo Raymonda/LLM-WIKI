@@ -97,7 +97,7 @@ public class QueryController {
             return emitter;
         }
 
-        CompletableFuture<List<FunFactService.FunFact>> funFactsFuture = funFactService.generateFunFactsAsync(question);
+        CompletableFuture<List<FunFactService.FunFact>> funFactsFuture = funFactService.generateFunFactsAsync(scopeId, question);
         funFactsFuture.thenAccept(facts -> {
             if (!facts.isEmpty()) {
                 try {

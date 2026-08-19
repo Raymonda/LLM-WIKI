@@ -5,6 +5,7 @@ import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
+import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
 import org.cn.liuwt.llmwiki.common.util.result.Result;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
@@ -17,6 +18,7 @@ import org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel;
 import org.cn.liuwt.llmwiki.domain.service.wiki.SourceService;
 import org.cn.liuwt.llmwiki.domain.service.harness.baseline.ExecutionBaselineService;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
+import org.cn.liuwt.llmwiki.domain.service.system.ScopeService;
 import org.cn.liuwt.llmwiki.service.harness.mq.ControlMessage;
 import org.cn.liuwt.llmwiki.service.harness.mq.ExecutionNodeRegistry;
 import org.cn.liuwt.llmwiki.service.harness.mq.MqHealthService;
@@ -79,11 +81,24 @@ public class IngestController {
     @Autowired
     private IngestOrchestrationService ingestOrchestrationService;
 
+    @Autowired
+    private ScopeService scopeService;
+
     @Value("${llmwiki.rocketmq.enabled:false}")
     private boolean mqEnabled;
 
     private boolean isMqAvailable() {
         return rocketMQTemplate != null && mqEnabled;
+    }
+
+    private void assertExecutionReadable(ExecutionModel execution) {
+        if (execution == null || execution.getScopeId() == null) {
+            throw new BusinessException(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
+        }
+        Long userId = jwtTokenProvider.getCurrentUserId();
+        if (userId == null || !scopeService.canView(execution.getScopeId(), userId)) {
+            throw new BusinessException(ErrorCode.AUTH_ACCESS_DENIED);
+        }
     }
 
     @jakarta.annotation.PostConstruct
@@ -154,6 +169,7 @@ public class IngestController {
         if (execution == null) {
             return Result.failed(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
         }
+        assertExecutionReadable(execution);
         if (!"awaiting_confirmation".equals(execution.getStatus()) && !"awaiting_review".equals(execution.getStatus())) {
             return Result.failed(ErrorCode.INGEST_INVALID_STATUS_REVIEW);
         }
@@ -179,9 +195,10 @@ public class IngestController {
     @GetMapping(value = "/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamProgress(@PathVariable Long id) {
         log.warn("[DIAG] streamProgress called: executionId={}", id);
+        ExecutionModel current = ingestService.getProgress(id);
+        assertExecutionReadable(current);
         SseEmitter emitter = registry.createEmitter(id);
 
-        ExecutionModel current = ingestService.getProgress(id);
         if (current != null) {
             try {
                 emitter.send(SseEmitter.event()
@@ -277,12 +294,14 @@ public class IngestController {
     @GetMapping("/{id}/progress")
     public Result<ExecutionInfo> getProgress(@PathVariable Long id) {
         ExecutionModel execution = ingestService.getProgress(id);
+        assertExecutionReadable(execution);
         return Result.success(toExecutionInfo(execution));
     }
 
     @GetMapping("/{id}/result")
     public Result<ExecutionInfo> getResult(@PathVariable Long id) {
         ExecutionModel execution = ingestService.getResult(id);
+        assertExecutionReadable(execution);
         return Result.success(toExecutionInfo(execution));
     }
 
@@ -292,6 +311,7 @@ public class IngestController {
         if (execution == null) {
             return Result.failed(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
         }
+        assertExecutionReadable(execution);
         String currentStatus = execution.getStatus();
         if ("completed".equals(currentStatus) || "failed".equals(currentStatus)
                 || "cancelled".equals(currentStatus) || "budget_exhausted".equals(currentStatus)) {
@@ -322,6 +342,7 @@ public class IngestController {
         if (execution == null) {
             return Result.failed(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
         }
+        assertExecutionReadable(execution);
 
         String currentStatus = execution.getStatus();
         if ("running".equals(currentStatus) || "pending".equals(currentStatus) || "paused".equals(currentStatus)) {
@@ -342,6 +363,7 @@ public class IngestController {
         if (execution == null) {
             return Result.failed(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
         }
+        assertExecutionReadable(execution);
         String currentStatus = execution.getStatus();
         if ("completed".equals(currentStatus) || "failed".equals(currentStatus)
                 || "cancelled".equals(currentStatus) || "budget_exhausted".equals(currentStatus)
@@ -495,6 +517,7 @@ public class IngestController {
         if (execution == null) {
             return Result.failed(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
         }
+        assertExecutionReadable(execution);
         if (!"failed".equals(execution.getStatus()) && !"paused".equals(execution.getStatus())) {
             if ("cancelled".equals(execution.getStatus())) {
                 return Result.failed(ErrorCode.INGEST_CANCELLED_CANNOT_RESUME);

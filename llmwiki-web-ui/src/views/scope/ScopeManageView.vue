@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useToastStore } from '@/stores/toast'
@@ -8,7 +8,8 @@ import {
   listScopes, createScope, updateScope, deleteScope,
   addMember, removeMember, updateMemberRole, listMembers,
   listJoinRequests, reviewJoinRequest,
-  type ScopeInfo, type ScopeMemberInfo, type CreateScopeRequest, type JoinRequestInfo
+  type ScopeInfo, type ScopeMemberInfo, type CreateScopeRequest, type JoinRequestInfo,
+  type ScopeBriefInfo
 } from '@/api/scope'
 import { searchUsers, type UserSearchInfo } from '@/api/user'
 import {
@@ -42,6 +43,12 @@ const roleIcons: Record<string, any> = {
   editor: Pencil,
   viewer: Eye
 }
+
+const canManage = computed(() => {
+  if (!selectedScope.value || selectedScope.value.type !== 'team') return false
+  const current = authStore.scopes.find(s => s.scopeId === selectedScope.value!.id)
+  return current?.role === 'owner' || current?.role === 'admin'
+})
 
 onMounted(async () => {
   await loadScopes()
@@ -81,6 +88,14 @@ async function handleCreateScope() {
   try {
     const newScope = await createScope(createForm.value)
     scopes.value.push(newScope)
+    const brief: ScopeBriefInfo = {
+      scopeId: newScope.id,
+      scopeName: newScope.name,
+      scopeType: 'team',
+      role: 'owner',
+      language: 'zh-CN',
+    }
+    authStore.setScopes([...authStore.scopes.filter(s => s.scopeId !== newScope.id), brief])
     showCreateDialog.value = false
     createForm.value = { name: '', description: '' }
     await selectScope(newScope)
@@ -102,6 +117,9 @@ async function handleDeleteScope(scopeId: number) {
       selectedScope.value = null
       members.value = []
     }
+    toastStore.success(t('common.deleteSuccess'))
+  } catch (e: any) {
+    toastStore.error(t('scope.operationFailed'), e?.message || t('common.operationFailed'))
   } finally {
     isLoading.value = false
   }
@@ -117,6 +135,8 @@ async function handleAddMember() {
     addMemberForm.value = { userId: 0, role: 'viewer' }
     addMemberKeyword.value = ''
     addMemberSelected.value = null
+  } catch (e: any) {
+    toastStore.error(t('scope.operationFailed'), e?.message || t('common.operationFailed'))
   } finally {
     isLoading.value = false
   }
@@ -160,6 +180,8 @@ async function handleRemoveMember(userId: number) {
   try {
     await removeMember(selectedScope.value.id, userId)
     members.value = members.value.filter(m => m.userId !== userId)
+  } catch (e: any) {
+    toastStore.error(t('scope.operationFailed'), e?.message || t('common.operationFailed'))
   } finally {
     isLoading.value = false
   }
@@ -192,6 +214,8 @@ async function handleChangeRole(userId: number, newRole: string) {
     members.value = members.value.map(m =>
       m.userId === userId ? { ...m, role: newRole } : m
     )
+  } catch (e: any) {
+    toastStore.error(t('scope.operationFailed'), e?.message || t('common.operationFailed'))
   } finally {
     isLoading.value = false
   }
@@ -217,6 +241,9 @@ async function handleSaveEdit() {
       selectedScope.value = updated
     }
     editingScope.value = null
+    toastStore.success(t('common.operationSuccess'))
+  } catch (e: any) {
+    toastStore.error(t('scope.operationFailed'), e?.message || t('common.operationFailed'))
   } finally {
     isLoading.value = false
   }
@@ -270,7 +297,7 @@ function goToScope(scopeId: number) {
       <div v-if="selectedScope && selectedScope.type === 'team'" class="scope-manage__detail">
         <div class="scope-manage__detail-header">
           <h2>{{ selectedScope.name }}</h2>
-          <div class="scope-manage__detail-actions">
+          <div v-if="canManage" class="scope-manage__detail-actions">
             <button @click="startEditScope(selectedScope!)">
               <Edit3 :size="14" /> {{ t('scope.editConfig') }}
             </button>
@@ -282,7 +309,7 @@ function goToScope(scopeId: number) {
 
         <div class="scope-manage__members-header">
           <h3>{{ t('scope.memberManage') }}</h3>
-          <button @click="showAddMemberDialog = true">
+          <button v-if="canManage" @click="showAddMemberDialog = true">
             <UserPlus :size="14" /> {{ t('scope.addMemberBtn') }}
           </button>
         </div>
@@ -295,7 +322,7 @@ function goToScope(scopeId: number) {
               class="scope-manage__role-select"
               :value="member.role"
               @change="handleChangeRole(member.userId, ($event.target as HTMLSelectElement).value)"
-              :disabled="member.role === 'owner'"
+              :disabled="member.role === 'owner' || !canManage"
             >
               <option value="owner">Owner</option>
               <option value="admin">Admin</option>
@@ -303,7 +330,7 @@ function goToScope(scopeId: number) {
               <option value="viewer">Viewer</option>
             </select>
             <button
-              v-if="member.role !== 'owner'"
+              v-if="member.role !== 'owner' && canManage"
               class="scope-manage__remove-btn"
               @click="handleRemoveMember(member.userId)"
             >

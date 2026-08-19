@@ -70,10 +70,10 @@ export const useAuthStore = defineStore('auth', () => {
 
   function switchScope(newScopeId: number) {
     scopeId.value = newScopeId
+    localStorage.setItem('llmwiki-scopeId', String(newScopeId))
     const targetScope = scopes.value.find(s => s.scopeId === newScopeId)
     if (targetScope) {
       role.value = targetScope.role
-      localStorage.setItem('llmwiki-scopeId', String(newScopeId))
       localStorage.setItem('llmwiki-role', targetScope.role)
     }
   }

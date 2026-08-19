@@ -65,6 +65,7 @@ export default {
   summaryTemplateCount: '{0} page types',
   summaryAutonomy: 'AI Collaboration',
   summarySaving: 'Generating knowledge base schema...',
+  summaryPolishHint: 'Initialization completes with a template schema first; AI polishes it in the background and applies it automatically',
   summarySaved: 'Knowledge base schema saved',
   summarySaveError: 'Save failed',
   // Navigation

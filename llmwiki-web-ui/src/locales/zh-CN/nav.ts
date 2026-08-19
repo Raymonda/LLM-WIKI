@@ -4,7 +4,6 @@ export default {
   search: '搜索问答',
   plaza: '知识库广场',
   scopeManage: '团队管理',
-  subscriptions: '订阅管理',
   auditLog: '审计日志',
   harnessList: '执行记录',
   harnessDetail: '执行详情',
@@ -20,4 +19,5 @@ export default {
   editorDraft: '编辑草稿',
   editorEdit: '编辑页面',
   settings: '设置管理',
+  myApiKeys: '我的 API Key',
 }

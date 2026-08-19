@@ -19,6 +19,7 @@ public class PipelineTaskMessage {
 
     public static final String TYPE_MERGE = "MERGE";
     public static final String TYPE_PAGE_SAVE_POST = "PAGE_SAVE_POST";
+    public static final String TYPE_SCHEMA_POLISH = "SCHEMA_POLISH";
 
     private Long executionId;
     private Long scopeId;

@@ -13,7 +13,7 @@ public class ToolPipelineProperties {
 
     private long slowToolWarnMs = 10000;
 
-    private int scopeMaxConcurrentTools = 8;
+    private int scopeMaxConcurrentTools = 25;
 
     public boolean isEnabled() {
         return enabled;

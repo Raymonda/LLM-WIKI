@@ -15,6 +15,7 @@ import zhDashboard from './zh-CN/dashboard'
 import zhGraph from './zh-CN/graph'
 import zhBootstrap from './zh-CN/bootstrap'
 import zhSchemaPatch from './zh-CN/schemaPatch'
+import zhApiKeys from './zh-CN/apiKeys'
 import enCommon from './en/common'
 import enNav from './en/nav'
 import enErrors from './en/errors'
@@ -31,6 +32,7 @@ import enDashboard from './en/dashboard'
 import enGraph from './en/graph'
 import enBootstrap from './en/bootstrap'
 import enSchemaPatch from './en/schemaPatch'
+import enApiKeys from './en/apiKeys'
 
 const messages = {
   'zh-CN': {
@@ -42,6 +44,7 @@ const messages = {
     graph: zhGraph,
     bootstrap: zhBootstrap,
     schemaPatch: zhSchemaPatch,
+    apiKeys: zhApiKeys,
   },
   en: {
     common: enCommon, nav: enNav, errors: enErrors,
@@ -52,6 +55,7 @@ const messages = {
     graph: enGraph,
     bootstrap: enBootstrap,
     schemaPatch: enSchemaPatch,
+    apiKeys: enApiKeys,
   },
 }
 

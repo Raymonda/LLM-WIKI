@@ -11,7 +11,6 @@ import org.cn.liuwt.llmwiki.domain.service.harness.governance.SchemaManager;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.parser.SchemaMarkdownRenderer;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.parser.SchemaStructuredParser;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.validation.SchemaSkeletonValidator;
-import org.cn.liuwt.llmwiki.integration.ai.LlmClient;
 import org.cn.liuwt.llmwiki.integration.ai.TokenUsageContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,11 +27,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
-import jakarta.annotation.PreDestroy;
 
 /**
  * Schema 冷启动 V2 结构化引导服务。对应 AGENTS.md《Schema 共治宪法·规则 4》。
@@ -55,16 +50,13 @@ public class SchemaBootstrapService {
     private static final long LLM_CALL_TIMEOUT_SECONDS = 120L;
 
     @Autowired(required = false)
-    private LlmClient chatClient;
+    private SchemaPolishDispatcher polishDispatcher;
 
     @Autowired
     private SchemaManager schemaManager;
 
     @Autowired
     private SchemaSkeletonValidator skeletonValidator;
-
-    @Autowired
-    private SchemaJsonSynthesizer schemaJsonSynthesizer;
 
     @Autowired
     private ParadigmCatalog paradigmCatalog;
@@ -77,25 +69,6 @@ public class SchemaBootstrapService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ConcurrentMap<String, BootstrapSession> sessions = new ConcurrentHashMap<>();
-    private final ExecutorService bootstrapExecutor = Executors.newFixedThreadPool(2, r -> {
-        Thread t = new Thread(r, "bootstrap-" + r.hashCode());
-        t.setDaemon(true);
-        return t;
-    });
-
-    @PreDestroy
-    public void shutdown() {
-        log.info("Shutting down bootstrapExecutor");
-        bootstrapExecutor.shutdown();
-        try {
-            if (!bootstrapExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
-                bootstrapExecutor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            bootstrapExecutor.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
-    }
 
     public boolean isBootstrapRequired(Long scopeId) {
         if (scopeId == null) return false;
@@ -318,20 +291,9 @@ public class SchemaBootstrapService {
 
         String json = schemaStructuredParser.toJson(session.draftModel);
 
-        String markdown;
-        if (chatClient != null && chatClient.isAvailable()) {
-            try {
-                SchemaJsonSynthesizer.SynthesisResult synthResult =
-                    schemaJsonSynthesizer.synthesizeFromStructured(session.draftModel, session.capabilityIds);
-                markdown = synthResult.markdown;
-            } catch (Exception e) {
-                log.warn("LLM polish failed, falling back to direct render: {}", e.getMessage());
-                markdown = schemaMarkdownRenderer.render(session.draftModel);
-            }
-        } else {
-            markdown = schemaMarkdownRenderer.render(session.draftModel);
-        }
+        SchemaStructuredModel draftModel = session.draftModel;
 
+        String markdown = schemaMarkdownRenderer.render(draftModel);
         SchemaSkeletonValidator.ValidationResult validationResult = skeletonValidator.validate(
             SchemaSkeletonValidator.WIKI_SCHEMA_KEY, markdown
         );
@@ -345,13 +307,17 @@ public class SchemaBootstrapService {
             markdown,
             json,
             "wiki",
-            "冷启动生成的初版 Schema",
+            SchemaPolishService.INITIAL_BOOTSTRAP_DESCRIPTION,
             SchemaManager.SOURCE_BOOTSTRAP,
             null,
             session.scopeId
         );
         sessions.remove(sessionId);
         log.info("Schema bootstrap V2 finalized: scopeId={}, sessionId={}", session.scopeId, sessionId);
+
+        if (polishDispatcher != null) {
+            polishDispatcher.dispatch(session.scopeId);
+        }
         return saved;
     }
 

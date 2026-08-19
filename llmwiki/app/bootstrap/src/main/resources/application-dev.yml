@@ -1,18 +1,9 @@
-spring:
-  autoconfigure:
-    exclude:
-      - ${ROCKETMQ_AUTOCONFIG_EXCLUDE:org.apache.rocketmq.spring.autoconfigure.RocketMQAutoConfiguration}
-  datasource:
-    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/llmwiki?autoReconnect=true&useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
-    username: ${MYSQL_USER:llmwiki}
-    password: ${MYSQL_PASSWORD:llmwiki_2024}
+# 仅保留 dev 相对基础配置的差异项；datasource/ES 等与 application.yml 一致的部分不再重复
 
+spring:
   ai:
     openai:
       api-key: ${AI_DASHSCOPE_API_KEY:}
-      chat:
-        options:
-          model: deepseek-v4-flash-0731
 
 llmwiki:
   ai:
@@ -20,12 +11,6 @@ llmwiki:
     query-multimodal-model: deepseek-v4-flash-0731
     deep-analysis-model: ${AI_DEEP_ANALYSIS_MODEL:deepseek-v4-pro}
     deep-multimodal-model: qwen3.7-plus
-  rocketmq:
-    enabled: ${ROCKETMQ_ENABLED:false}
-  elasticsearch:
-    uris: ${ES_URIS:http://localhost:9200}
-    username: ${ES_USERNAME:}
-    password: ${ES_PASSWORD:}
   diagram:
     enabled: true
     api-key: ${DIAGRAM_API_KEY:}

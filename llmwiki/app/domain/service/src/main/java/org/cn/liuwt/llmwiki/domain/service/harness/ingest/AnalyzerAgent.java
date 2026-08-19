@@ -59,7 +59,7 @@ public class AnalyzerAgent {
     @Value("${llmwiki.ingest.analysis.pool-size:8}")
     private int analysisPoolSize;
 
-    @Value("${llmwiki.ingest.analysis.single-pass-max-chars:1200000}")
+    @Value("${llmwiki.ingest.analysis.single-pass-max-chars:800000}")
     private int singlePassMaxChars;
 
     private final ExecutorService analysisExecutor = Executors.newFixedThreadPool(8);

@@ -365,6 +365,7 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
       isPhaseRunning: t.isPhaseRunning,
       progress: t.displayProgress,
       floatingDismissed: t.floatingDismissed,
+      pipelineError: t.pipelineError,
     }))
   )
 
@@ -690,8 +691,9 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
       task.totalTokens = data.totalTokens || 0
       task.isPhaseRunning = false
       if (data.status === 'completed') {
+        const firstTimeDone = task.currentStep !== 'done'
         task.currentStep = 'done'
-        task.floatingDismissed = false
+        if (firstTimeDone) task.floatingDismissed = false
         for (const meta of INGEST_STEPS) {
           autoAdvanceStep(task, meta.name, 'completed')
         }
@@ -708,13 +710,13 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
         }
       } else if (data.status === 'budget_exhausted') {
         task.pipelineError = 'Token 用量已达月度参考值，操作不受限制'
+        const firstTimeDone = task.currentStep !== 'done'
         task.currentStep = 'done'
-        task.floatingDismissed = false
+        if (firstTimeDone) task.floatingDismissed = false
         scheduleCleanup(task)
       } else if (data.status === 'failed') {
         task.pipelineError = data.errorMessage || '处理失败，请重试'
         task.isPhaseRunning = false
-        task.floatingDismissed = false
         scheduleCleanup(task)
       } else {
         task.pipelineError = '处理失败，请重试'
@@ -854,7 +856,6 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
 
       for (const [id, existingTask] of tasks.value.entries()) {
         if (activeIdSet.has(id)) continue
-        if (existingTask.currentStep === 'done') continue
         if (existingTask.currentStep === 'upload' && existingTask.executionId === 0) continue
         closeTaskSSE(existingTask)
         stopTaskTick(existingTask)
@@ -1133,6 +1134,16 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
     if (task) task.floatingDismissed = true
   }
 
+  function dismissAllFloating() {
+    for (const task of tasks.value.values()) {
+      if (task.currentStep === 'done' || task.executionStatus === 'failed'
+          || task.executionStatus === 'budget_exhausted' || task.executionStatus === 'cancelled'
+          || task.executionStatus === 'paused') {
+        task.floatingDismissed = true
+      }
+    }
+  }
+
   function closeEventSource() {
     const task = currentTask.value
     if (task) closeTaskSSE(task)
@@ -1186,6 +1197,7 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
     summaryPage,
     dismissFloating,
     dismissFloatingById,
+    dismissAllFloating,
     clear,
     startAnalysis,
     pauseExecution,

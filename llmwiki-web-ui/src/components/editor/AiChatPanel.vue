@@ -18,6 +18,8 @@ interface ChatMessage {
   selectedLines?: string
   streaming?: boolean
   mentionedPages?: { id: number; title: string; path: string }[]
+  editStream?: string
+  editStreamOpen?: boolean
 }
 
 const props = defineProps<{
@@ -122,18 +124,21 @@ async function sendInstruction() {
     role: 'assistant',
     content: editHint + '\n',
     streaming: true,
+    editStream: '',
+    editStreamOpen: true,
   }
   messages.value.push(aiMsg)
   await scrollToBottom()
 
   streaming.value = true
-  let firstTokenReceived = false
+  let firstActivityReceived = false
   let hadPatches = false
+  let explanationStreamed = false
   let waitingTimer: ReturnType<typeof setTimeout> | null = null
 
-  // 5 秒无 token 时显示等待提示
+  // 5 秒无流时显示等待提示
   waitingTimer = setTimeout(() => {
-    if (!firstTokenReceived && aiMsg.streaming) {
+    if (!firstActivityReceived && aiMsg.streaming) {
       aiMsg.content = `${t('editor.processingHint', [instruction.substring(0, 40) + '...'])} (${t('editor.aiThinkingHint')})\n`
       scrollToBottom()
     }
@@ -158,36 +163,58 @@ async function sendInstruction() {
         }
       } else if (event.type === 'retry') {
         aiMsg.content = t('editor.aiRetrying', [event.failedBlockCount ?? 0, event.retryRound ?? 0]) + '\n'
+        aiMsg.editStream = ''
         emit('retry-received', { round: event.retryRound ?? 0, failedCount: event.failedBlockCount ?? 0 })
+        scrollToBottom()
+      } else if (event.type === 'progress' && event.phase === 'editing') {
+        if (waitingTimer) { clearTimeout(waitingTimer); waitingTimer = null }
+        aiMsg.content = t('editor.aiEditingHint')
+        scrollToBottom()
+      } else if (event.type === 'edit-token') {
+        if (!firstActivityReceived) {
+          firstActivityReceived = true
+          if (waitingTimer) { clearTimeout(waitingTimer); waitingTimer = null }
+          aiMsg.content = ''
+        }
+        aiMsg.editStream = (aiMsg.editStream || '') + (event.content || '')
         scrollToBottom()
       } else if (event.type === 'patch') {
         hadPatches = true
-        if (!firstTokenReceived) {
-          firstTokenReceived = true
+        if (!firstActivityReceived) {
+          firstActivityReceived = true
           if (waitingTimer) { clearTimeout(waitingTimer); waitingTimer = null }
+          aiMsg.content = ''
         }
         emit('patch-received', event.content)
       } else if (event.type === 'token') {
-        if (!firstTokenReceived) {
-          firstTokenReceived = true
+        if (!firstActivityReceived) {
+          firstActivityReceived = true
           if (waitingTimer) { clearTimeout(waitingTimer); waitingTimer = null }
           aiMsg.content = ''
         }
         aiMsg.content += event.content || ''
+        explanationStreamed = true
         scrollToBottom()
       } else if (event.type === 'done') {
         streaming.value = false
         aiMsg.streaming = false
+        aiMsg.editStreamOpen = false
         if (waitingTimer) { clearTimeout(waitingTimer); waitingTimer = null }
         if (event.content) {
           emit('edit-done', { content: event.content, explanation: event.explanation || '' })
-          if (!hadPatches && event.mode !== 'create') {
+          if (event.mode === 'create') {
+            aiMsg.content = t('editor.changesReady')
+          } else if (!hadPatches) {
             if (!aiMsg.content.trim()) {
               aiMsg.content = event.explanation || t('editor.aiNoChange')
             }
+          } else if (explanationStreamed) {
+            aiMsg.content += (aiMsg.content.endsWith('\n') ? '' : '\n') + t('editor.changesReady')
           } else {
             aiMsg.content = t('editor.changesReady')
           }
+        } else {
+          aiMsg.content = t('editor.aiNoChange')
         }
         if (event.failedBlocks && event.failedBlocks.length > 0) {
           const lines: string[] = [t('editor.failedBlocksTitle', [event.failedBlocks.length])]
@@ -490,6 +517,23 @@ defineExpose({ addSelection, focusInput, acceptPending, rejectPending })
             {{ page.title }}
           </span>
         </div>
+        <div v-if="msg.editStream" class="chat-message__editstream">
+          <button
+            type="button"
+            class="chat-message__editstream-toggle"
+            @click="msg.editStreamOpen = !msg.editStreamOpen"
+          >
+            <svg
+              class="chat-message__editstream-chevron"
+              :class="{ 'is-open': msg.editStreamOpen }"
+              width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            ><polyline points="9 18 15 12 9 6"/></svg>
+            <span>{{ t('editor.editStreamTitle') }}</span>
+            <span v-if="msg.streaming" class="chat-message__cursor">|</span>
+          </button>
+          <pre v-if="msg.editStreamOpen" class="chat-message__editstream-body">{{ msg.editStream }}</pre>
+        </div>
         <div class="chat-message__content">
           {{ msg.content }}
           <span v-if="msg.streaming" class="chat-message__cursor">|</span>
@@ -687,6 +731,55 @@ defineExpose({ addSelection, focusInput, acceptPending, rejectPending })
   text-overflow: ellipsis;
   white-space: nowrap;
   opacity: 0.85;
+}
+
+.chat-message__editstream {
+  margin-bottom: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.chat-message__editstream-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  cursor: pointer;
+  text-align: left;
+}
+
+.chat-message__editstream-toggle:hover {
+  color: var(--text-primary);
+}
+
+.chat-message__editstream-chevron {
+  transition: transform var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.chat-message__editstream-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.chat-message__editstream-body {
+  margin: 0;
+  padding: var(--space-2);
+  max-height: 180px;
+  overflow: auto;
+  font-family: var(--font-code);
+  font-size: var(--font-caption);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .chat-message__cursor {

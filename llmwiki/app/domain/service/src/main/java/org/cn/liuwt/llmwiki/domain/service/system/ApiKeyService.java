@@ -42,7 +42,10 @@ public class ApiKeyService {
         this.scopeService = scopeService;
     }
 
-    public ApiKeyCreation createKey(String name, Long userId, Long scopeId, LocalDateTime expiresAt) {
+    public ApiKeyCreation createKey(String name, Long userId, Long scopeId, LocalDateTime expiresAt, Long operatorId) {
+        if (operatorId == null || !operatorId.equals(userId)) {
+            throw new IllegalArgumentException("operator " + operatorId + " cannot create key bound to user " + userId);
+        }
         UserModel user = userService.getUserById(userId);
         if (user == null || !"active".equals(user.getStatus())) {
             throw new IllegalArgumentException("user not found or inactive: " + userId);
@@ -97,17 +100,20 @@ public class ApiKeyService {
         return validation;
     }
 
-    public void revokeKey(Long id) {
+    public void revokeKey(Long id, Long operatorId, boolean operatorIsAdmin) {
         ApiKeyDO d = apiKeyMapper.selectById(id);
         if (d == null) {
             throw new IllegalArgumentException("api key not found: " + id);
+        }
+        if (!operatorIsAdmin && (operatorId == null || !operatorId.equals(d.getUserId()))) {
+            throw new IllegalArgumentException("operator " + operatorId + " is not allowed to revoke key " + id);
         }
         ApiKeyDO update = new ApiKeyDO();
         update.setId(id);
         update.setStatus("revoked");
         apiKeyMapper.updateById(update);
         validationCache.remove(d.getKeyHash());
-        log.info("API key revoked: id={}", id);
+        log.info("API key revoked: id={}, operatorId={}", id, operatorId);
     }
 
     public List<ApiKeyDO> listKeys(Long userId) {
@@ -115,6 +121,11 @@ public class ApiKeyService {
             new LambdaQueryWrapper<ApiKeyDO>()
                 .eq(ApiKeyDO::getUserId, userId)
                 .orderByDesc(ApiKeyDO::getCreatedAt));
+    }
+
+    public List<ApiKeyDO> listAllKeys() {
+        return apiKeyMapper.selectList(
+            new LambdaQueryWrapper<ApiKeyDO>().orderByDesc(ApiKeyDO::getCreatedAt));
     }
 
     private void touchLastUsed(Long id) {

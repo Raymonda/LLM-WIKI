@@ -2,6 +2,8 @@ package org.cn.liuwt.llmwiki.web;
 
 import org.cn.liuwt.llmwiki.common.util.result.Result;
 import org.cn.liuwt.llmwiki.domain.service.system.ApiKeyService;
+import org.cn.liuwt.llmwiki.domain.service.system.ScopeService;
+import org.cn.liuwt.llmwiki.domain.service.system.UserService;
 import org.cn.liuwt.llmwiki.web.controller.ApiKeyController;
 import org.cn.liuwt.llmwiki.web.security.JwtTokenProvider;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,22 +27,26 @@ class ApiKeyControllerTest {
     private ApiKeyService apiKeyService;
     @Mock
     private JwtTokenProvider jwtTokenProvider;
+    @Mock
+    private UserService userService;
+    @Mock
+    private ScopeService scopeService;
 
     private ApiKeyController controller;
 
     @BeforeEach
     void setUp() {
-        controller = new ApiKeyController(apiKeyService, jwtTokenProvider);
+        controller = new ApiKeyController(apiKeyService, jwtTokenProvider, userService, scopeService);
     }
 
     @Test
     void shouldCreateKeyAndReturnRawKeyOnce() {
         when(jwtTokenProvider.getCurrentUserId()).thenReturn(1L);
-        when(apiKeyService.createKey("dsh-agent", 7L, 5L, null))
+        when(apiKeyService.createKey("dsh-agent", 1L, 5L, null, 1L))
             .thenReturn(new ApiKeyService.ApiKeyCreation(9L, "llmwiki_raw"));
 
         Result<Map<String, Object>> result = controller.createKey(
-            new ApiKeyController.CreateKeyRequest("dsh-agent", 7L, 5L, null));
+            new ApiKeyController.CreateKeyRequest("dsh-agent", 5L, null));
 
         assertThat(result.getData()).containsEntry("id", 9L).containsEntry("key", "llmwiki_raw");
     }
@@ -48,11 +54,11 @@ class ApiKeyControllerTest {
     @Test
     void shouldPropagateIllegalArgumentExceptionAsFailedResult() {
         when(jwtTokenProvider.getCurrentUserId()).thenReturn(1L);
-        when(apiKeyService.createKey(any(), any(), any(), any()))
+        when(apiKeyService.createKey(any(), any(), any(), any(), any()))
             .thenThrow(new IllegalArgumentException("not a member"));
 
         Result<Map<String, Object>> result = controller.createKey(
-            new ApiKeyController.CreateKeyRequest("dsh-agent", 7L, 5L, null));
+            new ApiKeyController.CreateKeyRequest("dsh-agent", 5L, null));
 
         assertThat(result.getCode()).isNotEqualTo("0");
     }
@@ -74,9 +80,25 @@ class ApiKeyControllerTest {
     }
 
     @Test
+    void shouldListAllKeysForAdmin() {
+        org.cn.liuwt.llmwiki.common.dal.dataobject.ApiKeyDO d =
+            new org.cn.liuwt.llmwiki.common.dal.dataobject.ApiKeyDO();
+        d.setId(9L);
+        d.setName("dsh-agent");
+        d.setStatus("active");
+        when(apiKeyService.listAllKeys()).thenReturn(List.of(d));
+
+        Result<List<Map<String, Object>>> result = controller.listAllKeys();
+
+        assertThat(result.getData()).hasSize(1);
+        verify(apiKeyService).listAllKeys();
+    }
+
+    @Test
     void shouldRevokeKey() {
+        when(jwtTokenProvider.getCurrentUserId()).thenReturn(1L);
         Result<Void> result = controller.revokeKey(9L);
-        verify(apiKeyService).revokeKey(9L);
+        verify(apiKeyService).revokeKey(9L, 1L, false);
         assertThat(result.getCode()).isEqualTo("0");
     }
 }

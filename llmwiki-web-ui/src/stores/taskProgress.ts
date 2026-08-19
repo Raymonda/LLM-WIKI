@@ -222,12 +222,26 @@ export const useTaskProgressStore = defineStore('taskProgress', () => {
     tasks.value.delete(executionId)
   }
 
+  function clear() {
+    for (const [executionId, t] of tasks.value.entries()) {
+      closeSSE(executionId)
+      if (t.cleanupTimer) clearTimeout(t.cleanupTimer)
+    }
+    tasks.value.clear()
+  }
+
   async function recoverActiveTasks() {
     const authStore = useAuthStore()
     if (!authStore.scopeId) return
 
     try {
       const activeList = await listActiveTasks(authStore.scopeId)
+      const activeIdSet = new Set(activeList.map(e => e.executionId))
+      for (const executionId of [...tasks.value.keys()]) {
+        if (!activeIdSet.has(executionId)) {
+          removeTask(executionId)
+        }
+      }
       for (const exec of activeList) {
         const existing = tasks.value.get(exec.executionId)
         if (existing) continue
@@ -300,5 +314,6 @@ export const useTaskProgressStore = defineStore('taskProgress', () => {
     dismissFloating,
     removeTask,
     recoverActiveTasks,
+    clear,
   }
 })

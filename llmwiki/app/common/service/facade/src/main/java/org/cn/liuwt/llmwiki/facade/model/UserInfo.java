@@ -12,7 +12,6 @@ public class UserInfo {
     private String role;
     private String systemRole;
     private Long scopeId;
-    private Integer consentKnowledgePromotion;
     private String language;
     private List<ScopeBriefInfo> scopes;
 }

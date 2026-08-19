@@ -27,11 +27,13 @@ public class RateLimitService {
     @Autowired
     private ExecutionHistoryService executionHistoryService;
 
-    private final ConcurrentHashMap<Long, Semaphore> concurrentSemaphores = new ConcurrentHashMap<>();
+    private record SemaphoreSlot(int capacity, Semaphore semaphore) {}
+
+    private final ConcurrentHashMap<Long, SemaphoreSlot> concurrentSemaphores = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Long> lastCallTimestamps = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, String> activePipelineIds = new ConcurrentHashMap<>();
 
-    private static final long MIN_CALL_INTERVAL_MS = 2000;
+    private static final long MIN_CALL_INTERVAL_MS = 500;
     private static final Duration NO_STEP_GRACE = Duration.ofMinutes(5);
     private static final Duration NO_HEARTBEAT_GRACE = Duration.ofMinutes(30);
 
@@ -58,8 +60,11 @@ public class RateLimitService {
             return false;
         }
 
-        Semaphore semaphore = concurrentSemaphores.computeIfAbsent(scopeId, k -> new Semaphore(maxConcurrent));
-        boolean acquired = semaphore.tryAcquire();
+        SemaphoreSlot slot = concurrentSemaphores.compute(scopeId, (k, existing) ->
+            existing != null && existing.capacity() == maxConcurrent
+                ? existing
+                : new SemaphoreSlot(maxConcurrent, new Semaphore(maxConcurrent)));
+        boolean acquired = slot.semaphore().tryAcquire();
         if (!acquired) {
             log.warn("Scope {} local semaphore limit reached (max={}), request rejected", scopeId, maxConcurrent);
             return false;
@@ -68,17 +73,17 @@ public class RateLimitService {
     }
 
     public void releaseConcurrent(Long scopeId) {
-        Semaphore semaphore = concurrentSemaphores.get(scopeId);
-        if (semaphore != null) {
-            semaphore.release();
+        SemaphoreSlot slot = concurrentSemaphores.get(scopeId);
+        if (slot != null) {
+            slot.semaphore().release();
         }
     }
 
     public void releaseAllConcurrent(Long scopeId, int count) {
-        Semaphore semaphore = concurrentSemaphores.get(scopeId);
-        if (semaphore != null) {
+        SemaphoreSlot slot = concurrentSemaphores.get(scopeId);
+        if (slot != null) {
             for (int i = 0; i < count; i++) {
-                semaphore.release();
+                slot.semaphore().release();
             }
         }
     }
@@ -126,10 +131,7 @@ public class RateLimitService {
     }
 
     private int getDefaultMaxConcurrent(String scopeType) {
-        if ("personal".equals(scopeType)) return 5;
-        if ("team".equals(scopeType)) return 3;
-        if ("department".equals(scopeType)) return 5;
-        return 2;
+        return 25;
     }
 
     private void reclaimZombieExecutions(Long scopeId) {

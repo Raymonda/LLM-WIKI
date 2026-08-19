@@ -116,6 +116,21 @@ public class WikiFileServiceImpl implements WikiFileService {
         return pageDOs.stream().map(this::toModel).collect(Collectors.toList());
     }
 
+    public List<WikiPageModel> listPagesByCategory(Long scopeId, String category, int page, int pageSize) {
+        int safePageSize = Math.min(pageSize, 200);
+        int offset = Math.max(0, (page - 1)) * safePageSize;
+        List<WikiPageDO> pageDOs = wikiPageMapper.selectList(
+            new LambdaQueryWrapper<WikiPageDO>()
+                .eq(WikiPageDO::getScopeId, scopeId)
+                .and(w -> w.eq(WikiPageDO::getCategory, category)
+                    .or()
+                    .likeRight(WikiPageDO::getCategory, category + "/"))
+                .orderByDesc(WikiPageDO::getContentUpdatedAt)
+                .last("LIMIT " + safePageSize + " OFFSET " + offset)
+        );
+        return pageDOs.stream().map(this::toModel).collect(Collectors.toList());
+    }
+
     public long countEntityPagesByScopeId(Long scopeId) {
         return wikiPageMapper.selectCount(
             new LambdaQueryWrapper<WikiPageDO>()

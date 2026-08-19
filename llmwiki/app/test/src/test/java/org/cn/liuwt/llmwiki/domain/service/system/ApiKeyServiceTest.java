@@ -41,7 +41,7 @@ class ApiKeyServiceTest {
             return 1;
         });
 
-        ApiKeyService.ApiKeyCreation creation = apiKeyService.createKey("dsh-agent", 7L, 5L, null);
+        ApiKeyService.ApiKeyCreation creation = apiKeyService.createKey("dsh-agent", 7L, 5L, null, 7L);
 
         assertThat(creation.rawKey()).startsWith("llmwiki_");
         assertThat(creation.rawKey()).hasSize(51);
@@ -59,8 +59,16 @@ class ApiKeyServiceTest {
         when(scopeService.getMemberRole(5L, 7L)).thenReturn(null);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
-                () -> apiKeyService.createKey("dsh-agent", 7L, 5L, null))
+                () -> apiKeyService.createKey("dsh-agent", 7L, 5L, null, 7L))
             .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void shouldThrowWhenOperatorDiffersFromBoundUser() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> apiKeyService.createKey("dsh-agent", 7L, 5L, null, 8L))
+            .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(userService, scopeService);
     }
 
     @Test
@@ -138,14 +146,44 @@ class ApiKeyServiceTest {
     void shouldSetRevokedWhenRevokeKey() {
         ApiKeyDO d = new ApiKeyDO();
         d.setId(3L);
+        d.setUserId(7L);
         d.setStatus("active");
         d.setKeyHash("a".repeat(64));
         when(apiKeyMapper.selectById(3L)).thenReturn(d);
         when(apiKeyMapper.updateById(any(ApiKeyDO.class))).thenReturn(1);
 
-        apiKeyService.revokeKey(3L);
+        apiKeyService.revokeKey(3L, 7L, false);
 
         verify(apiKeyMapper).updateById(argThat((ApiKeyDO u) -> u.getStatus().equals("revoked")));
+    }
+
+    @Test
+    void shouldRevokeForeignKeyWhenOperatorIsAdmin() {
+        ApiKeyDO d = new ApiKeyDO();
+        d.setId(3L);
+        d.setUserId(7L);
+        d.setStatus("active");
+        d.setKeyHash("a".repeat(64));
+        when(apiKeyMapper.selectById(3L)).thenReturn(d);
+        when(apiKeyMapper.updateById(any(ApiKeyDO.class))).thenReturn(1);
+
+        apiKeyService.revokeKey(3L, 1L, true);
+
+        verify(apiKeyMapper).updateById(argThat((ApiKeyDO u) -> u.getStatus().equals("revoked")));
+    }
+
+    @Test
+    void shouldThrowWhenRevokingForeignKeyAsNonOwner() {
+        ApiKeyDO d = new ApiKeyDO();
+        d.setId(3L);
+        d.setUserId(7L);
+        d.setStatus("active");
+        when(apiKeyMapper.selectById(3L)).thenReturn(d);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> apiKeyService.revokeKey(3L, 8L, false))
+            .isInstanceOf(IllegalArgumentException.class);
+        verify(apiKeyMapper, never()).updateById(any(ApiKeyDO.class));
     }
 
     @Test
@@ -156,5 +194,15 @@ class ApiKeyServiceTest {
         when(apiKeyMapper.selectList(any())).thenReturn(List.of(d));
 
         assertThat(apiKeyService.listKeys(7L)).hasSize(1);
+    }
+
+    @Test
+    void shouldListAllKeys() {
+        ApiKeyDO d = new ApiKeyDO();
+        d.setId(3L);
+        d.setUserId(7L);
+        when(apiKeyMapper.selectList(any())).thenReturn(List.of(d));
+
+        assertThat(apiKeyService.listAllKeys()).hasSize(1);
     }
 }

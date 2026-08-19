@@ -4,7 +4,6 @@ export default {
   search: 'Search & Ask',
   plaza: 'KB Plaza',
   scopeManage: 'Team Management',
-  subscriptions: 'Subscriptions',
   auditLog: 'Audit Log',
   harnessList: 'Executions',
   harnessDetail: 'Execution Detail',
@@ -20,4 +19,5 @@ export default {
   editorDraft: 'Edit Draft',
   editorEdit: 'Edit Page',
   settings: 'Settings',
+  myApiKeys: 'My API Keys',
 }

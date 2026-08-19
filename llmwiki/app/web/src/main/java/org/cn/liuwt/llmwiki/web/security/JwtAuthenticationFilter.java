@@ -60,7 +60,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
             String effectiveRole = user.getRole() != null ? user.getRole() : (role != null ? role : "user");
 
-            Long activeScopeId = resolveActiveScope(request, userId);
+            Long activeScopeId = resolveActiveScope(request, user);
 
             request.setAttribute("userId", userId);
             request.setAttribute("scopeId", activeScopeId);
@@ -78,9 +78,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     /**
      * 解析活动 scope：优先 X-Scope-Id 请求头（REST），回退 scopeId query 参数（EventSource），
-     * 经 ScopeService.getMemberRole 校验成员关系；无值或非成员回退个人 scope（=userId）。
+     * 经 ScopeService.getMemberRole 校验成员关系；无值或非成员回退用户的个人 scope。
      */
-    private Long resolveActiveScope(HttpServletRequest request, Long userId) {
+    private Long resolveActiveScope(HttpServletRequest request, UserModel user) {
+        Long userId = user.getId();
         String raw = request.getHeader(SCOPE_HEADER);
         if (!StringUtils.hasText(raw)) {
             raw = request.getParameter(SCOPE_QUERY_PARAM);
@@ -94,7 +95,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             } catch (NumberFormatException ignored) {
             }
         }
-        return userId;
+        return user.getScopeId();
     }
 
     private String extractToken(HttpServletRequest request) {

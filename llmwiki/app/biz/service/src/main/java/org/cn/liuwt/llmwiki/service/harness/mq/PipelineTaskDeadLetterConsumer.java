@@ -77,6 +77,10 @@ public class PipelineTaskDeadLetterConsumer implements RocketMQListener<MessageE
             case PipelineTaskMessage.TYPE_MERGE:
                 handleMergeDeadLetter(body, dlqError);
                 break;
+            case PipelineTaskMessage.TYPE_SCHEMA_POLISH:
+                log.warn("SCHEMA_POLISH dead letter ignored, deterministic schema remains in effect: msgId={}",
+                    messageExt.getMsgId());
+                break;
             default:
                 log.warn("Dead letter with unknown taskType '{}', ignoring: msgId={}", taskType, messageExt.getMsgId());
         }

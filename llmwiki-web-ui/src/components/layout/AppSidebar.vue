@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import { useIngestProgressStore } from '@/stores/ingestProgress'
+import { useTaskProgressStore } from '@/stores/taskProgress'
 import { useLocale } from '@/composables/useLocale'
 import { SUPPORTED_LOCALES } from '@/locales'
 import type { SupportedLocale } from '@/locales'
@@ -12,7 +13,7 @@ import { updateUserLanguage } from '@/api/language'
 import {
   BookOpen, Search, Settings, Sun, Moon, ChevronLeft, ChevronRight, LogOut,
   Activity, Upload, Zap, ChevronDown, ChevronUp, Users, User, ShieldCheck,
-  Network, Trash2, FileEdit, Rss, ScrollText, Globe, Languages
+  Network, Trash2, FileEdit, ScrollText, Globe, Languages, KeyRound
 } from 'lucide-vue-next'
 import ScopeSwitcher from './ScopeSwitcher.vue'
 
@@ -27,6 +28,7 @@ const router = useRouter()
 const themeStore = useThemeStore()
 const authStore = useAuthStore()
 const activityStore = useIngestProgressStore()
+const taskProgressStore = useTaskProgressStore()
 const collapsed = ref(false)
 const settingsExpanded = ref(false)
 
@@ -57,7 +59,6 @@ const mainNavItems = computed(() => {
     if (canManage.value) {
       items.push({ icon: Users, label: t('nav.scopeManage'), path: '/scope/manage' })
     }
-    items.push({ icon: Rss, label: t('nav.subscriptions'), path: '/scope/subscriptions' })
     if (canManage.value) {
       items.push({ icon: ScrollText, label: t('nav.auditLog'), path: '/scope/audit' })
     }
@@ -70,6 +71,7 @@ const settingsSubItems = computed(() => {
     { icon: Activity, label: t('nav.harnessList'), path: '/harness' },
     { icon: ShieldCheck, label: t('nav.lint'), path: '/lint' },
     { icon: Zap, label: t('nav.tokenMonitor'), path: '/token' },
+    { icon: KeyRound, label: t('nav.myApiKeys'), path: '/settings/api-keys' },
     { icon: FileEdit, label: t('nav.drafts'), path: '/drafts' },
     { icon: Trash2, label: t('nav.trash'), path: '/trash' },
   ]
@@ -95,6 +97,7 @@ const currentScopeIcon = computed(() =>
 
 function handleLogout() {
   activityStore.clear()
+  taskProgressStore.clear()
   authStore.clearAuth()
   router.push('/login')
 }

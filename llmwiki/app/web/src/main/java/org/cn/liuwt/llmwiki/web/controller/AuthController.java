@@ -13,7 +13,6 @@ import org.cn.liuwt.llmwiki.facade.model.ScopeBriefInfo;
 import org.cn.liuwt.llmwiki.facade.model.UserInfo;
 import org.cn.liuwt.llmwiki.domain.model.system.UserModel;
 import org.cn.liuwt.llmwiki.service.auth.AuthService;
-import org.cn.liuwt.llmwiki.domain.service.system.UserService;
 import org.cn.liuwt.llmwiki.web.security.JwtTokenProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
@@ -38,8 +37,6 @@ public class AuthController {
     @Autowired
     private ScopeService scopeService;
     @Autowired
-    private UserService userService;
-    @Autowired
     private UserMapper userMapper;
     @Autowired
     private ScopeMapper scopeMapper;
@@ -56,7 +53,7 @@ public class AuthController {
 
     @PostMapping("/register")
     public Result<LoginResult> register(@RequestBody LoginRequest request) {
-        UserModel user = authService.register(request.getUsername(), request.getPassword(), null, request.getConsentKnowledgePromotion());
+        UserModel user = authService.register(request.getUsername(), request.getPassword(), null);
         String token = jwtTokenProvider.generateToken(user.getId(), user.getUsername(), user.getRole());
         LoginResult result = new LoginResult();
         result.setToken(token);
@@ -82,7 +79,6 @@ public class AuthController {
         if (userDO != null) {
             info.setEmail(userDO.getEmail());
             info.setSystemRole(userDO.getRole());
-            info.setConsentKnowledgePromotion(userDO.getConsentKnowledgePromotion());
             info.setLanguage(userDO.getLanguage() != null ? userDO.getLanguage() : "zh-CN");
         }
         info.setScopes(buildScopeList(userId));
@@ -104,17 +100,6 @@ public class AuthController {
         return Result.success();
     }
 
-    @PutMapping("/consent-promotion")
-    public Result<Void> updateConsentPromotion(@RequestBody java.util.Map<String, Integer> body) {
-        Long userId = jwtTokenProvider.getCurrentUserId();
-        Integer consent = body.get("consent");
-        if (consent == null || (consent != 0 && consent != 1)) {
-            return Result.failed(ErrorCode.AUTH_INVALID_CONSENT);
-        }
-        userService.updateConsentKnowledgePromotion(userId, consent);
-        return Result.success();
-    }
-
     private UserInfo toUserInfo(UserModel user) {
         UserInfo info = new UserInfo();
         info.setId(user.getId());
@@ -124,7 +109,6 @@ public class AuthController {
         info.setRole(scopeRole != null ? scopeRole : "owner");
         info.setSystemRole(user.getRole());
         info.setScopeId(user.getScopeId());
-        info.setConsentKnowledgePromotion(user.getConsentKnowledgePromotion());
         info.setLanguage(user.getLanguage() != null ? user.getLanguage() : "zh-CN");
         info.setScopes(buildScopeList(user.getId()));
         return info;

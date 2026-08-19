@@ -43,6 +43,10 @@ public class AiEditService {
 
     private static final int MAX_EDIT_ROUNDS = 3;
 
+    private static final String SCHEMA_NO_LEAK_DIRECTIVE = "\n\n"
+        + "【重要】上文的 Schema 骨架仅仅是你的行为约束与分类/命名规范，不是需要输出的文档内容。"
+        + "严禁把 Schema 的定义、分类体系、命名规则或模板原文复制进输出正文，只依据约束产出真实的知识内容。\n";
+
     @Autowired(required = false)
     private LlmClient chatClient;
 
@@ -152,7 +156,7 @@ public class AiEditService {
         if (schemaInjector == null) {
             return prompt;
         }
-        return schemaInjector.prepend(scopeId, prompt);
+        return schemaInjector.prependForEdit(scopeId, prompt) + SCHEMA_NO_LEAK_DIRECTIVE;
     }
 
     private Flux<AiEditResponse> executeFocusedEdit(Long scopeId, Long sessionId,
@@ -197,8 +201,12 @@ public class AiEditService {
     private Flux<AiEditResponse> buildStreamingEditFlux(
             Flux<String> chatStream, String systemPrompt, String userMessage,
             String originalContent, EditSessionInfo session, boolean isCreateMode) {
-        return buildRoundFlux(chatStream, originalContent, session, isCreateMode,
+        Flux<AiEditResponse> roundFlux = buildRoundFlux(chatStream, originalContent, session, isCreateMode,
             1, systemPrompt, userMessage, List.of());
+        if (isCreateMode) {
+            return roundFlux;
+        }
+        return Flux.concat(Flux.just(buildProgressEvent("editing")), roundFlux);
     }
 
     private Flux<AiEditResponse> buildRoundFlux(Flux<String> chatStream, String originalContent,
@@ -307,6 +315,10 @@ public class AiEditService {
 
                 events.addAll(applyNewCompletedBlocks(accumulated, currentDoc,
                     appliedBlocks, handledCount, carriedBlocks));
+                AiEditResponse tokenEvent = new AiEditResponse();
+                tokenEvent.setType(isCreateMode ? "token" : "edit-token");
+                tokenEvent.setContent(token);
+                events.add(tokenEvent);
                 return Flux.fromIterable(events);
             })
             .concatWith(Flux.defer(() ->
@@ -430,6 +442,14 @@ public class AiEditService {
         return event;
     }
 
+    private AiEditResponse buildProgressEvent(String phase) {
+        AiEditResponse event = new AiEditResponse();
+        event.setType("progress");
+        event.setPhase(phase);
+        event.setContent(phase);
+        return event;
+    }
+
     public CommitStepResult commitStep(Long sessionId, Long scopeId, String newContent,
                                        String instruction, String selectedLines,
                                        String selectedText, String expectedHash) {
@@ -497,29 +517,58 @@ public class AiEditService {
                 sb.append(" [").append(step.getSelectedLines()).append("]");
             }
             sb.append("\n");
+
+            String removed = step.getDiffRemoved();
+            String added = step.getDiffAdded();
+            boolean hasRemoved = removed != null && !removed.isBlank();
+            boolean hasAdded = added != null && !added.isBlank();
+            if (hasRemoved && hasAdded) {
+                sb.append("  原文：").append(compactDiff(removed)).append("\n");
+                sb.append("  改为：").append(compactDiff(added)).append("\n");
+            } else if (hasRemoved) {
+                sb.append("  删除了：").append(compactDiff(removed)).append("\n");
+            } else if (hasAdded) {
+                sb.append("  新增了：").append(compactDiff(added)).append("\n");
+            }
         }
 
         return sb.toString();
+    }
+
+    private String compactDiff(String s) {
+        if (s == null) return "";
+        String single = s.replace('\r', ' ').replace('\n', ' ').replaceAll("\\s+", " ").trim();
+        if (single.length() > 160) {
+            single = single.substring(0, 160) + "...";
+        }
+        return single;
     }
 
     String assembleSystemPrompt(String outline, String contextWindow, String history,
                                  boolean hasSelection, String knowledgeContext,
                                  boolean confirmedKnowledge, boolean isCreateMode) {
         StringBuilder sb = new StringBuilder();
-        boolean isEmptyDoc = contextWindow == null || contextWindow.isEmpty();
+        boolean isEmptyDoc = isCreateMode || contextWindow == null || contextWindow.isEmpty();
 
-        if (isEmptyDoc && knowledgeContext != null && !knowledgeContext.isEmpty()) {
-            sb.append("你是一个专业的 Wiki 文档编辑助手。当前页面内容为空或极少，用户需要你基于知识库中的相关资料来编写新内容。\n\n");
+        if (isEmptyDoc) {
+            sb.append("你是一个专业的 Wiki 文档编辑助手。当前页面内容为空或极少，用户需要你编写一篇全新的 Wiki 页面。\n\n");
             sb.append("## 规则\n");
-            if (confirmedKnowledge) {
-                sb.append("1. 以下参考资料已经过用户确认，请优先使用这些材料编写内容，确保准确、有据可查\n");
+            if (knowledgeContext != null && !knowledgeContext.isEmpty()) {
+                if (confirmedKnowledge) {
+                    sb.append("1. 以下参考资料已经过用户确认，请优先使用这些材料编写内容，确保准确、有据可查\n");
+                } else {
+                    sb.append("1. 优先使用下方「知识库参考资料」中的信息来编写内容，确保内容准确、有据可查\n");
+                }
+                sb.append("2. 如果参考资料不足以完成用户指令，可以结合通用知识补充，但要区分引用来源和自行补充的内容\n");
+                sb.append("3. 使用 Markdown 格式直接输出完整文档内容（文档为空，不要输出 SEARCH/REPLACE 格式）\n");
+                sb.append("4. 保持结构清晰，使用合理的标题层级\n");
+                sb.append("5. 在适当位置使用 `[[页面名]]` 格式引用知识库中的相关页面\n\n");
             } else {
-                sb.append("1. 优先使用下方「知识库参考资料」中的信息来编写内容，确保内容准确、有据可查\n");
+                sb.append("1. 使用 Markdown 格式直接输出完整文档内容，不要包裹在代码围栏（```）中\n");
+                sb.append("2. 文档为空，绝对不要输出 SEARCH/REPLACE 格式的修改操作\n");
+                sb.append("3. 保持结构清晰，使用合理的标题层级\n");
+                sb.append("4. 直接开始输出正文，不要输出任何前言、确认语或解释\n\n");
             }
-            sb.append("2. 如果参考资料不足以完成用户指令，可以结合通用知识补充，但要区分引用来源和自行补充的内容\n");
-            sb.append("3. 使用 Markdown 格式直接输出完整文档内容（因为文档为空，无需 Search/Replace 格式）\n");
-            sb.append("4. 保持结构清晰，使用合理的标题层级\n");
-            sb.append("5. 在适当位置使用 `[[页面名]]` 格式引用知识库中的相关页面\n\n");
         } else {
             sb.append("你是一个专业的 Wiki 文档编辑助手。你的任务是根据用户指令精确修改 Markdown 文档。\n\n");
             sb.append("## 规则\n");

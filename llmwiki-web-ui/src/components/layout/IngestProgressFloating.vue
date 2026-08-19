@@ -46,12 +46,27 @@ const ringSize = 28
 const ringRadius = 12
 const ringCircumference = computed(() => 2 * Math.PI * ringRadius)
 const ringDashOffset = computed(() => {
-  const ratio = Math.max(0, Math.min(1, store.progress))
+  const ratio = Math.max(0, Math.min(1, displayProgress.value))
   return ringCircumference.value * (1 - ratio)
 })
 
+const displayPhase = computed(() => {
+  const t = mostUrgentTask.value
+  if (!t) return 'analyzing'
+  if (t.status === 'failed' || t.status === 'budget_exhausted') return 'failed'
+  if (t.status === 'cancelled') return 'cancelled'
+  if (t.status === 'paused') return 'paused'
+  if (t.currentStep === 'done') return 'done'
+  if (t.isPhaseRunning) return 'executing'
+  return 'analyzing'
+})
+
+const displayProgress = computed(() => mostUrgentTask.value?.progress ?? 0)
+
+const displaySourceName = computed(() => mostUrgentTask.value?.sourceName || '')
+
 const phaseLabel = computed(() => {
-  switch (store.phase) {
+  switch (displayPhase.value) {
     case 'analyzing': return t('ingest.floatingPhaseAnalyzing')
     case 'executing': return t('ingest.floatingPhaseExecuting')
     case 'done': return t('ingest.floatingPhaseDone')
@@ -63,10 +78,12 @@ const phaseLabel = computed(() => {
 })
 
 const secondaryLine = computed(() => {
-  if (store.phase === 'paused') return t('ingest.floatingProgressSaved')
-  if (store.phase === 'cancelled') return t('ingest.floatingPhaseCancelled')
-  if (store.phase === 'failed') return store.errorMessage || t('ingest.floatingFailedRetry')
-  if (store.phase === 'done') return t('ingest.floatingClickResult')
+  const task = mostUrgentTask.value
+  if (!task) return ''
+  if (task.status === 'paused') return t('ingest.floatingProgressSaved')
+  if (task.status === 'cancelled') return t('ingest.floatingPhaseCancelled')
+  if (task.status === 'failed' || task.status === 'budget_exhausted') return task.pipelineError || t('ingest.floatingFailedRetry')
+  if (task.currentStep === 'done') return t('ingest.floatingClickResult')
   if (store.currentTip) return store.currentTip
   return store.remainingMs > 0 ? t('ingest.floatingRemaining', [formatRemaining(store.remainingMs)]) : ''
 })
@@ -75,22 +92,15 @@ function handleOpen() {
   if (mostUrgentTask.value) {
     store.setActiveTask(mostUrgentTask.value.executionId)
   }
-  if (store.phase === 'done' || store.phase === 'failed') {
+  if (displayPhase.value === 'done' || displayPhase.value === 'failed') {
     store.dismissFloating()
-  }
-  if (store.phase === 'failed') {
-    router.push('/ingest')
-    return
   }
   router.push('/ingest')
 }
 
 function handleClose(e: Event) {
   e.stopPropagation()
-  const task = mostUrgentTask.value
-  if (task) {
-    store.dismissFloatingById(task.executionId)
-  }
+  store.dismissAllFloating()
 }
 
 const canClose = computed(() => {
@@ -121,24 +131,24 @@ watch(show, (visible) => {
     <div
       v-if="show"
       class="ingest-floating"
-      :class="[`ingest-floating--${store.phase}`, { 'ingest-floating--editor': isEditorRoute }]"
+      :class="[`ingest-floating--${displayPhase}`, { 'ingest-floating--editor': isEditorRoute }]"
       role="button"
       tabindex="0"
       @click="handleOpen"
       @keydown.enter="handleOpen"
       @keydown.space.prevent="handleOpen"
     >
-      <div class="ingest-floating__indicator" :class="{ 'ingest-floating__indicator--cancelled': store.phase === 'cancelled', 'ingest-floating__indicator--paused': store.phase === 'paused' }">
-        <template v-if="store.phase === 'done'">
+      <div class="ingest-floating__indicator" :class="{ 'ingest-floating__indicator--cancelled': displayPhase === 'cancelled', 'ingest-floating__indicator--paused': displayPhase === 'paused' }">
+        <template v-if="displayPhase === 'done'">
           <CheckCircle2 :size="20" />
         </template>
-        <template v-else-if="store.phase === 'cancelled'">
+        <template v-else-if="displayPhase === 'cancelled'">
           <XCircle :size="20" />
         </template>
-        <template v-else-if="store.phase === 'paused'">
+        <template v-else-if="displayPhase === 'paused'">
           <PauseCircle :size="20" />
         </template>
-        <template v-else-if="store.phase === 'failed'">
+        <template v-else-if="displayPhase === 'failed'">
           <AlertTriangle :size="20" />
         </template>
         <template v-else>
@@ -171,7 +181,7 @@ watch(show, (visible) => {
       <div class="ingest-floating__body">
         <div class="ingest-floating__head">
           <span class="ingest-floating__phase">{{ phaseLabel }}</span>
-          <span v-if="store.sourceName" class="ingest-floating__source">· {{ store.sourceName }}</span>
+          <span v-if="displaySourceName" class="ingest-floating__source">· {{ displaySourceName }}</span>
         </div>
         <div v-if="secondaryLine" class="ingest-floating__sub">{{ secondaryLine }}</div>
       </div>

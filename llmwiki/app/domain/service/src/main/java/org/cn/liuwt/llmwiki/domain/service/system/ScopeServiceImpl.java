@@ -14,9 +14,6 @@ import org.cn.liuwt.llmwiki.domain.model.system.ScopeModel;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import org.cn.liuwt.llmwiki.common.dal.dataobject.UserDO;
-import org.cn.liuwt.llmwiki.common.dal.mapper.UserMapper;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -42,9 +39,6 @@ public class ScopeServiceImpl implements ScopeService {
     @Autowired
     private ScopeJoinRequestMapper joinRequestMapper;
 
-    @Autowired
-    private UserMapper userMapper;
-
     @Override
     public ScopeModel createScope(ScopeModel scopeModel) {
         ScopeDO scopeDO = toScopeDO(scopeModel);
@@ -52,8 +46,8 @@ public class ScopeServiceImpl implements ScopeService {
         scopeDO.setVisibility("members_only");
         scopeDO.setDefaultApproval("confirm");
         scopeDO.setMonthlyBudget(10000000);
-        scopeDO.setMaxFileSize(52428800);
-        scopeDO.setMaxConcurrent(3);
+        scopeDO.setMaxFileSize(50);
+        scopeDO.setMaxConcurrent(25);
         scopeMapper.insert(scopeDO);
 
         ScopeMemberDO ownerMember = new ScopeMemberDO();
@@ -77,8 +71,12 @@ public class ScopeServiceImpl implements ScopeService {
     @Override
     public List<ScopeModel> listScopesByUserId(Long userId) {
         List<ScopeModel> result = new ArrayList<>();
-        ScopeModel personalScope = buildPersonalScope(userId);
-        result.add(personalScope);
+        ScopeDO personalScope = scopeMapper.selectOne(new LambdaQueryWrapper<ScopeDO>()
+                .eq(ScopeDO::getOwnerId, userId)
+                .eq(ScopeDO::getType, "personal"));
+        if (personalScope != null) {
+            result.add(toScopeModel(personalScope));
+        }
         LambdaQueryWrapper<ScopeMemberDO> memberQuery = new LambdaQueryWrapper<ScopeMemberDO>()
                 .eq(ScopeMemberDO::getUserId, userId);
         List<ScopeMemberDO> memberships = scopeMemberMapper.selectList(memberQuery);
@@ -88,21 +86,6 @@ public class ScopeServiceImpl implements ScopeService {
             scopes.stream().map(this::toScopeModel).forEach(result::add);
         }
         return result;
-    }
-
-    private ScopeModel buildPersonalScope(Long userId) {
-        UserDO user = userMapper.selectById(userId);
-        ScopeModel personal = new ScopeModel();
-        personal.setId(userId);
-        personal.setName(user != null ? user.getUsername() + "的个人知识库" : "个人知识库");
-        personal.setDescription("个人知识库");
-        personal.setType("personal");
-        personal.setOwnerId(userId);
-        personal.setMonthlyBudget(1000000);
-        personal.setDefaultApproval("auto");
-        personal.setMaxFileSize(10485760);
-        personal.setMaxConcurrent(1);
-        return personal;
     }
 
     @Override
@@ -195,11 +178,11 @@ public class ScopeServiceImpl implements ScopeService {
 
     @Override
     public String getMemberRole(Long scopeId, Long userId) {
-        if (scopeId.equals(userId)) {
-            return "owner";
+        ScopeDO scope = scopeId == null ? null : scopeMapper.selectById(scopeId);
+        if (scope == null) {
+            return null;
         }
-        ScopeDO scope = scopeMapper.selectById(scopeId);
-        if (scope != null && scope.getOwnerId().equals(userId)) {
+        if (scope.getOwnerId().equals(userId)) {
             return "owner";
         }
         ScopeMemberDO member = scopeMemberMapper.selectOne(new LambdaQueryWrapper<ScopeMemberDO>()

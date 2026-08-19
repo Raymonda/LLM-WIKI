@@ -1,3 +1,6 @@
+# 内部调优参数（Harness 特性开关、LLM 并发、线程池、Lint 调度、OCR/图表等）
+# 均由代码默认值驱动，可通过环境变量覆盖，完整清单见 docs/CONFIG-REFERENCE.md
+
 spring:
   application:
     name: llmwiki
@@ -51,108 +54,14 @@ mybatis-plus:
 
 llmwiki:
   wiki-data-path: ${WIKI_DATA_PATH:./wiki-data}
-  harness:
-    spill:
-      max-inline-bytes: ${SPILL_MAX_INLINE_BYTES:65536}
-    tool-pipeline:
-      enabled: ${TOOL_PIPELINE_ENABLED:false}
-      timeout-ms: ${TOOL_PIPELINE_TIMEOUT_MS:30000}
-      slow-tool-warn-ms: ${TOOL_PIPELINE_SLOW_WARN_MS:10000}
-      scope-max-concurrent-tools: ${TOOL_PIPELINE_SCOPE_MAX_CONCURRENT:8}
-    compaction:
-      enabled: ${COMPACTION_ENABLED:false}
-      summarize: ${COMPACTION_SUMMARIZE:true}
-      summary-slot: ${COMPACTION_SUMMARY_SLOT:summary}
-      max-field-tokens: ${COMPACTION_MAX_FIELD_TOKENS:16000}
-      spill-pruned: ${COMPACTION_SPILL_PRUNED:true}
-    event-log:
-      enabled: ${EXECUTION_EVENT_LOG_ENABLED:false}
-      replay-limit: ${EXECUTION_EVENT_REPLAY_LIMIT:500}
-    loop-hygiene:
-      enabled: ${LOOP_HYGIENE_ENABLED:false}
-      max-repeats: ${LOOP_HYGIENE_MAX_REPEATS:3}
-      max-calls-per-execution: ${LOOP_HYGIENE_MAX_CALLS:200}
-      max-tracked-scopes: ${LOOP_HYGIENE_MAX_TRACKED_SCOPES:1000}
-    plugin:
-      echo:
-        enabled: ${PLUGIN_ECHO_ENABLED:true}
-  edit:
-    context:
-      max-chars: ${EDIT_CONTEXT_MAX_CHARS:24000}
   ai:
-    # Multi-provider mode: uncomment and configure to use multiple AI providers.
-    # When providers section is empty, falls back to spring.ai.openai.* single-key mode.
-    # providers:
-    #   dashscope:
-    #     base-url: https://dashscope.aliyuncs.com/compatible-mode
-    #     api-key: ${AI_DASHSCOPE_API_KEY:}
-    #   deepseek:
-    #     base-url: https://api.deepseek.com
-    #     api-key: ${AI_DEEPSEEK_API_KEY:}
-    #   moonshot:
-    #     base-url: https://api.moonshot.cn
-    #     api-key: ${AI_MOONSHOT_API_KEY:}
-    #   openai:
-    #     base-url: https://api.openai.com
-    #     api-key: ${AI_OPENAI_API_KEY:}
-    #   local:
-    #     base-url: ${AI_LOCAL_BASE_URL:http://localhost:11434}
-    #     api-key: ${AI_LOCAL_API_KEY:ollama}
-    # slots:
-    #   main:
-    #     provider: deepseek
-    #     model: deepseek-v4-flash-0731
-    #   multimodal:
-    #     provider: dashscope
-    #     model: qwen3.7-plus
-    #   query-multimodal:
-    #     provider: dashscope
-    #     model: qwen3.6-flash
-    #   deep-analysis:
-    #     provider: deepseek
-    #     model: deepseek-v4-pro
-    #   deep-multimodal:
-    #     provider: dashscope
-    #     model: qwen3.7-plus
-    #   ocr:
-    #     provider: dashscope
-    #     model: qwen-vl-ocr
-    #   diagram:
-    #     provider: moonshot
-    #     model: kimi-k2.6
-    timeout-ms: ${LLM_TIMEOUT_MS:300000}
-    retry:
-      max-attempts: ${LLM_RETRY_MAX:3}
-      base-delay-ms: ${LLM_RETRY_DELAY:2000}
+    # 单 key 模式：模型分档如下；多 Provider 模式（providers/slots）配置示例见 docs/CONFIG-REFERENCE.md
     multimodal: ${AI_MULTIMODAL:false}
     multimodal-model: ${AI_MULTIMODAL_MODEL:qwen3.7-plus}
     query-multimodal-model: ${AI_QUERY_MULTIMODAL_MODEL:${AI_MULTIMODAL_MODEL:qwen3.7-plus}}
     deep-analysis-model: ${AI_DEEP_ANALYSIS_MODEL:deepseek-v4-pro}
-    deep-multimodal-model: ${AI_DEEP_MULTIMODAL_MODEL:${AI_MULTIMODAL_MODEL:qwen3.7-plus}}
+    deep-multimodal-model: ${AI_MULTIMODAL_MODEL:${AI_MULTIMODAL_MODEL:qwen3.7-plus}}
     multimodal-max-images: ${AI_MULTIMODAL_MAX_IMAGES:10}
-  llm:
-    concurrency:
-      plan: ${LLM_CONCURRENCY_PLAN:2}
-      summary: ${LLM_CONCURRENCY_SUMMARY:2}
-      entity: ${LLM_CONCURRENCY_ENTITY:4}
-      analyze: ${LLM_CONCURRENCY_ANALYZE:6}
-    executor:
-      core-size: ${LLM_EXECUTOR_CORE:8}
-      max-size: ${LLM_EXECUTOR_MAX:12}
-  ingest:
-    analysis:
-      single-pass-max-chars: ${INGEST_SINGLE_PASS_MAX_CHARS:800000}
-      pool-size: ${INGEST_ANALYSIS_POOL:8}
-  writer:
-    pool:
-      core-size: ${WRITER_POOL_CORE:6}
-      max-size: ${WRITER_POOL_MAX:16}
-  lint:
-    personal-cron: ${LINT_PERSONAL_CRON:0 0 3 ? * MON}
-    team-cron: ${LINT_TEAM_CRON:0 0 4 * * *}
-    skip-window-hours: ${LINT_SKIP_WINDOW_HOURS:1}
-    scheduled-concurrency: ${LINT_SCHEDULED_CONCURRENCY:3}
-    max-scopes-per-run: ${LINT_MAX_SCOPES_PER_RUN:50}
   storage:
     provider: ${STORAGE_PROVIDER:local}
     nas:
@@ -174,6 +83,10 @@ llmwiki:
     retry:
       interval-ms: ${ES_RETRY_INTERVAL_MS:60000}
       max-attempts: ${ES_RETRY_MAX_ATTEMPTS:5}
+  mcp:
+    # 对外地址：MCP 客户端连接本服务的基础 URL（不含 /mcp 路径）。
+    # 留空则按请求上下文（X-Forwarded-Proto/Host）自动推导；特殊部署（CDN/多域名）可用环境变量 MCP_PUBLIC_URL 覆盖。
+    public-url: ${MCP_PUBLIC_URL:}
   jwt:
     secret: ${JWT_SECRET:llmwiki-default-secret-change-in-production}
     expiration: 86400000
@@ -186,30 +99,6 @@ llmwiki:
     #     which is printed ONCE to the startup log (WARN level).
     #     Login and change it immediately.
     admin-usernames: ${ADMIN_USERNAMES:admin}
-  schema-lint:
-    # 宪法规则 7：SchemaLint 独立调度——观察期补丁自动提升 + 治理健康日志
-    enabled: ${SCHEMA_LINT_ENABLED:true}
-    # 默认每小时 30 分跑一次；生产可按需放缓
-    cron: ${SCHEMA_LINT_CRON:0 30 * * * ?}
-  ocr:
-    enabled: ${OCR_ENABLED:true}
-    model: ${OCR_MODEL:qwen-vl-ocr}
-    scan-threshold: ${OCR_SCAN_THRESHOLD:0.3}
-    max-pages: ${OCR_MAX_PAGES:20}
-    timeout-ms: ${OCR_TIMEOUT_MS:120000}
-  diagram:
-    enabled: ${DIAGRAM_ENABLED:false}
-    model: ${DIAGRAM_MODEL:kimi-k2.6}
-    api-key: ${DIAGRAM_API_KEY:}
-    max-images: ${DIAGRAM_MAX_IMAGES:15}
-    timeout-ms: ${DIAGRAM_TIMEOUT_MS:180000}
-    dpi: ${DIAGRAM_DPI:200}
-    jpeg-quality: ${DIAGRAM_JPEG_QUALITY:85}
-    concurrency: ${DIAGRAM_CONCURRENCY:4}
-    score-threshold: ${DIAGRAM_SCORE_THRESHOLD:5.0}
-    large-drawing-ratio: ${DIAGRAM_LARGE_DRAWING_RATIO:0.05}
-    significant-image-ratio: ${DIAGRAM_IMAGE_AREA_RATIO:0.05}
-    payload-gate-mb: ${DIAGRAM_PAYLOAD_GATE_MB:2.0}
   rocketmq:
     enabled: ${ROCKETMQ_ENABLED:false}
 

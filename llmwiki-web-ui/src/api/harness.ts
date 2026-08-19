@@ -242,7 +242,7 @@ export function submitAutonomyV2(sessionId: string, level: string, overrides?: R
 }
 
 export function finalizeBootstrapV2(sessionId: string): Promise<SchemaInfo> {
-  return api.post(`/harness/schema/bootstrap/v2/${sessionId}/finalize`, {}, { timeout: 120000 })
+  return api.post(`/harness/schema/bootstrap/v2/${sessionId}/finalize`, {}, { timeout: 30000 })
 }
 
 export function advisorCheckV2(sessionId: string, step: string, data: any, capabilityIds: string[], extra?: Record<string, any>): Promise<AdvisorSuggestion[]> {
