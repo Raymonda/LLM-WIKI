@@ -1,6 +1,12 @@
 package org.cn.liuwt.llmwiki.domain.service.harness;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.cn.liuwt.llmwiki.domain.model.harness.FactBlock;
 import org.cn.liuwt.llmwiki.domain.service.harness.prompt.PromptRegistry;
+import org.cn.liuwt.llmwiki.domain.service.harness.prompt.config.QueryPrompts;
+import org.cn.liuwt.llmwiki.domain.service.harness.query.FactBlockParser;
+import org.cn.liuwt.llmwiki.domain.service.harness.query.QueryClarifier;
+import org.cn.liuwt.llmwiki.domain.service.harness.query.QuerySseProtocol;
 import org.cn.liuwt.llmwiki.domain.service.harness.tool.ReadFileTool;
 import org.cn.liuwt.llmwiki.domain.service.harness.tool.ReadRawSourceTool;
 import org.cn.liuwt.llmwiki.domain.service.harness.tool.GetSourceInfoTool;
@@ -31,12 +37,15 @@ import org.springframework.core.io.ByteArrayResource;
 import org.springframework.util.MimeType;
 import org.springframework.util.MimeTypeUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -45,6 +54,17 @@ import java.util.regex.Pattern;
 public class AgentRunner {
 
     private static final Logger log = LoggerFactory.getLogger(AgentRunner.class);
+
+    @Value("${llmwiki.query.fact-block.enabled:true}")
+    private boolean factBlockEnabled;
+
+    @Value("${llmwiki.query.clarifier.enabled:true}")
+    private boolean clarifierEnabled;
+
+    @Value("${llmwiki.query.narrative.enabled:true}")
+    private boolean narrativeEnabled;
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Autowired(required = false)
     private ChatModel chatModel;
@@ -63,6 +83,15 @@ public class AgentRunner {
 
     @Autowired
     private SchemaInjector schemaInjector;
+
+    @Autowired
+    private CompactionService compactionService;
+
+    @Autowired
+    private org.cn.liuwt.llmwiki.domain.service.harness.eventlog.ExecutionEventLogService executionEventLog;
+
+    @Autowired
+    private QueryClarifier queryClarifier;
 
     @Autowired
     private ReadFileTool readFileTool;
@@ -89,6 +118,9 @@ public class AgentRunner {
     private UpdateLinksTool updateLinksTool;
 
     @Autowired
+    private org.cn.liuwt.llmwiki.domain.service.harness.tool.TodoTool todoTool;
+
+    @Autowired
     private SearchService searchService;
 
     @Autowired
@@ -112,35 +144,40 @@ public class AgentRunner {
         if (chatModel != null) {
             this.queryReadOnlyClient = ChatClient.builder(chatModel)
                 .defaultTools(readFileTool, readRawSourceTool, getSourceInfoTool,
-                    searchWikiTool, listPagesTool, getRelatedPagesTool)
+                    searchWikiTool, listPagesTool, getRelatedPagesTool, todoTool)
                 .build();
             this.queryReadWriteClient = ChatClient.builder(chatModel)
                 .defaultTools(readFileTool, readRawSourceTool, getSourceInfoTool,
-                    searchWikiTool, listPagesTool, getRelatedPagesTool,
+                    searchWikiTool, listPagesTool, getRelatedPagesTool, todoTool,
                     writeFileTool, updateLinksTool)
                 .build();
             this.noToolsClient = ChatClient.builder(chatModel).build();
-            log.info("Query ChatClient initialized: readOnly(6 tools) + readWrite(8 tools) + noToolsClient");
+            log.info("Query ChatClient initialized: readOnly(7 tools) + readWrite(9 tools) + noToolsClient");
 
             ChatModel deepModel = LlmClient.getDeepAnalysisChatModel();
             if (deepModel != null && deepModel != chatModel) {
                 this.deepQueryReadOnlyClient = ChatClient.builder(deepModel)
                     .defaultTools(readFileTool, readRawSourceTool, getSourceInfoTool,
-                        searchWikiTool, listPagesTool, getRelatedPagesTool)
+                        searchWikiTool, listPagesTool, getRelatedPagesTool, todoTool)
                     .build();
                 this.deepQueryReadWriteClient = ChatClient.builder(deepModel)
                     .defaultTools(readFileTool, readRawSourceTool, getSourceInfoTool,
-                        searchWikiTool, listPagesTool, getRelatedPagesTool,
+                        searchWikiTool, listPagesTool, getRelatedPagesTool, todoTool,
                         writeFileTool, updateLinksTool)
                     .build();
                 this.deepNoToolsClient = ChatClient.builder(deepModel).build();
-                log.info("Deep analysis ChatClient initialized: readOnly(6 tools) + readWrite(8 tools) + noToolsClient");
+                log.info("Deep analysis ChatClient initialized: readOnly(7 tools) + readWrite(9 tools) + noToolsClient");
             }
         }
     }
 
     public Flux<String> runQueryAgentStreaming(Long scopeId, String question, String sessionId, boolean deepMode) {
+        return runQueryAgentStreaming(scopeId, question, sessionId, deepMode, null);
+    }
+
+    public Flux<String> runQueryAgentStreaming(Long scopeId, String question, String sessionId, boolean deepMode, String assumedIntent) {
         TokenUsageContext.set(scopeId, "query");
+        recordTurnStart(sessionId, scopeId, question, deepMode, false);
         if (!rateLimitService.checkCallRate(scopeId)) {
             TokenUsageContext.clear();
             return Flux.just("AI 调用频率过高，请稍后再试。");
@@ -156,11 +193,32 @@ public class AgentRunner {
 
         return Flux.defer(() -> {
             try {
+                String effectiveAssumed = assumedIntent;
+                if (clarifierEnabled && (effectiveAssumed == null || effectiveAssumed.isBlank())) {
+                    ChatClient clarifyClient = (deepMode && deepNoToolsClient != null) ? deepNoToolsClient : noToolsClient;
+                    String clarifyPrompt = schemaInjector.prependForQuery(scopeId,
+                        PromptRegistry.forQuery().clarificationPrompt(scopeId));
+                    QueryClarifier.ClarificationResult clarification = queryClarifier.assess(
+                        clarifyClient, clarifyPrompt, question, sessionId);
+                    if ("AMBIGUOUS".equals(clarification.clarity())
+                        && clarification.clarification() != null
+                        && !clarification.clarification().isBlank()
+                        && clarification.reason() != null) {
+                        String payload = buildClarifyPayload(clarification);
+                        return Flux.just(QuerySseProtocol.CLARIFY_PREFIX + payload);
+                    }
+                    if ("CLEAR".equals(clarification.clarity())
+                        && "forced-clear".equals(clarification.reason())
+                        && clarification.clarification() != null
+                        && !clarification.clarification().isBlank()) {
+                        effectiveAssumed = "（澄清次数超限，自动采用）" + clarification.clarification();
+                    }
+                }
                 long phase1Start = System.currentTimeMillis();
                 RetrievalContext retrievalContext = retrievalService.preRetrieveLight(scopeId, question);
                 long phase1Elapsed = System.currentTimeMillis() - phase1Start;
 
-                String factContext = retrievalContext.toPromptContextLight();
+                String factContext = compactionService.compressField(sessionId, scopeId, "factContext", retrievalContext.toPromptContextLight());
                 String deprecatedContext = retrievalContext.formatDeprecatedContext();
                 int pageCount = retrievalContext.getPageCount();
 
@@ -169,30 +227,64 @@ public class AgentRunner {
                     factContext.length(), retrievalContext.getDeprecatedPages().size(), phase1Elapsed);
 
                 // Phase 1: Fact Agent (tools, ACTIVE-only, generates Layer 1)
-                String factSystemPrompt = schemaInjector.prependForQuery(scopeId,
-                    PromptRegistry.forQuery().factAgentPrompt(scopeId, pageCount, factContext));
+                String factSystemPrompt = factBlockEnabled
+                    ? schemaInjector.prependForQuery(scopeId,
+                        PromptRegistry.forQuery().factAgentPromptStructured(scopeId, pageCount, factContext))
+                    : schemaInjector.prependForQuery(scopeId,
+                        PromptRegistry.forQuery().factAgentPrompt(scopeId, pageCount, factContext));
 
+                if (effectiveAssumed != null && !effectiveAssumed.isBlank()) {
+                    factSystemPrompt = factSystemPrompt + "\n\n## 已确认的用户意图\n" + effectiveAssumed
+                        + "\n检索与回答请聚焦此意图，无需再次澄清。";
+                }
+
+                StringBuilder lineBuffer = new StringBuilder();
                 StringBuilder layer1Buffer = new StringBuilder();
+                List<FactBlock> factBlocks = new ArrayList<>();
                 AtomicInteger charCount = new AtomicInteger(0);
 
                 Flux<String> generatingMarker = Flux.just("__STEP__:generating");
 
-                Flux<String> layer1Stream = activeQueryClient.prompt()
-                    .system(factSystemPrompt)
-                    .user(question)
-                    .stream()
-                    .content()
-                    .doOnNext(chunk -> layer1Buffer.append(chunk));
+                Flux<String> layer1Stream = factBlockEnabled
+                    ? activeQueryClient.prompt()
+                        .system(factSystemPrompt)
+                        .user(question)
+                        .toolContext(java.util.Map.of("sessionId", sessionId))
+                        .stream()
+                        .content()
+                        .concatMap(chunk -> {
+                            if (chunk == null) return Flux.empty();
+                            lineBuffer.append(chunk);
+                            List<String> lines = FactBlockParser.extractCompleteLines(lineBuffer);
+                            List<String> out = new ArrayList<>();
+                            for (String line : lines) {
+                                FactBlock block = FactBlockParser.tryParse(line);
+                                if (block != null) {
+                                    factBlocks.add(block);
+                                    out.add(QuerySseProtocol.FACT_PREFIX + line);
+                                } else if (!line.isBlank()) {
+                                    layer1Buffer.append(line).append('\n');
+                                    out.add(line);
+                                }
+                            }
+                            return Flux.fromIterable(out);
+                        })
+                        .concatWith(Flux.defer(() -> emitPendingLine(lineBuffer, layer1Buffer, factBlocks)))
+                    : activeQueryClient.prompt()
+                        .system(factSystemPrompt)
+                        .user(question)
+                        .toolContext(java.util.Map.of("sessionId", sessionId))
+                        .stream()
+                        .content()
+                        .doOnNext(layer1Buffer::append);
 
                 // Phase 2: Synthesis Agent (no tools, uses Layer 1 + DEPRECATED context, generates Layer 2/3)
                 Flux<String> layer23Stream = Flux.defer(() -> {
-                    String layer1Text = layer1Buffer.toString();
-                    log.info("Fact Agent completed: scopeId={} layer1Len={}", scopeId, layer1Text.length());
+                    log.info("Fact Agent completed: scopeId={} factBlocks={}", scopeId, factBlocks.size());
+                    String synthesisUserPrompt = buildSynthesisUserPrompt(scopeId, question,
+                        FactBlockParser.toFactInput(factBlocks, layer1Buffer.toString()), deprecatedContext, deepMode);
 
-                    String synthesisUserPrompt = PromptRegistry.forQuery()
-                        .synthesisPrompt(scopeId, question, layer1Text, deprecatedContext, deepMode);
-
-                    return synthesizeWithImages(scopeId, synthesisUserPrompt, layer1Text, deepMode);
+                    return synthesizeWithImages(scopeId, synthesisUserPrompt, factBlocks, layer1Buffer.toString(), deepMode);
                 });
 
                 Flux<String> synthesisMarker = Flux.just("\n\n", "__STEP__:synthesizing");
@@ -205,21 +297,29 @@ public class AgentRunner {
                     })
                     .onErrorResume(e -> {
                         log.error("Stream failed, FALLBACK to simple query: scopeId={}, error={}", scopeId, e.getMessage(), e);
+                        recordError(sessionId, "stream", e.getMessage());
                         return Flux.just(runSimpleQuery(scopeId, question));
                     });
             } catch (Exception e) {
                 log.error("Pre-retrieve failed, FALLBACK to simple query: scopeId={}, error={}", scopeId, e.getMessage(), e);
+                recordError(sessionId, "pre-retrieve", e.getMessage());
                 return Flux.just(runSimpleQuery(scopeId, question));
             }
-        }).subscribeOn(Schedulers.boundedElastic());
+        }).subscribeOn(Schedulers.boundedElastic())
+        .doFinally(signal -> recordTurnEnd(sessionId, signal));
     }
 
     public Flux<String> runQueryAgentStreamingMultiScope(List<Long> scopeIds, String question, String sessionId, boolean deepMode) {
+        return runQueryAgentStreamingMultiScope(scopeIds, question, sessionId, deepMode, null);
+    }
+
+    public Flux<String> runQueryAgentStreamingMultiScope(List<Long> scopeIds, String question, String sessionId, boolean deepMode, String assumedIntent) {
         if (scopeIds.size() == 1) {
-            return runQueryAgentStreaming(scopeIds.get(0), question, sessionId, deepMode);
+            return runQueryAgentStreaming(scopeIds.get(0), question, sessionId, deepMode, assumedIntent);
         }
         Long primaryScopeId = scopeIds.get(0);
         TokenUsageContext.set(primaryScopeId, "query");
+        recordTurnStart(sessionId, primaryScopeId, question, deepMode, true);
         if (!rateLimitService.checkCallRate(primaryScopeId)) {
             TokenUsageContext.clear();
             return Flux.just("AI 调用频率过高，请稍后再试。");
@@ -231,35 +331,121 @@ public class AgentRunner {
         ChatClient activeQueryClient = (deepMode && deepQueryReadOnlyClient != null) ? deepQueryReadOnlyClient : queryReadOnlyClient;
         return Flux.defer(() -> {
             try {
+                String effectiveAssumed = assumedIntent;
+                if (clarifierEnabled && (effectiveAssumed == null || effectiveAssumed.isBlank())) {
+                    ChatClient clarifyClient = (deepMode && deepNoToolsClient != null) ? deepNoToolsClient : noToolsClient;
+                    String clarifyPrompt = schemaInjector.prependForQuery(primaryScopeId,
+                        PromptRegistry.forQuery().clarificationPrompt(primaryScopeId));
+                    QueryClarifier.ClarificationResult clarification = queryClarifier.assess(
+                        clarifyClient, clarifyPrompt, question, sessionId);
+                    if ("AMBIGUOUS".equals(clarification.clarity())
+                        && clarification.clarification() != null
+                        && !clarification.clarification().isBlank()
+                        && clarification.reason() != null) {
+                        String payload = buildClarifyPayload(clarification);
+                        return Flux.just(QuerySseProtocol.CLARIFY_PREFIX + payload);
+                    }
+                    if ("CLEAR".equals(clarification.clarity())
+                        && "forced-clear".equals(clarification.reason())
+                        && clarification.clarification() != null
+                        && !clarification.clarification().isBlank()) {
+                        effectiveAssumed = "（澄清次数超限，自动采用）" + clarification.clarification();
+                    }
+                }
                 RetrievalContext retrievalContext = retrievalService.preRetrieveMultiScope(scopeIds, question);
-                String factContext = retrievalContext.toPromptContextLight();
+                String factContext = compactionService.compressField(sessionId, primaryScopeId, "factContext", retrievalContext.toPromptContextLight());
                 int pageCount = retrievalContext.getSearchResults().size();
-                String factSystemPrompt = PromptRegistry.forQuery().factAgentPrompt(primaryScopeId, pageCount, factContext);
+                String factSystemPrompt = factBlockEnabled
+                    ? PromptRegistry.forQuery().factAgentPromptStructured(primaryScopeId, pageCount, factContext)
+                    : PromptRegistry.forQuery().factAgentPrompt(primaryScopeId, pageCount, factContext);
+
+                if (effectiveAssumed != null && !effectiveAssumed.isBlank()) {
+                    factSystemPrompt = factSystemPrompt + "\n\n## 已确认的用户意图\n" + effectiveAssumed
+                        + "\n检索与回答请聚焦此意图，无需再次澄清。";
+                }
+                StringBuilder lineBuffer = new StringBuilder();
                 StringBuilder layer1Buffer = new StringBuilder();
+                List<FactBlock> factBlocks = new ArrayList<>();
                 Flux<String> generatingMarker = Flux.just("__STEP__:generating");
-                Flux<String> layer1Stream = activeQueryClient.prompt()
-                    .system(factSystemPrompt)
-                    .user(question)
-                    .stream()
-                    .content()
-                    .doOnNext(layer1Buffer::append);
+                Flux<String> layer1Stream = factBlockEnabled
+                    ? activeQueryClient.prompt()
+                        .system(factSystemPrompt)
+                        .user(question)
+                        .toolContext(java.util.Map.of("sessionId", sessionId))
+                        .stream()
+                        .content()
+                        .concatMap(chunk -> {
+                            if (chunk == null) return Flux.empty();
+                            lineBuffer.append(chunk);
+                            List<String> lines = FactBlockParser.extractCompleteLines(lineBuffer);
+                            List<String> out = new ArrayList<>();
+                            for (String line : lines) {
+                                FactBlock block = FactBlockParser.tryParse(line);
+                                if (block != null) {
+                                    factBlocks.add(block);
+                                    out.add(QuerySseProtocol.FACT_PREFIX + line);
+                                } else if (!line.isBlank()) {
+                                    layer1Buffer.append(line).append('\n');
+                                    out.add(line);
+                                }
+                            }
+                            return Flux.fromIterable(out);
+                        })
+                        .concatWith(Flux.defer(() -> emitPendingLine(lineBuffer, layer1Buffer, factBlocks)))
+                    : activeQueryClient.prompt()
+                        .system(factSystemPrompt)
+                        .user(question)
+                        .toolContext(java.util.Map.of("sessionId", sessionId))
+                        .stream()
+                        .content()
+                        .doOnNext(layer1Buffer::append);
                 Flux<String> layer23Stream = Flux.defer(() -> {
-                    String layer1Text = layer1Buffer.toString();
-                    String synthesisUserPrompt = PromptRegistry.forQuery()
-                        .synthesisPrompt(primaryScopeId, question, layer1Text, "", deepMode);
-                    return synthesizeWithImages(primaryScopeId, synthesisUserPrompt, layer1Text, deepMode);
+                    log.info("Fact Agent completed: scopeId={} factBlocks={}", primaryScopeId, factBlocks.size());
+                    String synthesisUserPrompt = buildSynthesisUserPrompt(primaryScopeId, question,
+                        FactBlockParser.toFactInput(factBlocks, layer1Buffer.toString()), "", deepMode);
+                    return synthesizeWithImages(primaryScopeId, synthesisUserPrompt, factBlocks, layer1Buffer.toString(), deepMode);
                 });
                 Flux<String> synthesisMarker = Flux.just("\n\n", "__STEP__:synthesizing");
                 return Flux.concat(generatingMarker, layer1Stream, synthesisMarker, layer23Stream)
                     .onErrorResume(e -> {
                         log.error("Multi-scope stream failed: scopeIds={}, error={}", scopeIds, e.getMessage(), e);
+                        recordError(sessionId, "multi-scope-stream", e.getMessage());
                         return Flux.just(runSimpleQuery(primaryScopeId, question));
                     });
             } catch (Exception e) {
                 log.error("Multi-scope pre-retrieve failed: scopeIds={}, error={}", scopeIds, e.getMessage(), e);
+                recordError(sessionId, "multi-scope-pre-retrieve", e.getMessage());
                 return Flux.just(runSimpleQuery(primaryScopeId, question));
             }
-        }).subscribeOn(Schedulers.boundedElastic());
+        }).subscribeOn(Schedulers.boundedElastic())
+        .doFinally(signal -> recordTurnEnd(sessionId, signal));
+    }
+
+    private void recordTurnStart(String sessionId, Long scopeId, String question, boolean deepMode, boolean multiScope) {
+        todoTool.clear(sessionId);
+        executionEventLog.append(sessionId, org.cn.liuwt.llmwiki.domain.service.harness.eventlog.ExecutionEventTypes.TURN_START,
+                java.util.Map.of(
+                        "scopeId", scopeId,
+                        "deepMode", deepMode,
+                        "multiScope", multiScope,
+                        "questionPreview", question == null ? "" : (question.length() > 120 ? question.substring(0, 120) : question)));
+    }
+
+    private void recordTurnEnd(String sessionId, reactor.core.publisher.SignalType signal) {
+        java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("signal", signal.name());
+        org.cn.liuwt.llmwiki.domain.service.harness.tool.TodoTool.Progress todoProgress = todoTool.progressOf(sessionId);
+        if (todoProgress != null && todoProgress.total() > 0) {
+            payload.put("todoDone", todoProgress.done());
+            payload.put("todoTotal", todoProgress.total());
+        }
+        executionEventLog.append(sessionId, org.cn.liuwt.llmwiki.domain.service.harness.eventlog.ExecutionEventTypes.TURN_END,
+                payload);
+    }
+
+    private void recordError(String sessionId, String stage, String message) {
+        executionEventLog.append(sessionId, org.cn.liuwt.llmwiki.domain.service.harness.eventlog.ExecutionEventTypes.ERROR,
+                java.util.Map.of("stage", stage, "message", message != null ? message : "unknown"));
     }
 
     private String runSimpleQuery(Long scopeId, String question) {
@@ -273,9 +459,43 @@ public class AgentRunner {
         return "AI 服务未配置，无法回答问题。请设置 AI_DASHSCOPE_API_KEY 环境变量。";
     }
 
+    public String buildSynthesisUserPrompt(Long scopeId, String question, String factInput, String deprecatedContext, boolean deepMode) {
+        QueryPrompts registry = PromptRegistry.forQuery();
+        return narrativeEnabled
+            ? registry.narrativePrompt(scopeId, question, factInput, deprecatedContext, deepMode)
+            : registry.synthesisPrompt(scopeId, question, factInput, deprecatedContext, deepMode);
+    }
+
+    private String buildClarifyPayload(QueryClarifier.ClarificationResult clarification) {
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("question", clarification.clarification());
+            payload.put("options", clarification.options() != null ? clarification.options() : List.of());
+            payload.put("assumedIntentId", clarification.options() != null && !clarification.options().isEmpty()
+                ? clarification.options().get(0) : null);
+            payload.put("reason", clarification.reason());
+            return MAPPER.writeValueAsString(payload);
+        } catch (Exception e) {
+            return "{\"question\":\"\"}";
+        }
+    }
+
+    private Flux<String> emitPendingLine(StringBuilder lineBuffer, StringBuilder layer1Buffer, List<FactBlock> factBlocks) {
+        String rest = lineBuffer.toString().trim();
+        if (rest.isEmpty()) return Flux.empty();
+        FactBlock block = FactBlockParser.tryParse(rest);
+        if (block != null) {
+            factBlocks.add(block);
+            return Flux.just(QuerySseProtocol.FACT_PREFIX + rest);
+        }
+        layer1Buffer.append(rest).append('\n');
+        if (rest.startsWith("{")) return Flux.empty();
+        return Flux.just(rest);
+    }
+
     private static final Pattern IMG_EXTRACT_PATTERN = Pattern.compile("!\\[[^\\]]*?\\]\\(([^)]+?)\\)");
 
-    private Flux<String> synthesizeWithImages(Long scopeId, String synthesisPrompt, String layer1Text, boolean deepMode) {
+    private Flux<String> synthesizeWithImages(Long scopeId, String synthesisPrompt, List<FactBlock> factBlocks, String layer1Text, boolean deepMode) {
         ChatClient activeNoToolsClient = (deepMode && deepNoToolsClient != null) ? deepNoToolsClient : noToolsClient;
         
         if (chatModel == null) {
@@ -286,9 +506,12 @@ public class AgentRunner {
                 .content();
         }
 
-        List<String> imagePaths = extractImagePaths(layer1Text);
-        log.info("Image extraction: scopeId={} deepMode={} foundPaths={} layer1Len={}",
-            scopeId, deepMode, imagePaths.size(), layer1Text.length());
+        java.util.LinkedHashSet<String> mergedPaths = new java.util.LinkedHashSet<>();
+        mergedPaths.addAll(extractImagePathsFromFactBlocks(factBlocks));
+        mergedPaths.addAll(extractImagePaths(layer1Text));
+        List<String> imagePaths = new ArrayList<>(mergedPaths);
+        log.info("Image extraction: scopeId={} deepMode={} foundPaths={} factBlockCount={}",
+            scopeId, deepMode, imagePaths.size(), factBlocks == null ? 0 : factBlocks.size());
 
         List<Media> mediaList = loadImagesAsMedia(String.valueOf(scopeId), imagePaths);
         log.info("Image loading: scopeId={} loadedCount={} (extracted={})", 
@@ -345,6 +568,24 @@ public class AgentRunner {
     private static final int MAX_QUERY_IMAGES = 10;
     private static final int MAX_SINGLE_IMAGE_BYTES = 2 * 1024 * 1024;
     private static final int MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
+
+    private List<String> extractImagePathsFromFactBlocks(List<FactBlock> factBlocks) {
+        List<String> paths = new ArrayList<>();
+        if (factBlocks == null) return paths;
+        java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+        for (FactBlock block : factBlocks) {
+            if (!"image".equals(block.kind())) continue;
+            if (block.refs() == null) continue;
+            for (FactBlock.FactRef ref : block.refs()) {
+                String path = ref.path();
+                if (path != null && !path.isBlank() && !path.startsWith("http") && !path.startsWith("data:")) {
+                    seen.add(path);
+                }
+            }
+        }
+        paths.addAll(seen);
+        return paths;
+    }
 
     private List<String> extractImagePaths(String text) {
         List<String> paths = new ArrayList<>();

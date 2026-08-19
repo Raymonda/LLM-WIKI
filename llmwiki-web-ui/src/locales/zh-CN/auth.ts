@@ -28,7 +28,6 @@ export default {
   hasAccountLogin: '已有账号？返回登录',
   noAccountRegister: '没有账号？注册新账号',
   operationFailed: '操作失败，请重试',
-  consentText: '同意知识共享协议 — 开放的知识可被团队 AI 自动提炼晋升，贡献者将获得署名荣誉',
   feature1: '添加资料，AI 自动整合到知识库',
   feature2: '知识问答，答案沉淀为新页面',
   feature3: '知识体检，自动维护健康状态',

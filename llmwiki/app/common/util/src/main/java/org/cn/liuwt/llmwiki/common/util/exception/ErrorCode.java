@@ -30,7 +30,6 @@ public enum ErrorCode {
     AUTH_NOT_LOGGED_IN("AUTH_101", "Not logged in or session expired"),
     AUTH_SCOPE_FORBIDDEN("AUTH_102", "You do not have permission for this action in this scope"),
     AUTH_SELF_REGISTER_DISABLED("AUTH_103", "Registration is disabled, please contact the administrator"),
-    AUTH_INVALID_CONSENT("AUTH_104", "consent must be 0 or 1"),
     AUTH_USER_DISABLED("AUTH_105", "Account has been disabled"),
 
     // Scope permissions and management

@@ -4,8 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ScopeBudgetDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.ScopeDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.UserDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ScopeBudgetMapper;
+import org.cn.liuwt.llmwiki.common.dal.mapper.ScopeMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.UserMapper;
 import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
 import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
@@ -28,6 +30,9 @@ public class UserServiceImpl implements UserService {
 
     @Autowired
     private ScopeBudgetMapper scopeBudgetMapper;
+
+    @Autowired
+    private ScopeMapper scopeMapper;
 
     @Override
     public UserModel getUserByUsername(String username) {
@@ -59,26 +64,30 @@ public class UserServiceImpl implements UserService {
             userDO.setRole("user");
         }
         userMapper.insert(userDO);
-        userDO.setScopeId(userDO.getId());
+
+        ScopeDO personalScope = new ScopeDO();
+        personalScope.setName(userDO.getUsername() + "的个人知识库");
+        personalScope.setDescription("个人知识库");
+        personalScope.setType("personal");
+        personalScope.setOwnerId(userDO.getId());
+        personalScope.setMonthlyBudget(1000000);
+        personalScope.setDefaultApproval("auto");
+        personalScope.setMaxFileSize(10);
+        personalScope.setMaxConcurrent(25);
+        personalScope.setVisibility("private");
+        scopeMapper.insert(personalScope);
+
+        userDO.setScopeId(personalScope.getId());
         userMapper.updateById(userDO);
 
         ScopeBudgetDO budget = new ScopeBudgetDO();
-        budget.setScopeId(userDO.getId());
+        budget.setScopeId(personalScope.getId());
         budget.setMonthlyBudget(1000000);
         budget.setUsedTokens(0);
+        budget.setResetDate(java.time.LocalDateTime.now().toLocalDate().withDayOfMonth(1).plusMonths(1).atStartOfDay());
         scopeBudgetMapper.insert(budget);
 
         return toModel(userDO);
-    }
-
-    @Override
-    public void updateConsentKnowledgePromotion(Long userId, Integer consent) {
-        UserDO userDO = userMapper.selectById(userId);
-        if (userDO == null) {
-            throw new BusinessException(ErrorCode.USER_NOT_FOUND);
-        }
-        userDO.setConsentKnowledgePromotion(consent);
-        userMapper.updateById(userDO);
     }
 
     @Override
@@ -182,7 +191,6 @@ public class UserServiceImpl implements UserService {
         model.setRole(userDO.getRole());
         model.setStatus(userDO.getStatus());
         model.setScopeId(userDO.getScopeId());
-        model.setConsentKnowledgePromotion(userDO.getConsentKnowledgePromotion());
         model.setCreatedAt(userDO.getCreatedAt());
         model.setUpdatedAt(userDO.getUpdatedAt());
         return model;
@@ -198,7 +206,6 @@ public class UserServiceImpl implements UserService {
         userDO.setRole(model.getRole());
         userDO.setStatus(model.getStatus());
         userDO.setScopeId(model.getScopeId());
-        userDO.setConsentKnowledgePromotion(model.getConsentKnowledgePromotion());
         return userDO;
     }
 }

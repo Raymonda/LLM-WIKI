@@ -10,6 +10,7 @@ import org.cn.liuwt.llmwiki.facade.model.AiEditRequest;
 import org.cn.liuwt.llmwiki.facade.model.AiEditResponse;
 import org.cn.liuwt.llmwiki.facade.model.CommitStepResult;
 import org.cn.liuwt.llmwiki.facade.model.EditSessionInfo;
+import org.cn.liuwt.llmwiki.facade.model.EditStepInfo;
 import org.cn.liuwt.llmwiki.integration.ai.LlmClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -198,5 +199,22 @@ class AiEditServiceConflictTest {
         assertEquals(false, result.isVersionBehind());
         verify(sessionService).updateSessionContent(
             any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void historySummaryIncludesDiffChanges() {
+        EditStepInfo step = new EditStepInfo();
+        step.setStepNumber(1);
+        step.setInstruction("把 hello 改成你好");
+        step.setSelectedLines("L2");
+        step.setDiffRemoved("hello");
+        step.setDiffAdded("你好");
+        when(sessionService.listStepsLite(1L)).thenReturn(List.of(step));
+
+        String summary = service.buildHistorySummary(1L, 1);
+
+        assertEquals(true, summary.contains("把 hello 改成你好"));
+        assertEquals(true, summary.contains("原文：hello"));
+        assertEquals(true, summary.contains("改为：你好"));
     }
 }

@@ -606,7 +606,10 @@ function dismissSuggestion(arr: AdvisorSuggestion[], idx: number) {
           </div>
           <div v-if="phase === 'saving'" class="sb-saving">
             <Loader2 :size="24" class="sb-spin" />
-            <span>{{ t('bootstrap.summarySaving') }}</span>
+            <div class="sb-saving__text">
+              <span>{{ t('bootstrap.summarySaving') }}</span>
+              <span class="sb-saving__hint">{{ t('bootstrap.summaryPolishHint') }}</span>
+            </div>
           </div>
         </div>
 
@@ -867,6 +870,8 @@ function dismissSuggestion(arr: AdvisorSuggestion[], idx: number) {
 .sb-summary__label { display: block; font-size: var(--font-body-sm); color: var(--text-secondary); margin-bottom: 2px; }
 .sb-summary__value { font-size: var(--font-body); color: var(--text-primary); }
 .sb-saving { display: flex; align-items: center; justify-content: center; gap: var(--space-2); margin-top: var(--space-4); color: var(--text-secondary); }
+.sb-saving__text { display: flex; flex-direction: column; gap: 2px; }
+.sb-saving__hint { font-size: var(--font-body-sm); color: var(--text-tertiary); }
 
 /* Advisor panel */
 .sb-advisor-panel {

@@ -126,8 +126,10 @@ export interface SearchResultInfo {
   resultType: SearchResultType
 }
 
-export function listPages(): Promise<WikiPageInfo[]> {
-  return api.get('/wiki/pages')
+export function listPages(page = 1, size = 50, category?: string): Promise<WikiPageInfo[]> {
+  const params: Record<string, string | number> = { page, size }
+  if (category) params.category = category
+  return api.get('/wiki/pages', { params })
 }
 
 export interface PageStats {
@@ -174,10 +176,6 @@ export function listCategories(): Promise<string[]> {
 
 export function recentPages(): Promise<WikiPageInfo[]> {
   return api.get('/wiki/recent')
-}
-
-export function getSubscribedRecent(): Promise<WikiPageInfo[]> {
-  return api.get('/wiki/subscribed-recent')
 }
 
 export function getIndex(): Promise<string> {
@@ -374,7 +372,7 @@ export interface FailedBlockInfo {
 }
 
 export interface AiEditEvent {
-  type: 'token' | 'patch' | 'diff' | 'done' | 'error' | 'knowledge_results' | 'anchor' | 'retry'
+  type: 'token' | 'edit-token' | 'patch' | 'diff' | 'done' | 'error' | 'knowledge_results' | 'anchor' | 'retry' | 'progress'
   content: string
   diffRemoved?: string
   diffAdded?: string
@@ -388,6 +386,7 @@ export interface AiEditEvent {
   retryRound?: number
   failedBlockCount?: number
   failedBlocks?: FailedBlockInfo[]
+  phase?: string
 }
 
 export interface CommitStepResult {

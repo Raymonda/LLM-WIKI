@@ -1,23 +1,16 @@
+# 仅保留 prod 相对基础配置的差异项（容器服务地址、RocketMQ 默认开启、S3 存储等）
+
 spring:
   autoconfigure:
     exclude: []
   datasource:
-    url: jdbc:mysql://${MYSQL_HOST:mysql}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:llmwiki}?autoReconnect=true&useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai
-    username: ${MYSQL_USER:llmwiki}
-    password: ${MYSQL_PASSWORD:llmwiki_2024}
-    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${MYSQL_HOST:mysql}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:llmwiki}?autoReconnect=true&useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
     hikari:
       maximum-pool-size: 20
       minimum-idle: 5
       idle-timeout: 300000
       connection-timeout: 20000
       max-lifetime: 1200000
-
-  flyway:
-    enabled: true
-    locations: classpath:db/migration
-    baseline-on-migrate: true
-    baseline-version: 1
 
   servlet:
     multipart:
@@ -29,22 +22,10 @@ llmwiki:
     enabled: ${ROCKETMQ_ENABLED:true}
   storage:
     provider: ${STORAGE_PROVIDER:s3}
-    nas:
-      path: ${NAS_PATH:/data/llmwiki/wiki-data}
-      lock-enabled: true
     s3:
       endpoint: ${S3_ENDPOINT:http://minio:9000}
-      access-key: ${S3_ACCESS_KEY:minioadmin}
-      secret-key: ${S3_SECRET_KEY:minioadmin}
-      region: ${S3_REGION:us-east-1}
-      bucket-prefix: ${S3_BUCKET_PREFIX:llmwiki}
-      path-style: ${S3_PATH_STYLE:true}
-      public-url: ${S3_PUBLIC_URL:}
   elasticsearch:
     uris: ${ES_URIS:http://elasticsearch:9200}
-    index-name: ${ES_INDEX_NAME:llmwiki-pages}
-    username: ${ES_USERNAME:}
-    password: ${ES_PASSWORD:}
   jwt:
     secret: ${JWT_SECRET}
     expiration: ${JWT_EXPIRATION:86400000}

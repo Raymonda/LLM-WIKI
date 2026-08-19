@@ -3881,7 +3881,22 @@ def main():
     parser.add_argument("--diagram-image-area-ratio", type=float, default=0.05, help="显著图片面积占比阈值")
     parser.add_argument("--diagram-payload-gate-mb", type=float, default=2.0, help="payload大小门控(MB)")
     parser.add_argument("--image-desc-model", default="", help="嵌入图片VL描述模型（默认 fallback 到 diagram-model，推荐 qwen3.6-flash）")
+    parser.add_argument("--credentials-stdin", default=False, action="store_true", help="从 stdin 首行 JSON 读取凭据（ocrApiKey/diagramApiKey，stdin 优先于 argv，凭据不进命令行）")
     args = parser.parse_args()
+
+    if args.credentials_stdin:
+        creds = None
+        try:
+            creds = json.loads(sys.stdin.readline())
+        except ValueError:
+            creds = None
+        if not isinstance(creds, dict):
+            print(json.dumps({"error": "stdin 凭据 JSON 解析失败"}))
+            sys.exit(1)
+        if not args.ocr_api_key and creds.get("ocrApiKey"):
+            args.ocr_api_key = creds["ocrApiKey"]
+        if not args.diagram_api_key and creds.get("diagramApiKey"):
+            args.diagram_api_key = creds["diagramApiKey"]
 
     global _OCR_BASE_URL, _DIAGRAM_BASE_URL
     if args.ocr_base_url:

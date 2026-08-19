@@ -67,6 +67,8 @@ onMounted(async () => {
 })
 watch(() => auth.scopeId, async (newScopeId) => {
   await checkBootstrap()
+  ingestStore.clear()
+  taskStore.clear()
   if (newScopeId && newScopeId > 0) {
     await ingestStore.recoverActiveTasks(newScopeId)
     await taskStore.recoverActiveTasks()

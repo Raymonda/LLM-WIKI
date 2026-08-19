@@ -12,7 +12,6 @@ public class UserManageInfo {
     private String role;
     private String status;
     private Long scopeId;
-    private Integer consentKnowledgePromotion;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

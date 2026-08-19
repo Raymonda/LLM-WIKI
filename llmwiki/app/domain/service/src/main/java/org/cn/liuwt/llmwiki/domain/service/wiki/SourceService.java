@@ -14,6 +14,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -89,6 +90,57 @@ public class SourceService {
         } catch (Exception e) {
             log.error("Failed to upload source file: {}", originalName, e);
             throw new RuntimeException("Failed to upload source file: " + originalName, e);
+        }
+    }
+
+    /**
+     * MCP 文本摄入后端：把一段 Markdown 直接写入 raw/ 存储并落 SourceDO。
+     * 与 uploadSource 共用存储约定（SHA-256 contentHash）与查重语义（DuplicateInfo）。
+     */
+    public SourceModel uploadTextSource(String title, String markdown, Long scopeId, Long userId) {
+        byte[] bytes = markdown.getBytes(StandardCharsets.UTF_8);
+        String originalName = (title != null && title.toLowerCase().endsWith(".md")) ? title : title + ".md";
+        String scopeIdStr = String.valueOf(scopeId);
+        String uniqueName = buildUniqueFileName(originalName);
+        String storagePath = "raw/" + uniqueName;
+        try {
+            storageProvider.ensureBucket(scopeIdStr);
+            MessageDigest messageDigest = MessageDigest.getInstance("SHA-256");
+            try (InputStream in = new ByteArrayInputStream(bytes)) {
+                DigestInputStream digestInputStream = new DigestInputStream(in, messageDigest);
+                storageProvider.write(scopeIdStr, storagePath, digestInputStream, (long) bytes.length);
+            }
+            String contentHash = bytesToHex(messageDigest.digest());
+
+            SourceDO sourceDO = new SourceDO();
+            sourceDO.setName(originalName);
+            sourceDO.setFilePath(storagePath);
+            sourceDO.setFormat("md");
+            sourceDO.setSize((long) bytes.length);
+            sourceDO.setStatus("uploaded");
+            sourceDO.setScopeId(scopeId);
+            sourceDO.setUploadUserId(userId);
+            sourceDO.setContentHash(contentHash);
+            sourceDO.setFileModifiedAt(storageProvider.getLastModifiedTime(scopeIdStr, storagePath));
+            sourceMapper.insert(sourceDO);
+
+            SourceModel model = toModel(sourceDO);
+            SourceModel duplicate = findDuplicateSource(scopeId, contentHash);
+            if (duplicate == null) {
+                duplicate = findProcessingSource(scopeId, contentHash);
+            }
+            if (duplicate != null) {
+                DuplicateInfo duplicateInfo = new DuplicateInfo();
+                duplicateInfo.setExistingSourceId(duplicate.getId());
+                duplicateInfo.setExistingSourceName(duplicate.getName());
+                duplicateInfo.setExistingSourceStatus(duplicate.getStatus());
+                duplicateInfo.setMessage("此内容与已有来源「" + duplicate.getName() + "」相同（" + duplicate.getStatus() + "），AI 分析可能产出重复内容。");
+                model.setDuplicateInfo(duplicateInfo);
+            }
+            return model;
+        } catch (Exception e) {
+            log.error("Failed to upload text source: {}", originalName, e);
+            throw new RuntimeException("Failed to upload text source: " + originalName, e);
         }
     }
 

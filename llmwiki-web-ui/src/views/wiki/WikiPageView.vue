@@ -10,10 +10,12 @@ import { getSourceContent, getSourcePreviewUrl, getSourceDownloadUrl, type Sourc
 import { MessageCircle, AlertTriangle, Eye, EyeOff, Award, FileWarning, ArrowUp, Clock, ArrowRight, Stethoscope, Loader2, AlertCircle, MoreVertical, Tag, Trash2, Clock as ClockIcon, Ban, Merge as MergeIcon, Search, X, AlertOctagon } from 'lucide-vue-next'
 import { useTaskProgressStore } from '@/stores/taskProgress'
 import { useToastStore } from '@/stores/toast'
+import { useAuthStore } from '@/stores/auth'
 import { getEffectiveHealth, isLintIssue } from '@/utils/healthStatus'
 const { t } = useI18n()
 const taskStore = useTaskProgressStore()
 const toastStore = useToastStore()
+const authStore = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 
@@ -125,10 +127,19 @@ function scrollToTop() {
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
+function syncScopeFromQuery() {
+  const raw = route.query.scopeId
+  if (typeof raw !== 'string' || raw === '') return
+  const targetScopeId = Number(raw)
+  if (Number.isNaN(targetScopeId) || targetScopeId === authStore.scopeId) return
+  authStore.switchScope(targetScopeId)
+}
+
 async function loadPage() {
   loading.value = true
   errorMsg.value = ''
   try {
+    syncScopeFromQuery()
     if (isByPath.value && pageFilePath.value) {
       page.value = await getPageByPath(pageFilePath.value)
     } else {

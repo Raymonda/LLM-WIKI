@@ -143,4 +143,38 @@ class LocalStorageProviderTest {
         assertThrows(SecurityException.class, () ->
             provider.read("scope/other", "wiki/test.md"));
     }
+
+    @Test
+    void shouldReportScopeDirectoryExists(@TempDir Path tempDir) {
+        LocalStorageProvider provider = new LocalStorageProvider();
+        provider.setBasePath(tempDir.toString());
+
+        assertFalse(provider.scopeDirectoryExists("scope-x"));
+        provider.ensureBucket("scope-x");
+        assertTrue(provider.scopeDirectoryExists("scope-x"));
+    }
+
+    @Test
+    void shouldMoveScopeDirectory(@TempDir Path tempDir) {
+        LocalStorageProvider provider = new LocalStorageProvider();
+        provider.setBasePath(tempDir.toString());
+
+        provider.ensureBucket("old-scope");
+        provider.write("old-scope", "wiki/page.md", "moved".getBytes(StandardCharsets.UTF_8));
+
+        provider.moveScopeDirectory("old-scope", "new-scope");
+
+        assertFalse(provider.scopeDirectoryExists("old-scope"));
+        assertTrue(provider.scopeDirectoryExists("new-scope"));
+        assertEquals("moved", new String(provider.read("new-scope", "wiki/page.md"), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void shouldRejectTraversalInMoveScopeDirectory(@TempDir Path tempDir) {
+        LocalStorageProvider provider = new LocalStorageProvider();
+        provider.setBasePath(tempDir.toString());
+
+        assertThrows(SecurityException.class, () ->
+            provider.moveScopeDirectory("../../etc", "new-scope"));
+    }
 }

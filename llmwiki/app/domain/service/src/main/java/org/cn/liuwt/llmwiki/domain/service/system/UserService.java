@@ -12,8 +12,6 @@ public interface UserService {
 
     UserModel createUser(UserModel userModel);
 
-    void updateConsentKnowledgePromotion(Long userId, Integer consent);
-
     IPage<UserModel> listUsers(String keyword, String role, String status, int page, int size);
 
     List<UserModel> searchUsers(String keyword, int limit);

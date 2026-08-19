@@ -40,7 +40,7 @@ public class AuthService {
         return user;
     }
 
-    public UserModel register(String username, String password, String email, Integer consentKnowledgePromotion) {
+    public UserModel register(String username, String password, String email) {
         if (!allowSelfRegister) {
             throw new BusinessException(ErrorCode.AUTH_SELF_REGISTER_DISABLED);
         }
@@ -54,7 +54,6 @@ public class AuthService {
         newUser.setEmail(email);
         newUser.setRole("user");
         newUser.setStatus("active");
-        newUser.setConsentKnowledgePromotion(consentKnowledgePromotion != null ? consentKnowledgePromotion : 1);
         UserModel created = userService.createUser(newUser);
         wikiFileService.initWikiData(created.getScopeId());
         return created;

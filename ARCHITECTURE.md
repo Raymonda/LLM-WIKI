@@ -254,3 +254,25 @@ Vue 3 + TypeScript + Vite + Element Plus + Pinia，详见 [DESIGN.md](DESIGN.md)
 | 极简模式（默认） | MySQL + Elasticsearch + App + Web UI | 个人 / 小团队，`docker-compose.yml` |
 | 完整分布式 | 增加 MinIO + RocketMQ | 生产多实例，`docker-compose.full.yml` |
 | 本地开发 | MySQL/ES 外部提供，后端 `mvn` + 前端 `npm run dev` | 开发调试，见 [AGENTS.md](AGENTS.md) |
+
+## 12. Agent 接入层 — MCP Server
+
+LLM Wiki 以标准 MCP（Model Context Protocol）server 的形态向 agent harness（如 deepseek-harness）暴露能力，采用进程内嵌实现：`spring-ai-starter-mcp-server-webmvc` 随应用启动，streamable-http 端点为 `/mcp`（`spring.ai.mcp.server`，SYNC 模式）。
+
+**认证**：`/mcp/**` 走 `authenticated()`。两类凭证共用同一认证上下文（request attributes `userId`/`scopeId`）：
+- JWT（Web 前端）
+- API Key（机器身份，`Authorization: Bearer llmwiki_...` 或 `X-API-Key`，由 `ApiKeyAuthFilter` 校验；admin 通过 `/api/keys` 签发/吊销）
+
+**Scope 隔离**：MCP 工具的 scope 一律从认证上下文解析（JWT 用户的当前 scope 或 API Key 绑定的 scope），绝不作为工具参数暴露——与 §9 的红线一致。
+
+**工具面（第一期 6 个，均在 `WikiMcpTools`）**：
+| 工具 | 语义 | 后端 |
+|---|---|---|
+| `wiki_search` | 检索当前 scope 的 wiki 页面（过滤 DEPRECATED） | `SearchService.search` |
+| `wiki_read_page` | 按 pageId/路径读整页 + 来源列表 | `WikiFileServiceImpl` |
+| `wiki_ask` | RAG 问答（quick/deep），聚合流式响应，超时三态返回 | `QueryService.queryWikiStreaming` |
+| `wiki_ingest_text` | Markdown 文本摄入（写 raw/ + 启动流水线） | `SourceService.uploadTextSource` + `IngestOrchestrationService` |
+| `wiki_ingest_status` | 摄入进度查询 | `IngestService.getProgress` |
+| `wiki_cancel_ingest` | 取消进行中的摄入（单机路径） | `IngestService.cancelExecution` + `ExecutionNodeRegistry` |
+
+**已知限制（分期）**：多机 MQ 部署下 `wiki_cancel_ingest` 不发送跨节点 ControlMessage，取消请走 Web UI；文件上传摄入由 DSH 侧薄插件直传 `/api/source/upload`（multipart，文件字节不进模型上下文），不占用 MCP 工具面。

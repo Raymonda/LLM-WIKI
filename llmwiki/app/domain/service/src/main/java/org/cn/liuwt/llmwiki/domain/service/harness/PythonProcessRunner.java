@@ -1,5 +1,7 @@
 package org.cn.liuwt.llmwiki.domain.service.harness;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -12,13 +14,28 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 public class PythonProcessRunner {
 
     private static final Logger log = LoggerFactory.getLogger(PythonProcessRunner.class);
     private static final String SCRIPT_RESOURCE = "doc_parser.py";
+
+    private static final List<String> ENV_ALLOWLIST = List.of(
+            "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP",
+            "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "USERNAME", "USER", "HOME",
+            "LANG", "LC_ALL", "LC_CTYPE", "TZ",
+            "PYTHONIOENCODING", "PYTHONUTF8", "PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV",
+            "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+            "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+            "PROGRAMDATA", "APPDATA", "LOCALAPPDATA"
+    );
+    private static final List<String> ENV_SENSITIVE_PATTERNS = List.of("KEY", "SECRET", "TOKEN", "PASSWORD", "CREDENTIAL");
+    private static final ObjectMapper CREDENTIALS_OM = new ObjectMapper();
 
     private static final Object EXTRACT_LOCK = new Object();
     private static volatile Path extractedScriptPath;
@@ -100,6 +117,8 @@ public class PythonProcessRunner {
     public String run(String filePath, String format, boolean ocrEnable, String ocrApiKey, String ocrModel, int ocrMaxPages, double ocrThreshold, boolean multimodalMain, String assetsDir, boolean diagramEnable, String diagramApiKey, String diagramModel, int diagramMaxImages, int diagramDpi, int diagramJpegQuality, int diagramConcurrency, double diagramScoreThreshold, double diagramLargeDrawingRatio, double diagramSignificantImageRatio, double diagramPayloadGateMb, String imageDescModel) {
         try {
             List<String> command = new ArrayList<>();
+            boolean passOcrKey = ocrEnable && ocrApiKey != null && !ocrApiKey.isBlank();
+            boolean passDiagramKey = diagramEnable && diagramApiKey != null && !diagramApiKey.isBlank();
             command.add(resolvePythonCommand());
             command.add(scriptPath.toString());
             command.add("--input");
@@ -108,10 +127,6 @@ public class PythonProcessRunner {
             command.add(format);
             if (ocrEnable) {
                 command.add("--ocr-enable");
-                if (ocrApiKey != null && !ocrApiKey.isBlank()) {
-                    command.add("--ocr-api-key");
-                    command.add(ocrApiKey);
-                }
                 if (ocrBaseUrl != null && !ocrBaseUrl.isBlank()) {
                     command.add("--ocr-base-url");
                     command.add(ocrBaseUrl);
@@ -134,10 +149,6 @@ public class PythonProcessRunner {
             }
             if (diagramEnable) {
                 command.add("--diagram-enable");
-                if (diagramApiKey != null && !diagramApiKey.isBlank()) {
-                    command.add("--diagram-api-key");
-                    command.add(diagramApiKey);
-                }
                 if (diagramBaseUrl != null && !diagramBaseUrl.isBlank()) {
                     command.add("--diagram-base-url");
                     command.add(diagramBaseUrl);
@@ -167,12 +178,16 @@ public class PythonProcessRunner {
                 command.add("--image-desc-model");
                 command.add(imageDescModel);
             }
+            if (passOcrKey || passDiagramKey) {
+                command.add("--credentials-stdin");
+            }
 
             ProcessBuilder pb = new ProcessBuilder(command);
             pb.redirectErrorStream(false);
-            pb.environment().put("PYTHONIOENCODING", "utf-8");
+            applyScrubbedEnvironment(pb);
 
             Process process = pb.start();
+            writeCredentialsViaStdin(process, passOcrKey ? ocrApiKey : null, passDiagramKey ? diagramApiKey : null);
 
             ByteArrayOutputStream stdout = new ByteArrayOutputStream();
             ByteArrayOutputStream stderr = new ByteArrayOutputStream();
@@ -183,6 +198,7 @@ public class PythonProcessRunner {
             boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
             if (!finished) {
                 process.destroyForcibly();
+                waitForQuiescence(process, outThread, errThread);
                 throw new RuntimeException("文档解析超时（" + timeoutSeconds + "秒），文件可能过大");
             }
 
@@ -241,6 +257,7 @@ public class PythonProcessRunner {
                 try {
                     ProcessBuilder pb = new ProcessBuilder(cmd, "--version");
                     pb.redirectErrorStream(true);
+                    applyScrubbedEnvironment(pb);
                     Process p = pb.start();
                     boolean finished = p.waitFor(10, TimeUnit.SECONDS);
                     if (finished && p.exitValue() == 0) {
@@ -269,6 +286,7 @@ public class PythonProcessRunner {
         try {
             ProcessBuilder pb = new ProcessBuilder(pythonCmd, "--version");
             pb.redirectErrorStream(true);
+            applyScrubbedEnvironment(pb);
             Process p = pb.start();
             if (p.waitFor(10, TimeUnit.SECONDS) && p.exitValue() == 0) {
                 pythonVersion = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
@@ -290,6 +308,7 @@ public class PythonProcessRunner {
         try {
             ProcessBuilder pb = new ProcessBuilder(pythonCmd, "-c", checkScript);
             pb.redirectErrorStream(true);
+            applyScrubbedEnvironment(pb);
             Process p = pb.start();
             if (p.waitFor(30, TimeUnit.SECONDS) && p.exitValue() == 0) {
                 String output = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
@@ -380,5 +399,72 @@ public class PythonProcessRunner {
             return last;
         }
         return "Python 进程异常退出，详情见服务端日志（搜索 'Python parser exited with code' 查看完整 stderr）";
+    }
+
+    private static void writeCredentialsViaStdin(Process process, String ocrApiKey, String diagramApiKey) {
+        ObjectNode payload = CREDENTIALS_OM.createObjectNode();
+        payload.put("ocrApiKey", ocrApiKey != null ? ocrApiKey : "");
+        payload.put("diagramApiKey", diagramApiKey != null ? diagramApiKey : "");
+        try (OutputStream os = process.getOutputStream()) {
+            os.write((payload.toString() + "\n").getBytes(StandardCharsets.UTF_8));
+            os.flush();
+        } catch (IOException e) {
+            log.warn("Failed to write credentials via stdin: {}", e.getMessage());
+        }
+    }
+
+    static Map<String, String> buildScrubbedEnvironment(Map<String, String> source) {
+        Map<String, String> scrubbed = new HashMap<>();
+        if (source == null || source.isEmpty()) {
+            return scrubbed;
+        }
+        for (Map.Entry<String, String> entry : source.entrySet()) {
+            String name = entry.getKey();
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            String upper = name.toUpperCase(Locale.ROOT);
+            if (!ENV_ALLOWLIST.contains(upper)) {
+                continue;
+            }
+            boolean sensitive = false;
+            for (String pattern : ENV_SENSITIVE_PATTERNS) {
+                if (upper.contains(pattern)) {
+                    sensitive = true;
+                    break;
+                }
+            }
+            if (sensitive) {
+                continue;
+            }
+            scrubbed.put(name, entry.getValue());
+        }
+        return scrubbed;
+    }
+
+    private static void applyScrubbedEnvironment(ProcessBuilder pb) {
+        Map<String, String> env = pb.environment();
+        env.clear();
+        env.putAll(buildScrubbedEnvironment(System.getenv()));
+        env.put("PYTHONIOENCODING", "utf-8");
+    }
+
+    private static void waitForQuiescence(Process process, Thread... drainThreads) {
+        try {
+            process.waitFor(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        for (Thread thread : drainThreads) {
+            joinQuietly(thread);
+        }
+    }
+
+    private static void joinQuietly(Thread thread) {
+        try {
+            thread.join(5000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 }

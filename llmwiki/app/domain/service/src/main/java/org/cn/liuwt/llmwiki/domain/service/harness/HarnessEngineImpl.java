@@ -34,15 +34,15 @@ public class HarnessEngineImpl implements HarnessEngine {
     }
 
     @Override
-    public Flux<String> executeQueryStreaming(Long scopeId, String question, String sessionId, boolean deepMode) {
-        log.info("Starting streaming query for scopeId={}, sessionId={}, deepMode={}", scopeId, sessionId, deepMode);
-        return agentRunner.runQueryAgentStreaming(scopeId, question, sessionId, deepMode);
+    public Flux<String> executeQueryStreaming(Long scopeId, String question, String sessionId, boolean deepMode, String assumedIntent) {
+        log.info("Starting streaming query for scopeId={}, sessionId={}, deepMode={}, assumedIntent={}", scopeId, sessionId, deepMode, assumedIntent);
+        return agentRunner.runQueryAgentStreaming(scopeId, question, sessionId, deepMode, assumedIntent);
     }
 
     @Override
-    public Flux<String> executeQueryStreamingMultiScope(java.util.List<Long> scopeIds, String question, String sessionId, boolean deepMode) {
-        log.info("Starting multi-scope streaming query for scopeIds={}, sessionId={}, deepMode={}", scopeIds, sessionId, deepMode);
-        return agentRunner.runQueryAgentStreamingMultiScope(scopeIds, question, sessionId, deepMode);
+    public Flux<String> executeQueryStreamingMultiScope(java.util.List<Long> scopeIds, String question, String sessionId, boolean deepMode, String assumedIntent) {
+        log.info("Starting multi-scope streaming query for scopeIds={}, sessionId={}, deepMode={}, assumedIntent={}", scopeIds, sessionId, deepMode, assumedIntent);
+        return agentRunner.runQueryAgentStreamingMultiScope(scopeIds, question, sessionId, deepMode, assumedIntent);
     }
 
     @Override

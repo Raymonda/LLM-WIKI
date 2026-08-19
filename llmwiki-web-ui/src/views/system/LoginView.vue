@@ -16,7 +16,6 @@ const password = ref('')
 const loading = ref(false)
 const errorMsg = ref('')
 const isRegister = ref(false)
-const consentPromotion = ref(true)
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 let animationId: number | null = null
@@ -134,7 +133,7 @@ async function handleLogin() {
   errorMsg.value = ''
   try {
     const result = isRegister.value
-      ? await register(username.value, password.value, consentPromotion.value ? 1 : 0)
+      ? await register(username.value, password.value)
       : await login(username.value, password.value)
     authStore.setAuth(result.token, result.user)
     router.push('/')
@@ -181,12 +180,6 @@ async function handleLogin() {
               :placeholder="t('auth.passwordPlaceholder')"
               autocomplete="current-password"
             />
-          </div>
-          <div v-if="isRegister" class="login-card__consent">
-            <label class="login-card__consent-label">
-              <input type="checkbox" v-model="consentPromotion" class="login-card__consent-checkbox" />
-              <span class="login-card__consent-text">{{ t('auth.consentText') }}</span>
-            </label>
           </div>
           <button type="submit" class="login-card__submit" :disabled="loading">
             {{ loading ? (isRegister ? t('auth.registering') : t('auth.loggingIn')) : (isRegister ? t('auth.registerAndEnter') : t('auth.enterKB')) }}
@@ -375,33 +368,6 @@ async function handleLogin() {
 
 .login-card__switch:hover {
   opacity: 0.8;
-}
-
-.login-card__consent {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.login-card__consent-label {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  cursor: pointer;
-}
-
-.login-card__consent-checkbox {
-  width: 16px;
-  height: 16px;
-  margin-top: 2px;
-  accent-color: var(--accent-primary);
-  cursor: pointer;
-}
-
-.login-card__consent-text {
-  font-size: var(--font-body-sm);
-  color: var(--text-secondary);
-  line-height: 1.5;
 }
 
 .login-page__features {

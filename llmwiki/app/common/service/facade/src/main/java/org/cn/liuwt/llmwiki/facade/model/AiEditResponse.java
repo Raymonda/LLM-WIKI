@@ -20,4 +20,5 @@ public class AiEditResponse {
     private Integer retryRound;
     private Integer failedBlockCount;
     private List<FailedBlockInfo> failedBlocks;
+    private String phase;
 }

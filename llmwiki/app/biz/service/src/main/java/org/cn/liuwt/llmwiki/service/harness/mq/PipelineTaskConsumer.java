@@ -4,6 +4,7 @@ import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.HarnessEngine;
+import org.cn.liuwt.llmwiki.domain.service.harness.governance.bootstrap.SchemaPolishService;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
 import org.cn.liuwt.llmwiki.service.ingest.IngestService;
 import org.cn.liuwt.llmwiki.service.ingest.MergeService;
@@ -55,11 +56,21 @@ public class PipelineTaskConsumer implements RocketMQListener<PipelineTaskMessag
     @Autowired
     private PageSavePostService pageSavePostService;
 
+    @Autowired
+    private SchemaPolishService schemaPolishService;
+
     private static final Set<String> TERMINAL_STATUSES = Set.of("completed", "cancelled", "budget_exhausted", "failed");
     private static final Set<String> RESUME_ONLY_STATUSES = Set.of("paused");
 
     @Override
     public void onMessage(PipelineTaskMessage msg) {
+        // SCHEMA_POLISH 与 PAGE_SAVE_POST 一样无 executionId，同步执行让异常传播触发 RocketMQ 自动重试
+        if (PipelineTaskMessage.TYPE_SCHEMA_POLISH.equals(msg.getTaskType())) {
+            log.info("Picked up SCHEMA_POLISH: scopeId={}, node={}", msg.getScopeId(), registry.getNodeId());
+            schemaPolishService.polishSchema(msg.getScopeId());
+            return;
+        }
+
         // PAGE_SAVE_POST 不需要 executionId，独立处理
         if (PipelineTaskMessage.TYPE_PAGE_SAVE_POST.equals(msg.getTaskType())) {
             handlePageSavePost(msg);

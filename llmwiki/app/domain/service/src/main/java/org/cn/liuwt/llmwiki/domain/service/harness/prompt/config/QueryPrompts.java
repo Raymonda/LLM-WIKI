@@ -124,6 +124,8 @@ public class QueryPrompts {
             - 内容结构化，使用标题层级、列表、段落
             - 包含原始问题和回答的核心内容，进行概括提炼
             - 在页面末尾添加"来源"部分，标注这是从问答中沉淀的知识，列出引用的 Wiki 页面
+            - 来源链接必须使用标准格式 [[页面标题]](wiki/pages/文件名.md)，只用单层括号，不得写成双层括号
+            - 同一来源页面只列出一次，不得重复
 
             """ + PromptTemplate.JSON_OUTPUT_CONSTRAINT;
     }
@@ -169,11 +171,52 @@ public class QueryPrompts {
             """.formatted(scopeId, pageCount, lightContext);
     }
 
-    public String synthesisPrompt(Long scopeId, String question, String layer1Text, String deprecatedContext) {
-        return synthesisPrompt(scopeId, question, layer1Text, deprecatedContext, false);
+    public String factAgentPromptStructured(Long scopeId, int pageCount, String lightContext) {
+        return """
+            你是 Wiki 事实检索引擎，任务是收集知识库事实信息，产出结构化事实包（FactBlock）。
+
+            ## 检索策略
+            1. **分析索引信息**：GlobalSummary + ES搜索结果 + 知识图谱邻域（如有）
+            2. **定向读取**（经济性优先）：readFile(path) 读取完整页面，参考页优先（信息密度最高）
+            3. **补充检索**：searchWiki(query)、getRelatedPages(path) 扩展
+            4. **原始回溯**（最后手段）：预加载的原始来源章节优先，不够用 readRawSource
+
+            ## 回答前自检（强制）
+            先列出用户问题的所有子维度，逐维度确认是否有信息支撑：
+            维度覆盖表（维度名 | 是否有事实支撑 | 支撑来源）
+            任一维度未覆盖且工具仍可用 → 必须补充检索，禁止直接开始输出。
+
+            ## 输出格式（严格）
+            每条事实单独输出一行 JSON，行与行之间用换行分隔，禁止输出 JSON 之外的任何文本：
+
+            {"id":"fb-1","conclusion":"事实结论（一句话，可独立理解）","evidence":"证据出处（页面+位置）","refs":[{"path":"工具返回的页面路径原值","title":"页面标题"}],"confidence":"high|medium|low","kind":"fact|contrast|table|image"}
+
+            字段规则：
+            - conclusion：必填，事实性结论，不掺入分析观点
+            - evidence：必填，具体出处（如"债券日报 05-14 第 2 页"）
+            - refs：引用来源页面，path 必须用工具返回的原值
+            - confidence：high=有明确原文支撑；medium=综合推断；low=单一弱来源
+            - kind：contrast=知识矛盾条目（两侧观点各输出一条，并标注「⚠️ 知识矛盾：[A] 与 [B] 存在分歧」）；table=结构化对比数据；image=引用图片（路径放 refs）
+
+            ## 护栏
+            - 事实块总数上限 8 条；工具调用轮次上限 4 轮，超限强制输出已收集事实
+            - 维度覆盖表未完成时禁止输出 JSON 行
+            - 不输出 Layer 1 长文、不输出分析观点、不输出编号引用列表
+
+            当前 Wiki 范围 ID: %d
+            Wiki 页面总数: %d
+
+            ## 预检索索引信息
+
+            %s
+            """.formatted(scopeId, pageCount, lightContext);
     }
 
-    public String synthesisPrompt(Long scopeId, String question, String layer1Text, String deprecatedContext, boolean deepMode) {
+    public String synthesisPrompt(Long scopeId, String question, String factSummaryView, String deprecatedContext) {
+        return synthesisPrompt(scopeId, question, factSummaryView, deprecatedContext, false);
+    }
+
+    public String synthesisPrompt(Long scopeId, String question, String factSummaryView, String deprecatedContext, boolean deepMode) {
         String deprecatedSection = deprecatedContext != null && !deprecatedContext.isEmpty()
             ? "\n" + deprecatedContext + "\n"
             : "\n（无已过时页面与本次查询相关）\n";
@@ -181,17 +224,23 @@ public class QueryPrompts {
         String richElementGuidance = deepMode ? RICH_ELEMENT_GUIDANCE : "";
 
         return """
-            你是知识分析与综合专家。基于已收集的 Wiki 事实（Layer 1），产出 Layer 2（AI 解读）和 Layer 3（前瞻推演）。
+            你是知识分析与综合专家。基于已收集的 Wiki 事实清单，产出 Layer 2（AI 解读）和 Layer 3（前瞻推演）。
 
             ## 约束
-            - Layer 1 不可修改、不可重复，你的输出直接从「AI 分析」开始
+            - 事实清单不可修改、不可重复，你的输出直接从「AI 分析」开始
             - 过时页面仅用于历史分析和趋势推理，不可作为当前事实依据
             - 每个分析点必须有具体论据，避免空洞套话
+
+            ## 分析深度规则（强制）
+            1. **锚定事实编号**：每个分析点必须标注其依据的事实编号（如 [1]），未标注依据的分析视为违规
+            2. **置信度分级措辞**：高可信事实可支撑强断言；中/低可信事实只能支撑弱断言（"可能/倾向/有限证据表明"）
+            3. **矛盾条目强制处理**：事实清单中存在矛盾条目时，必须给出两侧观点的成立条件与采信建议，禁止回避
+            4. **宁缺毋滥**：某维度无事实支撑时，显式声明"证据不足，不做推演"，禁止编造论据
 
             ## 用户问题
             %s
 
-            ## Layer 1 — Wiki 事实（不可修改）
+            ## 事实清单（不可修改）
             %s
 
             ## 已过时页面（仅供历史分析参考）
@@ -234,7 +283,86 @@ public class QueryPrompts {
             %s
 
             当前 Wiki 范围 ID: %d
-            """.formatted(question, layer1Text, deprecatedSection, richElementGuidance, scopeId);
+            """.formatted(question, factSummaryView, deprecatedSection, richElementGuidance, scopeId);
+    }
+
+    private static final String NARRATIVE_RICH_ELEMENT_GUIDANCE = """
+
+            ## 富元素表达（准确性为前提）
+            适当使用可视化元素辅助表达，让回答更直观：
+
+            ### 推荐场景
+            - **趋势问题**：用 Markdown 表格或 Mermaid timeline 呈现时间线
+            - **对比问题**：用 Markdown 表格呈现对比
+            - **关键数据**：用 Markdown 表格呈现结构化数据
+
+            ### 使用原则
+            1. **数据真实**：图表中的数据必须源自事实清单，严禁为凑图表而编造数字
+            2. **观点服务**：图表服务于具体论点，不是装饰；一次回答 1-3 个即可
+            3. **自然嵌入**：图表放在相关论述段落之后，不要集中在末尾
+            """;
+
+    public String narrativePrompt(Long scopeId, String question, String factSummaryView, String deprecatedContext, boolean deepMode) {
+        String deprecatedSection = deprecatedContext != null && !deprecatedContext.isEmpty()
+            ? "\n" + deprecatedContext + "\n"
+            : "\n（无已过时页面与本次查询相关）\n";
+
+        return """
+            你是知识分析与综合专家。基于事实清单撰写一篇完整的解答文章。
+
+            ## 输出结构（严格遵循）
+
+            1. **核心结论**（开篇第一段，1-2 句，直接回答用户问题）
+               - 用引用块格式输出：> **核心结论**：……
+               - 供前端渲染为结论高亮框
+
+            2. **论证主体**：按逻辑论证顺序重组事实（禁止按事实编号平铺罗列）
+               - 每个关键论据处标注 [N]（N 严格对应事实清单编号）
+               - 高可信事实 → 肯定句式；中/低可信 → "可能/倾向/有限证据表明"
+               - 矛盾条目必须并置呈现 + 两侧成立条件 + 采信建议
+               - 分析（原理/对标/盲区）融入论证主线，不单独立「AI 分析」节
+
+            3. ⚡ **前瞻分析（AI 推演，仅供参考）**：独立结尾段，保留 ⚡ 标记
+               - 每个推演标注推理链条 + 置信度；无事实支撑时显式声明「证据不足，不做推演」
+
+            4. **回答信心**：覆盖度 / 未覆盖维度
+
+            ## 硬规则
+            - 事实清单是原料不是展示品：禁止复制粘贴事实原文，必须转写为叙事语言
+            - 每个 [N] 引用必须精确对应事实清单编号，禁止引用不存在的编号（事实清单无编号时，禁止编造编号）
+            - 分析点未标注依据编号 = 违规
+
+            ## 用户问题
+            %s
+
+            ## 事实清单（不可修改）
+            %s
+
+            ## 已过时页面（仅供历史分析参考）
+            %s
+            %s
+
+            当前 Wiki 范围 ID: %d
+            """.formatted(question, factSummaryView, deprecatedSection, NARRATIVE_RICH_ELEMENT_GUIDANCE, scopeId);
+    }
+
+    public String clarificationPrompt(Long scopeId) {
+        return """
+            你是问答意图澄清判定器。判断用户问题是否需要先澄清才能准确回答。
+
+            仅当满足以下任一条件时判定 AMBIGUOUS：
+            1. 问题包含多义词或领域词歧义，且上下文无法消除（如"XX 怎么操作"中 XX 指代不明）
+            2. 问题缺少关键主体（谁/哪个系统/哪类对象）
+            3. 问题范围过大，无法聚焦（需给出追问方向）
+
+            输出严格 JSON（无其他内容）：
+            {"clarity":"CLEAR|AMBIGUOUS","clarification":"追问正文（仅 AMBIGUOUS 时非空，直接面向用户提问，不含候选列表）","options":["候选意图1","候选意图2"],"reason":"判定理由（≤20字）"}
+            options 说明：仅 AMBIGUOUS 时给出 1-2 个候选意图（每个 ≤15字，用户点选即作为已确认意图）；CLEAR 时 options 为空数组 []。无法给出合理候选意图时也必须输出空数组 []。
+
+            判定口径：宁可漏判（模糊但走完整回答）也不误判（清晰却被打断）。仅对明显歧义判定 AMBIGUOUS。
+
+            当前 Wiki 范围 ID: %d
+            """.formatted(scopeId);
     }
 
     public String detectSaveConflictsPrompt(String newTitle, String newContent, String existingTitle, String existingContent) {

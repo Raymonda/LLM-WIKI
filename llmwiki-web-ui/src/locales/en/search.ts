@@ -54,4 +54,10 @@ export default {
   scopeCount: '{0} knowledge bases',
   searchModeAria: 'Search mode',
   queryModeAria: 'Query mode',
+  evidenceCollecting: 'Collecting evidence… {0} collected',
+  evidenceList: 'Evidence list',
+  evidenceLabel: 'Evidence detail',
+  confidenceHigh: 'High confidence',
+  confidenceMedium: 'Medium confidence',
+  confidenceLow: 'Low confidence',
 }

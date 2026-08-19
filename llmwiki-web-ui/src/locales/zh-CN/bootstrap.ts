@@ -65,6 +65,7 @@ export default {
   summaryTemplateCount: '{0} 种页面类型',
   summaryAutonomy: 'AI 协作模式',
   summarySaving: '正在生成知识库规范…',
+  summaryPolishHint: '先以模板版规范完成初始化，AI 会在后台继续润色，完成后自动生效',
   summarySaved: '知识库规范已保存',
   summarySaveError: '保存失败',
   // Navigation

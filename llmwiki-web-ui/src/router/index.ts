@@ -79,6 +79,12 @@ export const routes: RouteRecordRaw[] = [
         meta: { titleKey: 'nav.system', requireAdmin: true },
       },
       {
+        path: 'settings/api-keys',
+        name: 'MyApiKeys',
+        component: () => import('@/views/settings/MyApiKeysView.vue'),
+        meta: { titleKey: 'nav.myApiKeys' },
+      },
+      {
         path: 'scope/manage',
         name: 'ScopeManage',
         component: () => import('@/views/scope/ScopeManageView.vue'),
@@ -119,12 +125,6 @@ export const routes: RouteRecordRaw[] = [
         name: 'WikiDrafts',
         component: () => import('@/views/editor/WikiDraftsView.vue'),
         meta: { titleKey: 'nav.drafts' },
-      },
-      {
-        path: 'scope/subscriptions',
-        name: 'SubscriptionManage',
-        component: () => import('@/views/scope/SubscriptionManageView.vue'),
-        meta: { titleKey: 'nav.subscriptions' },
       },
       {
         path: 'scope/audit',

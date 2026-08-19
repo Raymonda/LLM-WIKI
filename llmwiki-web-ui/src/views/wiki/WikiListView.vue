@@ -3,9 +3,8 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import WikiPageRenderer from '@/components/wiki/WikiPageRenderer.vue'
-import { listCategories, recentPages, getRecommended, getPromotionStats, getContributors, getSubscribedRecent, mergePages, type WikiPageInfo, type PromotionStats, type ContributorInfo } from '@/api/wiki'
+import { listCategories, recentPages, getRecommended, getPromotionStats, getContributors, listPages, mergePages, type WikiPageInfo, type PromotionStats, type ContributorInfo } from '@/api/wiki'
 import { listSources, getSourceContent, getSourcePreviewUrl, getSourceDownloadUrl, type SourceInfo, type SourceContentInfo } from '@/api/source'
-import { listSubscriptions, type SubscriptionInfo } from '@/api/subscription'
 import { getActivityFeed, type ActivityItem } from '@/api/activity'
 import { useAuthStore } from '@/stores/auth'
 import { useTaskProgressStore } from '@/stores/taskProgress'
@@ -13,7 +12,7 @@ import { useToastStore } from '@/stores/toast'
 import { formatSummaryPreview } from '@/utils/summaryFormatter'
 import { getEffectiveHealth, getLifecycleStatus } from '@/utils/healthStatus'
 import {
-  BookOpen, FileText, Clock, CheckCircle, AlertTriangle, Upload, ArrowRight, FolderOpen, Award, TrendingUp, Download, FileSearch, ChevronRight, ChevronDown, Search, CheckSquare, Square, Merge as MergeIcon, X, Loader2, Rss, Globe
+  BookOpen, FileText, Clock, CheckCircle, AlertTriangle, Upload, ArrowRight, FolderOpen, Award, TrendingUp, Download, FileSearch, ChevronRight, ChevronDown, Search, CheckSquare, Square, Merge as MergeIcon, X, Loader2, Globe
 } from 'lucide-vue-next'
 
 const { t, locale } = useI18n()
@@ -25,7 +24,11 @@ const toastStore = useToastStore()
 function handleTaskCompleted(e: Event) {
   const detail = (e as CustomEvent).detail
   if (detail?.type === 'merge') {
-    recentPages().then(pages => { allPages.value = pages })
+    if (selectedCategory.value) {
+      loadCategoryPages(selectedCategory.value)
+    } else {
+      recentPages().then(pages => { allPages.value = pages })
+    }
   }
 }
 
@@ -39,12 +42,13 @@ onUnmounted(() => {
 
 const allPages = ref<WikiPageInfo[]>([])
 const selectedCategory = ref('')
-const pages = computed(() => {
-  if (!selectedCategory.value) return allPages.value
-  return allPages.value.filter(p => {
-    const cat = p.category || ''
-    return cat === selectedCategory.value || cat.startsWith(selectedCategory.value + '/')
-  })
+const categoryPages = ref<WikiPageInfo[] | null>(null)
+const categoryLoading = ref(false)
+const pages = computed(() => categoryPages.value !== null ? categoryPages.value : allPages.value)
+const categoryListTitle = computed(() => {
+  if (!selectedCategory.value) return ''
+  if (categoryLoading.value) return `${selectedCategory.value} · ${t('wiki.loading')}`
+  return t('wiki.categoryPagesTitle', [selectedCategory.value, categoryPages.value?.length ?? 0])
 })
 const recommendedPages = ref<WikiPageInfo[]>([])
 const categories = ref<string[]>([])
@@ -52,14 +56,14 @@ const expandedCategories = ref<Set<string>>(new Set())
 const sources = ref<SourceInfo[]>([])
 const promotionStats = ref<PromotionStats | null>(null)
 const contributors = ref<ContributorInfo[]>([])
+const teamExpanded = ref(false)
+const hasTeamStats = computed(() => (promotionStats.value?.promotedPageCount ?? 0) > 0 || contributors.value.length > 0)
 const loading = ref(true)
 const sourcePreview = ref<SourceContentInfo | null>(null)
 const sourcePreviewVisible = ref(false)
 const sourcePreviewLoading = ref(false)
 const sourcePreviewError = ref('')
 const previewSourceId = ref<number | null>(null)
-const subscriptions = ref<SubscriptionInfo[]>([])
-const subscribedRecentPages = ref<WikiPageInfo[]>([])
 const activityFeed = ref<ActivityItem[]>([])
 
 const searchKeyword = ref('')
@@ -144,12 +148,31 @@ function goToSearch() {
   }
 }
 
-function selectCategory(cat: string) {
+async function loadCategoryPages(cat: string) {
+  categoryLoading.value = true
+  try {
+    categoryPages.value = await listPages(1, 200, cat)
+  } catch (e) {
+    console.error('Failed to load category pages:', e)
+    categoryPages.value = []
+  } finally {
+    categoryLoading.value = false
+  }
+}
+
+function selectCategory(cat: string, expand = false) {
   if (selectedCategory.value === cat) {
     selectedCategory.value = ''
-  } else {
-    selectedCategory.value = cat
+    categoryPages.value = null
+    return
   }
+  selectedCategory.value = cat
+  if (expand && !expandedCategories.value.has(cat)) {
+    const next = new Set(expandedCategories.value)
+    next.add(cat)
+    expandedCategories.value = next
+  }
+  loadCategoryPages(cat)
 }
 
 interface CategoryNode {
@@ -162,11 +185,11 @@ function buildCategoryTree(cats: string[]): CategoryNode[] {
   const root: CategoryNode[] = []
   const map = new Map<string, CategoryNode>()
   for (const cat of cats) {
-    const parts = cat.split('/')
+    const parts = cat.split('/').map(p => p.trim()).filter(p => p)
     let path = ''
     for (let i = 0; i < parts.length; i++) {
-      const part = parts[i].trim()
-      if (!part) continue
+      const part = parts[i]
+      const parentPath = path
       path = path ? path + '/' + part : part
       if (!map.has(path)) {
         const node: CategoryNode = { label: part, full: path, children: [] }
@@ -174,7 +197,6 @@ function buildCategoryTree(cats: string[]): CategoryNode[] {
         if (i === 0) {
           root.push(node)
         } else {
-          const parentPath = parts.slice(0, i).join('/')
           const parent = map.get(parentPath)
           if (parent) parent.children.push(node)
         }
@@ -236,14 +258,6 @@ onMounted(async () => {
     }
     sources.value = await listSources()
     recommendedPages.value = await getRecommended()
-    try {
-      subscriptions.value = await listSubscriptions(authStore.scopeId)
-    } catch (_) { subscriptions.value = [] }
-    if (subscriptions.value.length > 0) {
-      try {
-        subscribedRecentPages.value = await getSubscribedRecent()
-      } catch (_) { subscribedRecentPages.value = [] }
-    }
     if (authStore.currentScopeType() === 'personal') {
       promotionStats.value = await getPromotionStats()
     } else {
@@ -357,23 +371,23 @@ function closePreview() {
             <FolderOpen :size="16" />
             {{ t('wiki.categoryNav') }}
           </h3>
-          <div class="wiki-home__category-list">
+          <div class="wiki-home__category-list" :class="{ 'wiki-home__category-list--loading': categoryLoading }">
             <div v-for="node in categoryTree" :key="node.full" class="wiki-home__category-group">
               <div
                 class="wiki-home__category-item"
                 :class="{ 'wiki-home__category-item--active': selectedCategory === node.full, 'wiki-home__category-item--parent': node.children.length > 0 }"
-                @click="node.children.length > 0 ? toggleExpand(node.full) : selectCategory(node.full)"
               >
                 <component
                   :is="expandedCategories.has(node.full) ? ChevronDown : ChevronRight"
                   v-if="node.children.length > 0"
                   :size="14"
                   class="wiki-home__category-chevron"
+                  @click.stop="toggleExpand(node.full)"
                 />
                 <span v-else class="wiki-home__category-marker">
                   <span class="wiki-home__category-dot"></span>
                 </span>
-                <span class="wiki-home__category-name">{{ node.label }}</span>
+                <span class="wiki-home__category-name" @click="selectCategory(node.full, node.children.length > 0)">{{ node.label }}</span>
               </div>
               <div v-if="expandedCategories.has(node.full) && node.children.length > 0" class="wiki-home__category-children">
                 <div
@@ -422,96 +436,63 @@ function closePreview() {
           </div>
         </div>
 
-        <div v-if="subscriptions.length > 0" class="wiki-home__subscriptions">
-          <h3 class="wiki-home__section-title">
-            <Rss :size="16" />
-            {{ t('wiki.subscriptionFeed') }}
-            <router-link :to="`/scope/subscriptions`" class="wiki-home__section-more">
-              {{ t('wiki.manage') }} <ChevronRight :size="12" />
-            </router-link>
-          </h3>
-          <div v-if="subscribedRecentPages.length > 0" class="wiki-home__subscription-dynamics">
-            <div
-              v-for="page in subscribedRecentPages.slice(0, 5)"
-              :key="`${page.scopeId}-${page.id}`"
-              class="wiki-home__subscription-dynamic"
-            >
-              <router-link :to="`/wiki/${page.id}`" class="wiki-home__subscription-dynamic-link">
-                <span class="wiki-home__subscription-dynamic-title">{{ page.title }}</span>
-                <span v-if="page.sourceScopeName" class="wiki-home__subscription-dynamic-scope">{{ page.sourceScopeName }}</span>
-              </router-link>
-              <p v-if="page.summary" class="wiki-home__subscription-dynamic-summary">{{ formatSummaryPreview(page.summary, 100) }}</p>
-            </div>
-          </div>
-          <div v-else class="wiki-home__subscription-empty">
-            <span>{{ t('wiki.noSubscriptionUpdates') }}</span>
-          </div>
-        </div>
-
-        <div v-if="promotionStats && promotionStats.promotedPageCount > 0" class="wiki-home__impact">
-          <h3 class="wiki-home__section-title">
-            <TrendingUp :size="16" />
-            {{ t('wiki.impact') }}
-          </h3>
-          <div class="wiki-home__impact-stats">
-            <div class="wiki-home__impact-stat">
-              <span class="wiki-home__impact-number">{{ promotionStats.adoptedTeamCount }}</span>
-              <span class="wiki-home__impact-label">{{ t('wiki.teamsAdopted') }}</span>
-            </div>
-            <div class="wiki-home__impact-stat">
-              <span class="wiki-home__impact-number">{{ promotionStats.promotedPageCount }}</span>
-              <span class="wiki-home__impact-label">{{ t('wiki.knowledgeRefined') }}</span>
-            </div>
-          </div>
-          <div v-if="promotionStats.recentPromotedPages.length > 0" class="wiki-home__impact-pages">
-            <div v-for="p in promotionStats.recentPromotedPages.slice(0, 3)" :key="p.pageId" class="wiki-home__impact-page">
-              <Award :size="12" />
-              <router-link :to="`/wiki/${p.pageId}?scopeId=${p.targetScopeId}`" class="wiki-home__impact-page-link">
-                {{ p.title }} → {{ p.targetScopeName }}
-              </router-link>
-            </div>
-          </div>
-        </div>
-
-        <div v-if="contributors.length > 0" class="wiki-home__contributors">
-          <h3 class="wiki-home__section-title">
+        <div v-if="hasTeamStats" class="wiki-home__team">
+          <button class="wiki-home__team-toggle" @click="teamExpanded = !teamExpanded">
             <Award :size="16" />
-            {{ t('wiki.contributors') }}
-          </h3>
-          <div class="wiki-home__contributor-list">
-            <div v-for="contributor in contributors.slice(0, 5)" :key="contributor.userName" class="wiki-home__contributor-item">
-              <span class="wiki-home__contributor-name">{{ contributor.userName }}</span>
-              <span class="wiki-home__contributor-count">{{ contributor.promotedPageCount }} {{ t('wiki.items') }}</span>
+            <span>{{ t('wiki.teamHighlights') }}</span>
+            <ChevronDown v-if="teamExpanded" :size="14" class="wiki-home__team-chevron" />
+            <ChevronRight v-else :size="14" class="wiki-home__team-chevron" />
+          </button>
+          <template v-if="teamExpanded">
+            <div v-if="promotionStats && promotionStats.promotedPageCount > 0" class="wiki-home__impact">
+              <h4 class="wiki-home__section-title">
+                <TrendingUp :size="16" />
+                {{ t('wiki.impact') }}
+              </h4>
+              <div class="wiki-home__impact-stats">
+                <div class="wiki-home__impact-stat">
+                  <span class="wiki-home__impact-number">{{ promotionStats.adoptedTeamCount }}</span>
+                  <span class="wiki-home__impact-label">{{ t('wiki.teamsAdopted') }}</span>
+                </div>
+                <div class="wiki-home__impact-stat">
+                  <span class="wiki-home__impact-number">{{ promotionStats.promotedPageCount }}</span>
+                  <span class="wiki-home__impact-label">{{ t('wiki.knowledgeRefined') }}</span>
+                </div>
+              </div>
+              <div v-if="promotionStats.recentPromotedPages.length > 0" class="wiki-home__impact-pages">
+                <div v-for="p in promotionStats.recentPromotedPages.slice(0, 3)" :key="p.pageId" class="wiki-home__impact-page">
+                  <Award :size="12" />
+                  <router-link :to="`/wiki/${p.pageId}?scopeId=${p.targetScopeId}`" class="wiki-home__impact-page-link">
+                    {{ p.title }} → {{ p.targetScopeName }}
+                  </router-link>
+                </div>
+              </div>
             </div>
-          </div>
+
+            <div v-if="contributors.length > 0" class="wiki-home__contributors">
+              <h4 class="wiki-home__section-title">
+                <Award :size="16" />
+                {{ t('wiki.contributors') }}
+              </h4>
+              <div class="wiki-home__contributor-list">
+                <div v-for="contributor in contributors.slice(0, 5)" :key="contributor.userName" class="wiki-home__contributor-item">
+                  <span class="wiki-home__contributor-name">{{ contributor.userName }}</span>
+                  <span class="wiki-home__contributor-count">{{ contributor.promotedPageCount }} {{ t('wiki.items') }}</span>
+                </div>
+              </div>
+            </div>
+          </template>
         </div>
       </div>
 
       <div class="wiki-home__main">
-        <div v-if="activityFeed.length > 0 && authStore.scopes.length > 1" class="wiki-home__activity">
-          <h3 class="wiki-home__section-title">
-            <Globe :size="16" />
-            {{ t('wiki.crossScopeFeed') }}
-          </h3>
-          <div class="wiki-home__activity-list">
-            <router-link v-for="item in activityFeed" :key="item.pageId" :to="`/wiki/${item.pageId}`" class="wiki-home__activity-item">
-              <div class="wiki-home__activity-item-main">
-                <span class="wiki-home__activity-title">{{ item.title }}</span>
-                <span v-if="item.category" class="wiki-home__activity-category">{{ item.category }}</span>
-              </div>
-              <div class="wiki-home__activity-item-meta">
-                <span class="wiki-home__activity-scope">{{ item.scopeName }}</span>
-                <span class="wiki-home__activity-time">{{ formatRelativeTime(item.updatedAt) }}</span>
-              </div>
-            </router-link>
-          </div>
-        </div>
-
         <div class="wiki-home__recent">
           <div class="wiki-home__section-header">
             <h3 class="wiki-home__section-title">
-              <Clock :size="16" />
-              {{ t('wiki.recentUpdates') }}
+              <FolderOpen v-if="selectedCategory" :size="16" />
+              <Clock v-else :size="16" />
+              <template v-if="selectedCategory">{{ categoryListTitle }}</template>
+              <template v-else>{{ t('wiki.recentUpdates') }}</template>
             </h3>
             <button
               v-if="!selectionMode"
@@ -566,7 +547,7 @@ function closePreview() {
                 </span>
                 <span class="wiki-home__page-meta">{{ page.category || t('wiki.uncategorized') }}</span>
               </div>
-              <div class="wiki-home__page-health" :style="{ color: healthColorMap[getEffectiveHealth(page)] }">
+              <div v-if="getEffectiveHealth(page) !== 'healthy'" class="wiki-home__page-health" :style="{ color: healthColorMap[getEffectiveHealth(page)] }">
                 <component :is="healthIconMap[getEffectiveHealth(page)]" :size="14" />
                 <span>{{ t(healthLabelKeyMap[getEffectiveHealth(page)] || 'wiki.healthy') }}</span>
               </div>
@@ -580,13 +561,12 @@ function closePreview() {
             <BookOpen :size="16" />
             {{ t('wiki.recommended') }}
           </h3>
-          <div v-if="recommendedPages.length > 0" class="wiki-home__page-list">
+          <div v-if="recommendedPages.length > 0" class="wiki-home__rec-list">
             <router-link
               v-for="page in recommendedPages"
               :key="'rec-' + page.id"
               :to="`/wiki/${page.id}`"
-              class="wiki-home__page-card"
-              :class="{ 'wiki-home__page-card--deprecated': page.lifecycleStatus === 'DEPRECATED' }"
+              class="wiki-home__rec-item"
             >
               <div class="wiki-home__page-info">
                 <span class="wiki-home__page-title">
@@ -595,12 +575,31 @@ function closePreview() {
                 </span>
                 <span class="wiki-home__page-meta">{{ formatSummaryPreview(page.summary) || t('wiki.noSummary') }}</span>
               </div>
-              <ArrowRight :size="16" class="wiki-home__page-arrow" />
+              <ArrowRight :size="14" class="wiki-home__page-arrow" />
             </router-link>
           </div>
           <div v-else class="wiki-home__empty-state">
             <p>{{ t('wiki.startAddingSources') }}</p>
             <p class="wiki-home__empty-hint">{{ t('wiki.startAddingSourcesHint') }}</p>
+          </div>
+        </div>
+
+        <div v-if="activityFeed.length > 0 && authStore.scopes.length > 1" class="wiki-home__activity">
+          <h3 class="wiki-home__section-title">
+            <Globe :size="16" />
+            {{ t('wiki.crossScopeFeed') }}
+          </h3>
+          <div class="wiki-home__activity-list">
+            <router-link v-for="item in activityFeed" :key="item.pageId" :to="`/wiki/${item.pageId}?scopeId=${item.scopeId}`" class="wiki-home__activity-item">
+              <div class="wiki-home__activity-item-main">
+                <span class="wiki-home__activity-title">{{ item.title }}</span>
+                <span v-if="item.category" class="wiki-home__activity-category">{{ item.category }}</span>
+              </div>
+              <div class="wiki-home__activity-item-meta">
+                <span class="wiki-home__activity-scope">{{ item.scopeName }}</span>
+                <span class="wiki-home__activity-time">{{ formatRelativeTime(item.updatedAt) }}</span>
+              </div>
+            </router-link>
           </div>
         </div>
       </div>
@@ -778,6 +777,12 @@ function closePreview() {
 .wiki-home__sidebar {
   display: flex;
   flex-direction: column;
+  gap: var(--space-4);
+  position: sticky;
+  top: var(--space-6);
+  align-self: start;
+  max-height: calc(100vh - 2 * var(--space-6));
+  overflow-y: auto;
 }
 
 .wiki-home__section-title {
@@ -800,6 +805,11 @@ function closePreview() {
 .wiki-home__category-list {
   display: flex;
   flex-direction: column;
+}
+
+.wiki-home__category-list--loading {
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 .wiki-home__category-group {
@@ -917,7 +927,6 @@ function closePreview() {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: var(--space-5);
-  margin-top: var(--space-4);
 }
 
 .wiki-home__source-list {
@@ -1256,6 +1265,35 @@ function closePreview() {
   padding: var(--space-5);
 }
 
+.wiki-home__rec-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.wiki-home__rec-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--border-default);
+  color: inherit;
+  text-decoration: none;
+  transition: color 150ms;
+}
+
+.wiki-home__rec-item:hover {
+  color: var(--accent-primary);
+}
+
+.wiki-home__rec-item:hover .wiki-home__page-arrow {
+  transform: translateX(2px);
+}
+
+.wiki-home__rec-item .wiki-home__page-arrow {
+  transition: transform 150ms;
+}
+
 .wiki-home__empty-state {
   text-align: center;
   padding: var(--space-4);
@@ -1272,12 +1310,41 @@ function closePreview() {
   margin-top: var(--space-2);
 }
 
-.wiki-home__impact {
+.wiki-home__team {
   background: var(--surface-card);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
-  padding: var(--space-4);
+  padding: var(--space-5);
+}
+
+.wiki-home__team-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: var(--font-body);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: color 150ms;
+}
+
+.wiki-home__team-toggle:hover {
+  color: var(--accent-primary);
+}
+
+.wiki-home__team-chevron {
+  margin-left: auto;
+  color: var(--text-tertiary);
+}
+
+.wiki-home__impact {
+  padding: var(--space-4) 0 0;
   margin-top: var(--space-4);
+  border-top: 1px solid var(--border-default);
 }
 
 .wiki-home__impact-stats {
@@ -1326,11 +1393,9 @@ function closePreview() {
 }
 
 .wiki-home__contributors {
-  background: var(--surface-card);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
-  padding: var(--space-4);
+  padding: var(--space-4) 0 0;
   margin-top: var(--space-4);
+  border-top: 1px solid var(--border-default);
 }
 
 .wiki-home__contributor-list {
@@ -1584,88 +1649,6 @@ function closePreview() {
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
-}
-
-.wiki-home__subscriptions {
-  margin-top: var(--space-4);
-}
-
-.wiki-home__section-more {
-  margin-left: auto;
-  font-size: var(--font-body-sm);
-  font-weight: var(--weight-medium);
-  color: var(--text-tertiary);
-  text-decoration: none;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  transition: color var(--transition-fast);
-}
-
-.wiki-home__section-more:hover {
-  color: var(--accent-primary);
-}
-
-.wiki-home__subscription-dynamics {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.wiki-home__subscription-dynamic {
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-md);
-  background: var(--surface-card);
-  border: 1px solid var(--border-subtle);
-  transition: border-color var(--transition-fast);
-}
-
-.wiki-home__subscription-dynamic:hover {
-  border-color: var(--border-default);
-}
-
-.wiki-home__subscription-dynamic-link {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  text-decoration: none;
-}
-
-.wiki-home__subscription-dynamic-title {
-  font-size: var(--font-body-sm);
-  font-weight: var(--weight-medium);
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-
-.wiki-home__subscription-dynamic-scope {
-  font-size: var(--font-caption);
-  font-weight: var(--weight-medium);
-  color: var(--accent-primary);
-  background: var(--accent-light);
-  padding: 1px var(--space-2);
-  border-radius: var(--radius-sm);
-  white-space: nowrap;
-}
-
-.wiki-home__subscription-dynamic-summary {
-  font-size: var(--font-body-sm);
-  color: var(--text-secondary);
-  margin-top: var(--space-1);
-  line-height: 1.4;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wiki-home__subscription-empty {
-  padding: var(--space-4) 0;
-  text-align: center;
-  color: var(--text-tertiary);
-  font-size: var(--font-body-sm);
 }
 
 .wiki-home__activity {

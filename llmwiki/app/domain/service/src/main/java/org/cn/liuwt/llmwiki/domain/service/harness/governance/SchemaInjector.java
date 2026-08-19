@@ -55,6 +55,9 @@ public class SchemaInjector {
         Section.DOMAIN, Section.TAXONOMY, Section.TEMPLATES, Section.NAMING);
     private static final EnumSet<Section> ANALYZER_SECTIONS = EnumSet.of(
         Section.DOMAIN, Section.TAXONOMY);
+    // 编辑助手只需领域背景、分类体系与命名规范；TEMPLATES 段会被模型误当作正文复制，必须排除
+    private static final EnumSet<Section> EDIT_SECTIONS = EnumSet.of(
+        Section.DOMAIN, Section.TAXONOMY, Section.NAMING);
     private static final EnumSet<Section> LINT_SECTIONS = EnumSet.of(
         Section.DOMAIN, Section.HEALTH_RULES);
     private static final EnumSet<Section> QUERY_SECTIONS = EnumSet.of(
@@ -93,6 +96,10 @@ public class SchemaInjector {
 
     public String prependForWriter(Long scopeId, String prompt) {
         return prepend(scopeId, prompt, WRITER_SECTIONS);
+    }
+
+    public String prependForEdit(Long scopeId, String prompt) {
+        return prepend(scopeId, prompt, EDIT_SECTIONS);
     }
 
     public String prependForAnalyzer(Long scopeId, String prompt) {

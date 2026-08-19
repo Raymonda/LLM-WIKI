@@ -44,6 +44,9 @@ public class TokenUsageAspect {
             "execution(public * org.cn.liuwt.llmwiki.integration.ai.LlmClient.streamChat*(..))")
     public Object recordTokenUsage(ProceedingJoinPoint pjp) throws Throwable {
         Object result = pjp.proceed();
+        if (result instanceof org.reactivestreams.Publisher<?>) {
+            return result;
+        }
 
         try {
             TokenUsageContext.Context ctx = TokenUsageContext.get();
@@ -54,6 +57,9 @@ public class TokenUsageAspect {
                 dailyService.recordDaily(ctx.scopeId(), ctx.operationType(), usage.inputTokens(), usage.outputTokens());
                 log.debug("Token usage recorded: scope={}, type={}, in={}, out={}",
                     ctx.scopeId(), ctx.operationType(), usage.inputTokens(), usage.outputTokens());
+            } else if (ctx == null && usage != null && usage.total() > 0) {
+                log.warn("Token usage dropped (no TokenUsageContext on thread): method={}, tokens={}",
+                    pjp.getSignature().getName(), usage.total());
             } else if (ctx != null && ctx.scopeId() != null) {
                 log.warn("Token usage NOT recorded (usage is null or zero): scope={}, type={}, method={}",
                     ctx.scopeId(), ctx.operationType(), pjp.getSignature().getName());

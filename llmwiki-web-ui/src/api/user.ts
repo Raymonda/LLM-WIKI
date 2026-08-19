@@ -7,7 +7,6 @@ export interface UserManageInfo {
   role: string
   status: string
   scopeId: number
-  consentKnowledgePromotion: number
   createdAt: string
   updatedAt: string
 }

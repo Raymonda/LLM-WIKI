@@ -237,4 +237,27 @@ public class S3StorageProvider implements StorageProvider {
             write(scopeId, path, content);
         }
     }
+
+    @Override
+    public boolean scopeDirectoryExists(String scopeId) {
+        String bucket = bucketName(scopeId);
+        try {
+            HeadBucketRequest request = HeadBucketRequest.builder()
+                    .bucket(bucket)
+                    .build();
+            s3Client.headBucket(request);
+            return true;
+        } catch (S3Exception e) {
+            if (e.statusCode() == 404) {
+                return false;
+            }
+            throw new RuntimeException("Failed to check S3 bucket: " + bucket, e);
+        }
+    }
+
+    @Override
+    public void moveScopeDirectory(String oldScopeId, String newScopeId) {
+        throw new UnsupportedOperationException(
+                "S3 scope directory migration is not supported: " + oldScopeId + " -> " + newScopeId);
+    }
 }

@@ -86,7 +86,7 @@ mvn clean package -DskipTests -pl app/bootstrap -am
 
 # Run (dev profile uses localhost services; API key passed via env var)
 AI_DASHSCOPE_API_KEY=sk-your-key-here \
-  java -jar target/boot/llmwiki-bootstrap-0.0.1-SNAPSHOT.jar --spring.profiles.active=dev
+  java -jar target/boot/llmwiki-bootstrap-1.1.0-SNAPSHOT.jar --spring.profiles.active=dev
 ```
 
 Or with Maven directly:

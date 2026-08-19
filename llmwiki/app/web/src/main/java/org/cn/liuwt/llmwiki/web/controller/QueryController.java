@@ -4,6 +4,7 @@ import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
 import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
 import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.common.util.result.Result;
+import org.cn.liuwt.llmwiki.domain.service.harness.query.QuerySseProtocol;
 import org.cn.liuwt.llmwiki.domain.service.system.ScopeService;
 import org.cn.liuwt.llmwiki.domain.service.wiki.WikiFileServiceImpl;
 import org.cn.liuwt.llmwiki.facade.model.SaveAnswerRequest;
@@ -14,6 +15,7 @@ import org.cn.liuwt.llmwiki.web.security.JwtTokenProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -46,13 +48,25 @@ public class QueryController {
     @Autowired
     private ScopeService scopeService;
 
+    @Value("${llmwiki.query.fact-block.enabled:true}")
+    private boolean factBlockEnabled;
+
+    @Value("${llmwiki.query.clarifier.enabled:true}")
+    private boolean clarifierEnabled;
+
+    @Value("${llmwiki.query.narrative.enabled:true}")
+    private boolean narrativeEnabled;
+
     private final Map<String, SseEmitter> emitters = new ConcurrentHashMap<>();
 
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamQuery(@RequestParam String question,
                                    @RequestParam(required = false) String sessionId,
                                    @RequestParam(required = false, defaultValue = "quick") String mode,
-                                   @RequestParam(required = false) String scopeIds) {
+                                   @RequestParam(required = false) String scopeIds,
+                                   @RequestParam(required = false) String assumedIntent) {
+        log.debug("Query stream: mode={} scopeIds={} clarifierEnabled={} factBlockEnabled={} hasAssumedIntent={}",
+            mode, scopeIds, clarifierEnabled, factBlockEnabled, assumedIntent != null && !assumedIntent.isBlank());
         if (question == null || question.trim().isEmpty()) {
             SseEmitter emitter = new SseEmitter(5000L);
             try {
@@ -74,7 +88,7 @@ public class QueryController {
         emitter.onError(e -> emitters.remove(sessionKey));
 
         try {
-            emitter.send(SseEmitter.event().name("start").data(Map.of("sessionId", sessionKey)));
+            emitter.send(SseEmitter.event().name("start").data(buildStartEventData(sessionKey)));
             emitter.send(SseEmitter.event().name("mode").data(Map.of("mode", "tool-calling")));
             emitter.send(SseEmitter.event().name("step").data(Map.of("step", "retrieving")));
         } catch (Exception e) {
@@ -83,7 +97,7 @@ public class QueryController {
             return emitter;
         }
 
-        CompletableFuture<List<FunFactService.FunFact>> funFactsFuture = funFactService.generateFunFactsAsync(question);
+        CompletableFuture<List<FunFactService.FunFact>> funFactsFuture = funFactService.generateFunFactsAsync(scopeId, question);
         funFactsFuture.thenAccept(facts -> {
             if (!facts.isEmpty()) {
                 try {
@@ -98,17 +112,21 @@ public class QueryController {
         });
 
         Flux<String> answerStream = resolvedScopeIds.size() == 1
-            ? queryService.queryWikiStreaming(resolvedScopeIds.get(0), question, sessionKey, isDeepMode)
-            : queryService.queryWikiStreamingMultiScope(resolvedScopeIds, question, sessionKey, isDeepMode);
+            ? queryService.queryWikiStreaming(resolvedScopeIds.get(0), question, sessionKey, isDeepMode, assumedIntent)
+            : queryService.queryWikiStreamingMultiScope(resolvedScopeIds, question, sessionKey, isDeepMode, assumedIntent);
 
         answerStream
             .doOnNext(chunk -> {
                 try {
-                    if (chunk.startsWith("__STEP__:")) {
-                        String stepName = chunk.substring("__STEP__:".length());
-                        emitter.send(SseEmitter.event().name("step").data(Map.of("step", stepName)));
+                    QuerySseProtocol.SseEvent event = QuerySseProtocol.mapChunk(chunk, factBlockEnabled);
+                    if ("fact-block".equals(event.eventName())) {
+                        emitter.send(SseEmitter.event().name("fact-block").data(event.payload()));
+                    } else if ("step".equals(event.eventName())) {
+                        emitter.send(SseEmitter.event().name("step").data(Map.of("step", event.payload())));
+                    } else if ("clarification".equals(event.eventName())) {
+                        emitter.send(SseEmitter.event().name("clarification").data(event.payload()));
                     } else {
-                        emitter.send(SseEmitter.event().name("answer-chunk").data(Map.of("content", chunk)));
+                        emitter.send(SseEmitter.event().name("answer-chunk").data(Map.of("content", event.payload())));
                     }
                 } catch (Exception e) {
                     log.debug("SSE send failed: {}", e.getMessage());
@@ -168,6 +186,10 @@ public class QueryController {
         Long scopeId = jwtTokenProvider.getCurrentScopeId();
         Map<String, Long> resolution = wikiFileService.resolveWikiLinks(content, scopeId);
         return Result.success(resolution);
+    }
+
+    public Map<String, Object> buildStartEventData(String sessionKey) {
+        return Map.of("sessionId", sessionKey, "narrative", narrativeEnabled);
     }
 
     private List<Long> resolveScopeIds(String scopeIdsParam, Long fallbackScopeId) {

@@ -1,6 +1,7 @@
 package org.cn.liuwt.llmwiki.service.query;
 
 import org.cn.liuwt.llmwiki.integration.ai.LlmClient;
+import org.cn.liuwt.llmwiki.integration.ai.TokenUsageContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,13 +23,16 @@ public class FunFactService {
     @Autowired
     private LlmClient chatClient;
 
-    public CompletableFuture<List<FunFact>> generateFunFactsAsync(String question) {
+    public CompletableFuture<List<FunFact>> generateFunFactsAsync(Long scopeId, String question) {
         return CompletableFuture.supplyAsync(() -> {
+            TokenUsageContext.set(scopeId, "query");
             try {
                 return generateFunFacts(question);
             } catch (Exception e) {
                 log.warn("Failed to generate fun facts: {}", e.getMessage());
                 return List.of();
+            } finally {
+                TokenUsageContext.clear();
             }
         });
     }

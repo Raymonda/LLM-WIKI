@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch, nextTick } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useToastStore } from '@/stores/toast'
@@ -66,14 +66,30 @@ watch([content, title], () => {
 })
 
 onBeforeRouteLeave((_to, _from, next) => {
-  if (dirty.value && !saving.value) {
+  if (saving.value) {
+    next()
+    return
+  }
+  if (editStreaming.value) {
+    const ok = window.confirm(t('editor.leaveDuringAiEdit'))
+    if (ok) abandonSession()
+    next(ok)
+    return
+  }
+  if (pendingContent.value) {
+    const ok = window.confirm(t('editor.leaveWithPendingChanges'))
+    if (ok) abandonSession()
+    next(ok)
+    return
+  }
+  if (dirty.value) {
     const ok = window.confirm(t('editor.unsavedChangesLeave'))
     if (ok) abandonSession()
     next(ok)
-  } else {
-    abandonSession()
-    next()
+    return
   }
+  abandonSession()
+  next()
 })
 
 function abandonSession() {
@@ -81,6 +97,22 @@ function abandonSession() {
     abandonEditSession(session.value.id).catch(() => {})
   }
 }
+
+function handleBeforeUnload(e: BeforeUnloadEvent) {
+  if (saving.value) return
+  if (editStreaming.value || pendingContent.value || dirty.value) {
+    e.preventDefault()
+    e.returnValue = ''
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('beforeunload', handleBeforeUnload)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+})
 
 onMounted(async () => {
   try {

@@ -85,6 +85,16 @@ public class SchemaJsonSynthesizer {
     }
 
     public SynthesisResult synthesizeFromStructured(SchemaStructuredModel model, java.util.List<String> capabilityIds) {
+        return synthesizeFromStructured(model, capabilityIds, 0L, 0);
+    }
+
+    /**
+     * 带独立超时与重试策略的结构化合成，供冷启动异步润色场景使用：
+     * 超时或失败直接抛异常由调用方决定是否回退到确定性渲染。
+     */
+    public SynthesisResult synthesizeFromStructured(SchemaStructuredModel model,
+                                                    java.util.List<String> capabilityIds,
+                                                    long timeoutMs, int maxAttempts) {
         if (chatClient == null || !chatClient.isAvailable()) {
             throw new BusinessException(ErrorCode.AI_UNAVAILABLE);
         }
@@ -109,7 +119,7 @@ public class SchemaJsonSynthesizer {
 
         String userPrompt = "今天是 %s，请生成 7 段 Schema Markdown。".formatted(LocalDate.now());
 
-        String raw = chatClient.chat(systemPrompt, userPrompt);
+        String raw = chatClient.chat(systemPrompt, userPrompt, timeoutMs, maxAttempts);
         if (raw == null || raw.isBlank()) {
             throw new BusinessException(ErrorCode.BOOTSTRAP_SYNTH_EMPTY);
         }

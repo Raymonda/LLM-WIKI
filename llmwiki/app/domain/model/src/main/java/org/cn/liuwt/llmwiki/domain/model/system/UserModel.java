@@ -14,7 +14,6 @@ public class UserModel {
     private String role;
     private String status;
     private Long scopeId;
-    private Integer consentKnowledgePromotion;
     private String language;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

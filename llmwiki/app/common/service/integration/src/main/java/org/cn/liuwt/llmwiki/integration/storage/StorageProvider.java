@@ -23,4 +23,8 @@ public interface StorageProvider {
     void append(String scopeId, String path, byte[] content);
 
     java.time.LocalDateTime getLastModifiedTime(String scopeId, String path);
+
+    boolean scopeDirectoryExists(String scopeId);
+
+    void moveScopeDirectory(String oldScopeId, String newScopeId);
 }

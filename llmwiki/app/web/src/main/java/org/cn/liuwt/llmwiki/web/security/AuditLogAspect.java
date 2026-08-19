@@ -2,6 +2,7 @@ package org.cn.liuwt.llmwiki.web.security;
 
 import org.cn.liuwt.llmwiki.domain.model.system.AuditLogModel;
 import org.cn.liuwt.llmwiki.domain.service.system.AuditLogService;
+import org.cn.liuwt.llmwiki.web.controller.ApiKeyController;
 import jakarta.servlet.http.HttpServletRequest;
 import org.aspectj.lang.JoinPoint;
 import org.aspectj.lang.annotation.AfterReturning;
@@ -39,7 +40,9 @@ public class AuditLogAspect {
             Map.entry("SubscriptionController.cancelSubscription", "SUBSCRIPTION_CANCEL"),
             Map.entry("WikiController.deletePage", "PAGE_DELETE"),
             Map.entry("WikiController.updateVisibility", "PAGE_VISIBILITY"),
-            Map.entry("WikiController.updateSensitivity", "PAGE_SENSITIVITY")
+            Map.entry("WikiController.updateSensitivity", "PAGE_SENSITIVITY"),
+            Map.entry("ApiKeyController.createKey", "API_KEY_CREATE"),
+            Map.entry("ApiKeyController.revokeKey", "API_KEY_REVOKE")
     );
 
     private static final Map<String, String> TARGET_TYPE_MAPPING = Map.ofEntries(
@@ -55,7 +58,9 @@ public class AuditLogAspect {
             Map.entry("SUBSCRIPTION_CANCEL", "subscription"),
             Map.entry("PAGE_DELETE", "wiki_page"),
             Map.entry("PAGE_VISIBILITY", "wiki_page"),
-            Map.entry("PAGE_SENSITIVITY", "wiki_page")
+            Map.entry("PAGE_SENSITIVITY", "wiki_page"),
+            Map.entry("API_KEY_CREATE", "api_key"),
+            Map.entry("API_KEY_REVOKE", "api_key")
     );
 
     @Autowired
@@ -85,7 +90,7 @@ public class AuditLogAspect {
             model.setActorUserId(userId);
             model.setAction(action);
             model.setTargetType(TARGET_TYPE_MAPPING.getOrDefault(action, "unknown"));
-            model.setScopeId(resolveScopeIdFromArgs(jp.getArgs()));
+            model.setScopeId(resolveScopeId(jp));
 
             HttpServletRequest request = getRequest();
             if (request != null) {
@@ -107,6 +112,22 @@ public class AuditLogAspect {
         return method.isAnnotationPresent(PostMapping.class)
                 || method.isAnnotationPresent(PutMapping.class)
                 || method.isAnnotationPresent(DeleteMapping.class);
+    }
+
+    private Long resolveScopeId(JoinPoint jp) {
+        if (jp.getTarget().getClass().getSimpleName().equals("ApiKeyController")) {
+            return resolveApiKeyScopeId(jp.getArgs());
+        }
+        return resolveScopeIdFromArgs(jp.getArgs());
+    }
+
+    private Long resolveApiKeyScopeId(Object[] args) {
+        for (Object arg : args) {
+            if (arg instanceof ApiKeyController.CreateKeyRequest request) {
+                return request.scopeId();
+            }
+        }
+        return null;
     }
 
     private Long resolveScopeIdFromArgs(Object[] args) {

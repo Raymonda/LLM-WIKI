@@ -3,7 +3,7 @@ import { ref, onMounted, reactive, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToastStore } from '@/stores/toast'
 import { useConfirmDialog } from '@/composables/useConfirmDialog'
-import { Settings, FileText, Users, Bot, Share2, GitPullRequest, Sparkles, Save, Loader2, History, RotateCcw, AlertTriangle, Plus, Search, ShieldCheck, User, CheckCircle2, XCircle, KeyRound, Ban, ArrowUpDown, ChevronLeft, ChevronRight, X } from 'lucide-vue-next'
+import { Settings, FileText, Users, Bot, GitPullRequest, Sparkles, History, RotateCcw, AlertTriangle, Plus, Search, ShieldCheck, User, CheckCircle2, XCircle, ArrowUpDown, ChevronLeft, ChevronRight, X, Plug, Ban, KeyRound } from 'lucide-vue-next'
 import {
   listSchemas,
   countPendingPatches,
@@ -13,7 +13,6 @@ import {
   type SchemaVersionInfo,
   type SchemaMigrationReport,
 } from '@/api/harness'
-import { getUserInfo, updateConsentPromotion } from '@/api/auth'
 import {
   listUsers as apiListUsers,
   createUser as apiCreateUser,
@@ -23,12 +22,13 @@ import {
   type UserManageInfo,
 } from '@/api/user'
 import WikiPageRenderer from '@/components/wiki/WikiPageRenderer.vue'
+import McpAgentPanel from '@/components/system/McpAgentPanel.vue'
 
 const { t } = useI18n()
-const activeTab = ref<'schema' | 'users' | 'lint' | 'general'>('schema')
+const activeTab = ref<'schema' | 'users' | 'lint' | 'general' | 'mcp'>('schema')
 const toastStore = useToastStore()
 
-function switchTab(id: 'schema' | 'users' | 'lint' | 'general') {
+function switchTab(id: 'schema' | 'users' | 'lint' | 'general' | 'mcp') {
   activeTab.value = id
 }
 
@@ -37,14 +37,13 @@ const tabs = [
   { id: 'lint', labelKey: 'system.tabLint', icon: Bot },
   { id: 'users', labelKey: 'system.tabUsers', icon: Users },
   { id: 'general', labelKey: 'system.tabGeneral', icon: Settings },
+  { id: 'mcp', labelKey: 'system.tabMcp', icon: Plug },
 ] as const
 
 const wikiSchema = ref('')
 const schemaExists = ref(false)
 const isLoading = ref(true)
 const schemaKey = ref('wiki_schema')
-const consentPromotion = ref(true)
-const isSavingConsent = ref(false)
 const pendingPatchCount = ref(0)
 
 const schemaVersions = ref<SchemaVersionInfo[]>([])
@@ -183,8 +182,6 @@ onMounted(async () => {
       wikiSchema.value = ''
       schemaExists.value = false
     }
-    const userInfo = await getUserInfo()
-    consentPromotion.value = userInfo.consentKnowledgePromotion === 1
   } catch (e) {
     wikiSchema.value = ''
     schemaExists.value = false
@@ -209,17 +206,6 @@ async function refreshPatchCount() {
 const patchBadge = computed(() =>
   pendingPatchCount.value > 0 ? t('system.patchPendingCount', [pendingPatchCount.value]) : t('system.patchNoPending')
 )
-
-async function saveConsent() {
-  isSavingConsent.value = true
-  try {
-    await updateConsentPromotion(consentPromotion.value ? 1 : 0)
-  } catch (e) {
-    console.error('Failed to update consent:', e)
-  } finally {
-    isSavingConsent.value = false
-  }
-}
 
 async function loadUsers() {
   userLoading.value = true
@@ -665,25 +651,10 @@ function onPageChange(newPage: number) {
     <div v-if="activeTab === 'general'" class="system-view__panel">
       <h2 class="system-view__panel-title">{{ t('system.generalPanelTitle') }}</h2>
       <p class="system-view__panel-hint">{{ t('system.generalPanelHint') }}</p>
-      <div class="system-view__config-row">
-        <span class="system-view__config-label">
-          <Share2 :size="16" />
-          {{ t('system.knowledgeSharing') }}
-        </span>
-        <div class="system-view__consent-setting">
-          <label class="system-view__consent-toggle">
-            <input type="checkbox" v-model="consentPromotion" class="system-view__consent-checkbox" />
-            <span class="system-view__consent-desc">
-              {{ t('system.consentDesc') }}
-            </span>
-          </label>
-          <button class="system-view__btn-primary system-view__consent-save" :disabled="isSavingConsent" @click="saveConsent">
-            <Save :size="14" />
-            <Loader2 v-if="isSavingConsent" :size="14" class="system-view__spin" />
-            {{ t('system.saveSettings') }}
-          </button>
-        </div>
-      </div>
+    </div>
+
+    <div v-if="activeTab === 'mcp'" class="system-view__panel system-view__panel--wide">
+      <McpAgentPanel manage-all />
     </div>
 
     <ConfirmDialog
@@ -970,37 +941,6 @@ function onPageChange(newPage: number) {
   gap: var(--space-2);
 }
 
-.system-view__consent-setting {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.system-view__consent-toggle {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  cursor: pointer;
-}
-
-.system-view__consent-checkbox {
-  width: 16px;
-  height: 16px;
-  margin-top: 2px;
-  accent-color: var(--accent-primary);
-  cursor: pointer;
-}
-
-.system-view__consent-desc {
-  font-size: var(--font-body);
-  color: var(--text-secondary);
-  line-height: 1.6;
-}
-
-.system-view__consent-save {
-  align-self: flex-start;
-}
-
 .system-view__config-select {
   padding: var(--space-2) var(--space-3);
   background: var(--input-bg);
@@ -1265,6 +1205,11 @@ function onPageChange(newPage: number) {
 .system-view__badge--danger {
   background: var(--error-light);
   color: var(--error);
+}
+
+.system-view__badge--warning {
+  background: var(--warning-light);
+  color: var(--warning);
 }
 
 .system-view__user-time {
@@ -1696,4 +1641,5 @@ function onPageChange(newPage: number) {
   font-size: var(--font-caption);
   color: var(--text-tertiary);
 }
+
 </style>

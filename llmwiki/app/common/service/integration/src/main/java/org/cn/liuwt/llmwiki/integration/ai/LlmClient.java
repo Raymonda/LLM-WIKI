@@ -50,10 +50,6 @@ public class LlmClient {
         return u;
     }
 
-    public static void setEstimatedUsage(int estimatedOutputTokens) {
-        lastCallUsage.set(new TokenCallUsage(0, estimatedOutputTokens));
-    }
-
     private ChatClient chatClient;
 
     private static final String PLACEHOLDER_KEY = "placeholder-not-configured";
@@ -66,7 +62,7 @@ public class LlmClient {
     @Value("${llmwiki.ai.retry.base-delay-ms:2000}")
     private long retryBaseDelayMs;
 
-    @Value("${llmwiki.ai.timeout-ms:60000}")
+    @Value("${llmwiki.ai.timeout-ms:300000}")
     private long timeoutMs;
 
     @Value("${llmwiki.llm.executor.core-size:8}")
@@ -192,6 +188,9 @@ public class LlmClient {
         try {
             if (!llmExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
                 llmExecutor.shutdownNow();
+                if (!llmExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                    log.warn("llmExecutor did not reach quiescence after shutdownNow");
+                }
             }
         } catch (InterruptedException e) {
             llmExecutor.shutdownNow();
@@ -223,6 +222,15 @@ public class LlmClient {
         return chatWithRetry(systemPrompt, userMessage);
     }
 
+    /**
+     * 带独立超时与重试策略的同步调用，供对时延敏感的场景（如冷启动润色）使用。
+     */
+    public String chat(String systemPrompt, String userMessage, long timeoutOverrideMs, int maxAttempts) {
+        long effectiveTimeout = timeoutOverrideMs > 0 ? timeoutOverrideMs : timeoutMs;
+        int effectiveAttempts = maxAttempts > 0 ? maxAttempts : maxRetryAttempts;
+        return chatWithRetry(systemPrompt, userMessage, effectiveTimeout, effectiveAttempts);
+    }
+
     public String chat(String userMessage) {
         return chatWithRetry(null, userMessage);
     }
@@ -241,7 +249,6 @@ public class LlmClient {
             .doOnNext(chunk -> charCount.addAndGet(chunk != null ? chunk.length() : 0))
             .doOnComplete(() -> {
                 int est = Math.max(1, charCount.get() / 2);
-                setEstimatedUsage(est);
                 if (streamUsageRecorder != null && ctx != null && ctx.scopeId() != null) {
                     streamUsageRecorder.record(ctx.scopeId(), ctx.operationType(), est);
                 }
@@ -261,7 +268,6 @@ public class LlmClient {
             .doOnNext(chunk -> charCount.addAndGet(chunk != null ? chunk.length() : 0))
             .doOnComplete(() -> {
                 int est = Math.max(1, charCount.get() / 2);
-                setEstimatedUsage(est);
                 if (streamUsageRecorder != null && ctx != null && ctx.scopeId() != null) {
                     streamUsageRecorder.record(ctx.scopeId(), ctx.operationType(), est);
                 }
@@ -290,6 +296,11 @@ public class LlmClient {
     }
 
     private String chatWithRetry(String systemPrompt, String userMessage) {
+        return chatWithRetry(systemPrompt, userMessage, timeoutMs, maxRetryAttempts);
+    }
+
+    private String chatWithRetry(String systemPrompt, String userMessage,
+                                 long effectiveTimeoutMs, int effectiveMaxAttempts) {
         if (chatClient == null) {
             throw new IllegalStateException("ChatClient not available");
         }
@@ -299,7 +310,7 @@ public class LlmClient {
         String effectiveUserMessage = budgetResult != null ? budgetResult.userMessage() : userMessage;
 
         Throwable lastException = null;
-        for (int attempt = 1; attempt <= maxRetryAttempts; attempt++) {
+        for (int attempt = 1; attempt <= effectiveMaxAttempts; attempt++) {
             CompletableFuture<ChatCallResult> future = null;
             try {
                 future = CompletableFuture.supplyAsync(() -> {
@@ -332,7 +343,7 @@ public class LlmClient {
                     return new ChatCallResult(content, inTokens, outTokens);
                 }, llmExecutor);
 
-                ChatCallResult callResult = future.get(timeoutMs, TimeUnit.MILLISECONDS);
+                ChatCallResult callResult = future.get(effectiveTimeoutMs, TimeUnit.MILLISECONDS);
 
                 if (callResult != null && callResult.content() != null && !callResult.content().isEmpty()) {
                     int inTokens = callResult.inputTokens();
@@ -352,13 +363,13 @@ public class LlmClient {
                 cancelFuture(future);
                 lastException = e;
                 log.warn("LLM call timed out (attempt {}/{}, timeout={}ms): {}",
-                    attempt, maxRetryAttempts, timeoutMs, e.getMessage());
+                    attempt, effectiveMaxAttempts, effectiveTimeoutMs, e.getMessage());
             } catch (ExecutionException e) {
                 lastException = e.getCause() != null ? e.getCause() : e;
                 if (isRetryable(lastException)) {
                     long delay = retryBaseDelayMs * (1L << (attempt - 1));
                     log.warn("LLM call failed (attempt {}/{}), retrying in {}ms: {}",
-                        attempt, maxRetryAttempts, delay, lastException.getMessage());
+                        attempt, effectiveMaxAttempts, delay, lastException.getMessage());
                     try {
                         CompletableFuture<Void> delayFuture = CompletableFuture.runAsync(
                             () -> {
@@ -386,7 +397,7 @@ public class LlmClient {
             }
         }
 
-        throw new RuntimeException("LLM call failed after " + maxRetryAttempts + " attempts", lastException);
+        throw new RuntimeException("LLM call failed after " + effectiveMaxAttempts + " attempts", lastException);
     }
 
     private boolean isRetryable(Throwable e) {

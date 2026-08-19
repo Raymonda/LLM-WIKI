@@ -27,6 +27,7 @@ class JwtAuthenticationFilterTest {
     @InjectMocks private JwtAuthenticationFilter filter;
 
     private static final Long USER_ID = 100L;
+    private static final Long PERSONAL_SCOPE_ID = 150L;
     private static final Long TEAM_SCOPE_ID = 200L;
 
     @BeforeEach
@@ -40,6 +41,7 @@ class JwtAuthenticationFilterTest {
         user.setUsername("alice");
         user.setStatus("active");
         user.setRole("user");
+        user.setScopeId(PERSONAL_SCOPE_ID);
         lenient().when(userService.getUserById(eq(USER_ID))).thenReturn(user);
     }
 
@@ -54,7 +56,7 @@ class JwtAuthenticationFilterTest {
     void noScopeHeader_fallsBackToPersonalScope() throws Exception {
         MockHttpServletRequest req = requestWithToken(null);
         filter.doFilter(req, new MockHttpServletResponse(), (rq, rs) -> {});
-        assertEquals(USER_ID, req.getAttribute("scopeId"));
+        assertEquals(PERSONAL_SCOPE_ID, req.getAttribute("scopeId"));
     }
 
     @Test
@@ -70,7 +72,7 @@ class JwtAuthenticationFilterTest {
         when(scopeService.getMemberRole(TEAM_SCOPE_ID, USER_ID)).thenReturn(null);
         MockHttpServletRequest req = requestWithToken(String.valueOf(TEAM_SCOPE_ID));
         filter.doFilter(req, new MockHttpServletResponse(), (rq, rs) -> {});
-        assertEquals(USER_ID, req.getAttribute("scopeId"));
+        assertEquals(PERSONAL_SCOPE_ID, req.getAttribute("scopeId"));
     }
 
     @Test
@@ -86,6 +88,6 @@ class JwtAuthenticationFilterTest {
     void scopeHeaderNonNumeric_fallsBackToPersonalScope() throws Exception {
         MockHttpServletRequest req = requestWithToken("not-a-number");
         filter.doFilter(req, new MockHttpServletResponse(), (rq, rs) -> {});
-        assertEquals(USER_ID, req.getAttribute("scopeId"));
+        assertEquals(PERSONAL_SCOPE_ID, req.getAttribute("scopeId"));
     }
 }

@@ -28,7 +28,6 @@ export default {
   hasAccountLogin: 'Already have an account? Sign in',
   noAccountRegister: "Don't have an account? Sign up",
   operationFailed: 'Operation failed, please try again',
-  consentText: 'I agree to the Knowledge Sharing Protocol — Open knowledge can be automatically refined and promoted by team AI, contributors will receive credit',
   feature1: 'Add materials, AI auto-integrates into knowledge base',
   feature2: 'Knowledge Q&A, answers become new pages',
   feature3: 'Health check, auto-maintain knowledge health',

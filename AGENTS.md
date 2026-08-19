@@ -9,7 +9,7 @@
 > - Frontend: Vue 3 + TypeScript + Vite + Element Plus (under `llmwiki-web-ui/`)
 > - Package root: `org.cn.liuwt.llmwiki`
 > - Build: `cd llmwiki && mvn clean package -DskipTests -pl app/bootstrap -am`
-> - Run: `java -jar target/boot/llmwiki-bootstrap-0.0.1-SNAPSHOT.jar --spring.profiles.active=dev`
+> - Run: `java -jar target/boot/llmwiki-bootstrap-1.1.0-SNAPSHOT.jar --spring.profiles.active=dev`
 > - Frontend dev: `cd llmwiki-web-ui && npm install && npm run dev` (http://localhost:5173)
 > - Deploy: `docker-compose up -d` (MySQL + ES + App + Web UI); `docker-compose.full.yml` adds MinIO + RocketMQ
 >
@@ -69,6 +69,7 @@ LLM Wiki 对知识的处理本质上是 AI 对知识的一次"编译"。以下�
 | 对象存储 | Local（默认）/ NAS / MinIO（S3 兼容） | 可配置切换 |
 | 消息队列 | RocketMQ + rocketmq-spring-boot-starter | 可选，分布式模式 |
 | 文档解析 | Python 子进程（`tools/doc_parser.py`） | PyMuPDF / pandoc 等 |
+| MCP Server | spring-ai MCP server（`spring-ai-starter-mcp-server-webmvc`，streamable-http `/mcp`，工具实现见 `app/web/.../web/mcp/WikiMcpTools.java`） | 1.1.x |
 | 构建 | Maven | 3.9+ |
 
 ### 前端
@@ -131,7 +132,7 @@ cd llmwiki
 mvn clean package -DskipTests -pl app/bootstrap -am
 
 # 开发环境启动（需要 MySQL + Elasticsearch）
-java -jar target/boot/llmwiki-bootstrap-0.0.1-SNAPSHOT.jar --spring.profiles.active=dev
+java -jar target/boot/llmwiki-bootstrap-1.1.0-SNAPSHOT.jar --spring.profiles.active=dev
 
 # 运行测试
 mvn test                          # 全量
@@ -157,6 +158,15 @@ npm run lint
 ```
 
 前端可单独启动验证 UI 改动（无需后端），但登录和数据操作需要后端服务。PowerShell 不支持 `&&` 连接命令，用 `;` 代替。
+
+## Agent 接入（MCP 工具）规则
+
+- MCP 工具只增不改语义：新增工具放 `WikiMcpTools`，用 `@Tool`/`@ToolParam` 声明，经 `WikiMcpConfig` 的 `MethodToolCallbackProvider` 注册。
+- scope 红线在 MCP 面同样生效：scope 一律经 `currentScopeId()`（认证 filter 写入的 request attributes）解析，绝不新增接受 `scopeId` 参数的工具。
+- agent 写入知识库必须走完整编译 Pipeline（`wiki_ingest_text` → `IngestOrchestrationService`），禁止任何工具直接写 `wiki/` 或绕过管线改页。
+- `raw/` 不可写语义不变：文本摄入写入 `raw/` 的唯一入口是 `SourceService.uploadTextSource`。
+- 长任务三态独立报告：`wiki_ask` 超时返回 `{answer, steps, timedOut:true}`，不得把超时混入错误信息或吞掉部分答案。
+- API Key 是机器身份凭证：签发/吊销走 `/api/keys`（ADMIN）；环境变量名约定 `LLMWIKI_API_KEY`（DSH 侧插件读取），不要硬编码进任何仓库文件。
 
 ## 编码约定
 
@@ -186,6 +196,18 @@ npm run lint
 - **API 调用**：集中在 `src/api/` 层，按模块分文件
 - **设计 Token**：始终使用 CSS 自定义属性（`var(--accent-primary)`、`var(--space-4)`），绝不硬编码颜色或间距值；双主题通过 Token 集切换，默认跟随系统
 - **图标**：Lucide 图标组件，绝不使用 Emoji 作为图标
+
+## 防御式编程（硬性模式）
+
+以下为不可违背的防御式模式，违反即埋雷（来源：Harness 框架失败复盘）：
+
+- **正交结果独立报告**：多维度失败独立检查、独立报告（如子进程"等待超时"与"退出码"是两件事，超时了 exit code 仍可能是 0），绝不合并成单一布尔
+- **公共契约双侧尊重**：越过公共 API 边界的数据先归一化（去空、裁剪、类型收敛），生产方不得输出脏值，消费方不得假设上游已清洗
+- **异步状态 ≠ 同步状态**：`SseEmitter` / 异步完成的成功、超时、客户端断开三态独立；`await` 必须处理"无可等待对象"分支，不能假设事件总会到达
+- **Dispose 必须达到静止**：子进程终止必须 kill → `waitFor` 退出 → join 输出线程三步走，kill 不代表已退出；先注销回调注册、后释放资源，顺序不可颠倒
+- **回调异常容器化**：RocketMQ 监听器、SSE 回调中单个监听器异常不得拖垮其他监听器或整体生命周期，回调入口独立捕获并记录
+- **不受信任输出环境隔离**：子进程（`PythonProcessRunner`）环境变量用白名单，剔除含 `KEY` / `SECRET` / `TOKEN` / `PASSWORD` 的变量，杜绝 API Key 泄漏给解析进程
+- **链接路径清理**：symlink 删除用 unlink 语义而非跟随目标删除；路径操作先规范化再执行
 
 ## 模块依赖（DDD 分层）
 

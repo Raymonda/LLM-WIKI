@@ -54,4 +54,10 @@ export default {
   scopeCount: '{0} 个知识库',
   searchModeAria: '搜索模式',
   queryModeAria: '问答模式',
+  evidenceCollecting: '收集证据中… 已收集 {0} 条',
+  evidenceList: '证据清单',
+  evidenceLabel: '论据详情',
+  confidenceHigh: '高可信',
+  confidenceMedium: '中可信',
+  confidenceLow: '低可信',
 }

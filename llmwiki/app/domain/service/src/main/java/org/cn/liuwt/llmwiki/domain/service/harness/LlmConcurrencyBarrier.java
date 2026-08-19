@@ -20,28 +20,28 @@ public class LlmConcurrencyBarrier {
         PLAN, SUMMARY, ENTITY, ANALYZE, LINT, CHAPTER, RECONCILE, CROSSREF
     }
 
-    @Value("${llmwiki.llm.concurrency.plan:2}")
+    @Value("${llmwiki.llm.concurrency.plan:4}")
     private int planPermits;
 
-    @Value("${llmwiki.llm.concurrency.summary:3}")
+    @Value("${llmwiki.llm.concurrency.summary:4}")
     private int summaryPermits;
 
-    @Value("${llmwiki.llm.concurrency.entity:6}")
+    @Value("${llmwiki.llm.concurrency.entity:8}")
     private int entityPermits;
 
-    @Value("${llmwiki.llm.concurrency.analyze:6}")
+    @Value("${llmwiki.llm.concurrency.analyze:12}")
     private int analyzePermits;
 
-    @Value("${llmwiki.llm.concurrency.lint:2}")
+    @Value("${llmwiki.llm.concurrency.lint:4}")
     private int lintPermits;
 
-    @Value("${llmwiki.llm.concurrency.chapter:6}")
+    @Value("${llmwiki.llm.concurrency.chapter:12}")
     private int chapterPermits;
 
-    @Value("${llmwiki.llm.concurrency.reconcile:1}")
+    @Value("${llmwiki.llm.concurrency.reconcile:2}")
     private int reconcilePermits;
 
-    @Value("${llmwiki.llm.concurrency.crossref:3}")
+    @Value("${llmwiki.llm.concurrency.crossref:6}")
     private int crossrefPermits;
 
     private final Map<Bucket, Semaphore> buckets = new ConcurrentHashMap<>();

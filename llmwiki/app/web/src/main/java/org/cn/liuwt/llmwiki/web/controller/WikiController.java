@@ -80,9 +80,12 @@ public class WikiController {
 
     @GetMapping("/pages")
     public Result<List<WikiPageInfo>> listPages(@RequestParam(defaultValue = "1") int page,
-                                                 @RequestParam(defaultValue = "50") int size) {
+                                                 @RequestParam(defaultValue = "50") int size,
+                                                 @RequestParam(required = false) String category) {
         Long scopeId = jwtTokenProvider.getCurrentScopeId();
-        List<WikiPageModel> pages = wikiFileService.listPagesByScopeId(scopeId, page, size);
+        List<WikiPageModel> pages = (category != null && !category.isBlank())
+            ? wikiFileService.listPagesByCategory(scopeId, category.trim(), page, size)
+            : wikiFileService.listPagesByScopeId(scopeId, page, size);
         List<WikiPageInfo> infos = pages.stream().map(this::toInfo).toList();
         return Result.success(infos);
     }

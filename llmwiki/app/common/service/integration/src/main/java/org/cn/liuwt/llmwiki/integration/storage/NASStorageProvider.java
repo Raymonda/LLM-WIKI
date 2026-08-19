@@ -332,4 +332,38 @@ public class NASStorageProvider implements StorageProvider {
         }
         log.info("NAS health check passed: {}", scopePath);
     }
+
+    @Override
+    public boolean scopeDirectoryExists(String scopeId) {
+        validateScopeId(scopeId);
+        Path scopePath = Paths.get(basePath, scopeId).normalize();
+        Path base = Paths.get(basePath).normalize();
+        if (!scopePath.startsWith(base)) {
+            throw new SecurityException("Path traversal detected in scopeId: " + scopeId);
+        }
+        return Files.isDirectory(scopePath);
+    }
+
+    @Override
+    public void moveScopeDirectory(String oldScopeId, String newScopeId) {
+        validateScopeId(oldScopeId);
+        validateScopeId(newScopeId);
+        Path source = Paths.get(basePath, oldScopeId).normalize();
+        Path target = Paths.get(basePath, newScopeId).normalize();
+        Path base = Paths.get(basePath).normalize();
+        if (!source.startsWith(base) || !target.startsWith(base)) {
+            throw new SecurityException("Path traversal detected in scope move: " + oldScopeId + " -> " + newScopeId);
+        }
+        try {
+            Files.createDirectories(target.getParent());
+            try {
+                Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+            } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                Files.move(source, target);
+            }
+        } catch (IOException e) {
+            log.error("Failed to move scope directory: {} -> {}", oldScopeId, newScopeId, e);
+            throw new RuntimeException("Failed to move scope directory: " + oldScopeId + " -> " + newScopeId, e);
+        }
+    }
 }

@@ -98,7 +98,6 @@ public class UserManagementService {
         newUser.setPasswordHash(passwordEncoder.encode(rawPassword));
         newUser.setRole(role);
         newUser.setStatus("active");
-        newUser.setConsentKnowledgePromotion(1);
         UserModel created = userService.createUser(newUser);
         wikiFileService.initWikiData(created.getScopeId());
         LOGGER.info("admin created user id={} username={} role={}", created.getId(), created.getUsername(), created.getRole());
@@ -133,7 +132,6 @@ public class UserManagementService {
         info.setRole(model.getRole());
         info.setStatus(model.getStatus());
         info.setScopeId(model.getScopeId());
-        info.setConsentKnowledgePromotion(model.getConsentKnowledgePromotion());
         info.setCreatedAt(model.getCreatedAt());
         info.setUpdatedAt(model.getUpdatedAt());
         return info;

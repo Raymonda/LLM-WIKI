@@ -2,13 +2,17 @@
 import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { ElMessage } from 'element-plus'
 import WikiPageRenderer from '@/components/wiki/WikiPageRenderer.vue'
 import FunFactTips from '@/components/wiki/FunFactTips.vue'
-import { Search, MessageCircle, Loader2, BookOpen, BookmarkPlus, Bot, FileText, AlertTriangle, CheckCircle, Filter, X, ExternalLink, Info, Copy, Send, Pencil, Sparkles, Check, Zap, Brain, ChevronDown, Library } from 'lucide-vue-next'
+import { Search, MessageCircle, Loader2, BookOpen, BookmarkPlus, Bot, FileText, AlertTriangle, CheckCircle, Filter, HelpCircle, X, ExternalLink, Info, Copy, Send, Pencil, Sparkles, Check, Zap, Brain, ChevronDown, Library } from 'lucide-vue-next'
 import { searchPages, searchSuggest, listCategories, type WikiPageInfo, type SearchResultInfo } from '@/api/wiki'
 import { useAuthStore } from '@/stores/auth'
 import { saveAnswer, resolveLinks, type QueryAnalysisMode } from '@/api/query'
 import { useSSEQuery } from '@/composables/useSSEQuery'
+import { buildFactBlocksMarkdown, orderFactBlocksByConfidence, type FactBlockView } from '@/composables/queryStreamLogic'
+import FactEvidenceList from '@/components/search/FactEvidenceList.vue'
+import { extractWikiSourceRefs, type WikiSourceRef } from '@/utils/wikiSourceRefs'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -36,6 +40,12 @@ const refineInput = ref('')
 const isRefining = ref(false)
 const answerLinkResolution = ref<Record<string, number>>({})
 const queryAnalysisMode = ref<QueryAnalysisMode>('quick')
+const clarifyInput = ref('')
+const clarification = computed(() => sse.clarification.value)
+
+watch(clarification, (current) => {
+  if (!current) clarifyInput.value = ''
+})
 
 const isLoading = computed(() => localLoading.value || sse.isLoading.value)
 const isStreaming = computed(() => sse.isStreaming.value)
@@ -49,47 +59,36 @@ const funFacts = computed(() => sse.funFacts.value)
 const factContent = computed(() => sse.factAnswer.value)
 const synthesisStream = computed(() => sse.synthesisStreamContent.value)
 const prospectiveContent = computed(() => sse.prospectiveAnswer.value)
+const factBlocks = computed(() => sse.factBlocks.value)
+
+const narrativeEnabled = computed(() => sse.narrativeEnabled.value)
+
+const answerBody = computed(() => {
+  const factMd = factBlocks.value.length > 0 ? buildFactBlocksMarkdown(factBlocks.value) : factContent.value
+  if (narrativeEnabled.value) {
+    const body = synthesisStream.value || aiAnswer.value
+    return factMd.trim() ? `${body}\n\n${factMd}` : body
+  }
+  return factMd.trim() ? `${factMd}\n\n${synthesisStream.value}` : (synthesisStream.value || aiAnswer.value)
+})
 
 const isStreamingSynthesis = computed(() => isStreaming.value && isSynthesizing.value)
 
-interface WikiSourceRef {
-  title: string
-  path: string
+const activeFact = ref<FactBlockView | null>(null)
+const evidenceOpen = ref(false)
+
+const factPopupVisible = computed({
+  get: () => activeFact.value !== null,
+  set: (v: boolean) => {
+    if (!v) activeFact.value = null
+  },
+})
+
+function openFactPopup(index: number) {
+  activeFact.value = orderFactBlocksByConfidence(factBlocks.value)[index] ?? null
 }
 
-const wikiSources = computed<WikiSourceRef[]>(() => {
-  if (!aiAnswer.value) return []
-  const refs: WikiSourceRef[] = []
-  const seen = new Set<string>()
-  const wikiLinkRegex = /\[\[([^\]]+)\]\]\(([^)]+)\)/g
-  const mdLinkRegex = /(?<!\[)\[([^\]]+)\]\(([^)]+)\)(?!\])/g
-  const text = aiAnswer.value
-
-  function addMatch(title: string, rawPath: string) {
-    let filePath = rawPath
-    const absUrlMatch = /^https?:\/\/[^/]+\/(?:wiki\/)?pages\/(.+)$/.exec(filePath)
-    if (absUrlMatch) {
-      filePath = 'pages/' + decodeURIComponent(absUrlMatch[1])
-    }
-    if (filePath.startsWith('wiki/')) filePath = filePath.slice(5)
-    if (!filePath.startsWith('pages/')) return
-    if (!filePath.endsWith('.md')) filePath += '.md'
-    if (!filePath.match(/^pages\/.+\.md$/)) return
-    if (!seen.has(filePath)) {
-      seen.add(filePath)
-      refs.push({ title, path: filePath })
-    }
-  }
-
-  let match: RegExpExecArray | null
-  while ((match = wikiLinkRegex.exec(text)) !== null) {
-    addMatch(match[1], match[2])
-  }
-  while ((match = mdLinkRegex.exec(text)) !== null) {
-    addMatch(match[1], match[2])
-  }
-  return refs
-})
+const wikiSources = computed<WikiSourceRef[]>(() => extractWikiSourceRefs(aiAnswer.value ?? ''))
 
 const userScrolledUp = ref(false)
 let scrollTimer: ReturnType<typeof setTimeout> | null = null
@@ -158,7 +157,7 @@ const hasNoWikiInfo = computed(() => {
   return aiAnswer.value.includes(t('search.noWikiInfoCheck'))
 })
 
-const hasAnswer = computed(() => aiAnswer.value.length > 0 || hasSavedAnswer.value)
+const hasAnswer = computed(() => aiAnswer.value.length > 0 || hasSavedAnswer.value || factBlocks.value.length > 0)
 const hasSavedAnswer = computed(() => isSaved.value && !!savedPage.value)
 
 watch(searchQuery, (val) => {
@@ -302,6 +301,14 @@ function handleQuery() {
   sse.startQuery(q, queryAnalysisMode.value)
 }
 
+function submitIntent(intentText: string) {
+  if (!clarification.value || !intentText.trim()) return
+  const extra = clarifyInput.value.trim()
+  const assumed = extra ? `${intentText.trim()} ${extra}` : intentText.trim()
+  sse.startQuery(lastQuestion.value, queryAnalysisMode.value, undefined, assumed, true)
+  clarifyInput.value = ''
+}
+
 function handleRefine() {
   const instruction = refineInput.value.trim()
   if (!instruction || isStreaming.value) return
@@ -309,7 +316,7 @@ function handleRefine() {
   refineInput.value = ''
   showRefineInput.value = false
 
-  const combinedQuestion = `当前文档内容：\n\n${aiAnswer.value}\n\n用户的完善要求：${instruction}\n\n请基于以上信息，更新和完善这份文档，保持原有结构，补充和完善用户要求的内容。直接输出更新后的完整文档。`
+  const combinedQuestion = `当前文档内容：\n\n${answerBody.value}\n\n用户的完善要求：${instruction}\n\n请基于以上信息，更新和完善这份文档，保持原有结构，补充和完善用户要求的内容。直接输出更新后的完整文档。`
 
   isSaved.value = false
   savedPage.value = null
@@ -323,10 +330,10 @@ async function handleSave() {
   if (isSaving.value || isSaved.value) return
   isSaving.value = true
   try {
-    savedPage.value = await saveAnswer(lastQuestion.value, aiAnswer.value)
+    savedPage.value = await saveAnswer(lastQuestion.value, answerBody.value)
     isSaved.value = true
   } catch (e: any) {
-    sse.queryError.value = e.message || t('search.saveFailed')
+    ElMessage.error(e.message || t('search.saveFailed'))
   } finally {
     isSaving.value = false
   }
@@ -334,10 +341,10 @@ async function handleSave() {
 
 async function handleCopy() {
   try {
-    await navigator.clipboard.writeText(aiAnswer.value)
+    await navigator.clipboard.writeText(answerBody.value)
   } catch {
     const textarea = document.createElement('textarea')
-    textarea.value = aiAnswer.value
+    textarea.value = answerBody.value
     document.body.appendChild(textarea)
     textarea.select()
     document.execCommand('copy')
@@ -575,7 +582,7 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <div v-if="!hasAnswer && !isLoading && !queryError" class="search-page__empty">
+      <div v-if="!hasAnswer && !isLoading && !queryError && !clarification" class="search-page__empty">
         <MessageCircle :size="48" class="search-page__empty-icon" />
         <p>{{ t('search.queryEmpty') }}</p>
       </div>
@@ -606,6 +613,39 @@ onUnmounted(() => {
         {{ queryError }}
       </div>
 
+      <div v-if="clarification" class="search-page__clarify-card">
+        <div class="search-page__clarify-header">
+          <HelpCircle :size="16" class="search-page__clarify-icon" />
+          <span class="search-page__clarify-question">{{ clarification.question }}</span>
+        </div>
+        <div v-if="clarification.options.length > 0" class="search-page__clarify-options">
+          <button
+            v-for="opt in clarification.options"
+            :key="opt"
+            class="search-page__clarify-option"
+            @click="submitIntent(opt)"
+          >
+            {{ opt }}
+          </button>
+        </div>
+        <div class="search-page__clarify-input-row">
+          <input
+            v-model="clarifyInput"
+            class="search-page__clarify-input"
+            placeholder="补充你的意图，或直接发送"
+            @keydown.enter="submitIntent(clarifyInput)"
+          />
+          <button
+            class="search-page__clarify-send"
+            :disabled="!clarifyInput.trim()"
+            @click="submitIntent(clarifyInput)"
+            aria-label="发送意图"
+          >
+            <Send :size="14" />
+          </button>
+        </div>
+      </div>
+
       <div v-if="hasAnswer" class="search-page__answer">
         <div v-if="queryMode === 'fallback' && !isStreaming" class="search-page__fallback-notice">
           <Info :size="14" />
@@ -627,26 +667,72 @@ onUnmounted(() => {
         </div>
 
         <div class="search-page__answer-content">
-          <WikiPageRenderer :content="factContent" :streaming="!isSynthesizing && (isStreaming || isRefining)" :link-resolution="answerLinkResolution" />
-          <div v-if="isStreamingSynthesis && !synthesisStream" class="search-page__synthesis-hint" :class="'search-page__synthesis-hint--' + queryAnalysisMode">
-            <Brain v-if="queryAnalysisMode === 'deep'" :size="16" class="search-page__brain-icon" />
-            <Zap v-else :size="16" class="search-page__zap-icon" />
-            <span>{{ queryAnalysisMode === 'deep' ? t('search.deepThinking') : t('search.quickSynthesis') }}</span>
-          </div>
-          <WikiPageRenderer
-            v-if="isStreamingSynthesis && synthesisStream"
-            :content="synthesisStream"
-            :streaming="true"
-            :link-resolution="answerLinkResolution"
-          />
-          <template v-if="!isStreaming && synthesisStream">
+          <template v-if="narrativeEnabled">
+            <div v-if="isStreaming && !isSynthesizing && factBlocks.length > 0" class="search-page__evidence-strip">
+              <Library :size="14" />
+              <span>{{ t('search.evidenceCollecting', [factBlocks.length]) }}</span>
+            </div>
+            <div v-if="isStreamingSynthesis && !synthesisStream" class="search-page__synthesis-hint" :class="'search-page__synthesis-hint--' + queryAnalysisMode">
+              <Brain v-if="queryAnalysisMode === 'deep'" :size="16" class="search-page__brain-icon" />
+              <Zap v-else :size="16" class="search-page__zap-icon" />
+              <span>{{ queryAnalysisMode === 'deep' ? t('search.deepThinking') : t('search.quickSynthesis') }}</span>
+            </div>
             <WikiPageRenderer
-              :content="synthesisStream"
-              :streaming="false"
+              :content="synthesisStream || aiAnswer"
+              :streaming="isStreaming || isRefining"
+              :link-resolution="answerLinkResolution"
+              :fact-refs="factBlocks.length > 0 ? factBlocks : null"
+              @fact-ref-click="openFactPopup"
+            />
+            <div v-if="!isStreaming && !isRefining && factBlocks.length > 0" class="search-page__evidence-list">
+              <button
+                class="search-page__evidence-toggle"
+                :aria-expanded="evidenceOpen"
+                @click="evidenceOpen = !evidenceOpen"
+              >
+                <ChevronDown :size="14" class="search-page__evidence-toggle-icon" :class="{ 'search-page__evidence-toggle-icon--open': evidenceOpen }" />
+                <span>{{ t('search.evidenceList') }}</span>
+                <span class="search-page__evidence-count">{{ factBlocks.length }}</span>
+              </button>
+              <div v-if="evidenceOpen" class="search-page__evidence-body">
+                <FactEvidenceList :blocks="factBlocks" />
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <div v-if="factBlocks.length > 0" class="search-page__fact-cards">
+              <FactEvidenceList :blocks="factBlocks" />
+            </div>
+            <WikiPageRenderer
+              v-else
+              :content="factContent"
+              :streaming="!isSynthesizing && (isStreaming || isRefining)"
               :link-resolution="answerLinkResolution"
             />
-            <div v-if="prospectiveContent" class="search-page__prospective-anchor" />
+            <div v-if="isStreamingSynthesis && !synthesisStream" class="search-page__synthesis-hint" :class="'search-page__synthesis-hint--' + queryAnalysisMode">
+              <Brain v-if="queryAnalysisMode === 'deep'" :size="16" class="search-page__brain-icon" />
+              <Zap v-else :size="16" class="search-page__zap-icon" />
+              <span>{{ queryAnalysisMode === 'deep' ? t('search.deepThinking') : t('search.quickSynthesis') }}</span>
+            </div>
+            <WikiPageRenderer
+              v-if="isStreamingSynthesis && synthesisStream"
+              :content="synthesisStream"
+              :streaming="true"
+              :link-resolution="answerLinkResolution"
+            />
+            <template v-if="!isStreaming && synthesisStream">
+              <WikiPageRenderer
+                :content="synthesisStream"
+                :streaming="false"
+                :link-resolution="answerLinkResolution"
+              />
+              <div v-if="prospectiveContent" class="search-page__prospective-anchor" />
+            </template>
           </template>
+
+          <el-dialog v-model="factPopupVisible" :title="t('search.evidenceLabel')" width="560px" append-to-body>
+            <FactEvidenceList v-if="activeFact" :blocks="[activeFact]" />
+          </el-dialog>
         </div>
 
         <div v-if="isSaving" class="search-page__saving-inline">
@@ -1382,6 +1468,69 @@ onUnmounted(() => {
   margin-bottom: var(--space-2);
 }
 
+.search-page__fact-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.search-page__evidence-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  font-size: var(--font-body-sm);
+  color: var(--accent-primary);
+  background: var(--accent-light);
+  border-radius: var(--radius-pill);
+}
+
+.search-page__evidence-list {
+  margin-top: var(--space-4);
+}
+
+.search-page__evidence-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-body-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.search-page__evidence-toggle:hover {
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.search-page__evidence-toggle-icon {
+  transition: transform var(--transition-fast);
+}
+
+.search-page__evidence-toggle-icon--open {
+  transform: rotate(180deg);
+}
+
+.search-page__evidence-count {
+  padding: 0 var(--space-2);
+  font-size: var(--font-body-sm);
+  border-radius: var(--radius-pill);
+  background: var(--accent-light);
+  color: var(--accent-primary);
+}
+
+.search-page__evidence-body {
+  margin-top: var(--space-3);
+}
+
 .search-page__synthesis-hint {
   display: flex;
   align-items: center;
@@ -1660,5 +1809,101 @@ onUnmounted(() => {
   border-color: var(--accent-primary);
   color: var(--accent-primary);
   background: var(--accent-light);
+}
+
+.search-page__clarify-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--accent-light);
+  border: 1px solid var(--accent-border, var(--input-border));
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-4);
+  animation: answerFadeIn 0.2s ease;
+}
+
+.search-page__clarify-header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.search-page__clarify-icon {
+  color: var(--accent-primary);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.search-page__clarify-question {
+  font-size: var(--font-body);
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+.search-page__clarify-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.search-page__clarify-option {
+  padding: var(--space-1) var(--space-3);
+  background: var(--bg-elevated, var(--input-bg));
+  border: 1px solid var(--accent-border, var(--input-border));
+  border-radius: var(--radius-full, var(--radius-md));
+  color: var(--accent-primary);
+  font-size: var(--font-body-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.search-page__clarify-option:hover {
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
+}
+
+.search-page__clarify-input-row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.search-page__clarify-input {
+  flex: 1;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: var(--font-body);
+  outline: none;
+  padding: var(--space-2) var(--space-3);
+}
+
+.search-page__clarify-input:focus {
+  border-color: var(--input-focus-border);
+}
+
+.search-page__clarify-send {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2) var(--space-3);
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.search-page__clarify-send:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.search-page__clarify-send--disabled,
+.search-page__clarify-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 </style>

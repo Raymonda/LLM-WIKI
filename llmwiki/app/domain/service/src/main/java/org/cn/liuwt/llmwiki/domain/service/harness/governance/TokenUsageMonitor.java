@@ -1,6 +1,7 @@
 package org.cn.liuwt.llmwiki.domain.service.harness.governance;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ScopeBudgetDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ScopeDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ScopeBudgetMapper;
@@ -9,6 +10,8 @@ import org.cn.liuwt.llmwiki.domain.service.system.NotificationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -31,13 +34,27 @@ public class TokenUsageMonitor {
     private NotificationService notificationService;
 
     public void recordUsage(Long scopeId, int tokensUsed) {
-        ScopeBudgetDO budget = getOrCreateBudget(scopeId);
-        budget.setUsedTokens(budget.getUsedTokens() + tokensUsed);
-        scopeBudgetMapper.updateById(budget);
+        if (tokensUsed <= 0) return;
+        getOrCreateBudget(scopeId);
+        scopeBudgetMapper.incrementUsedTokens(scopeId, tokensUsed);
+        ScopeBudgetDO fresh = scopeBudgetMapper.selectOne(
+            new LambdaQueryWrapper<ScopeBudgetDO>().eq(ScopeBudgetDO::getScopeId, scopeId)
+        );
+        if (fresh == null) return;
         log.info("Scope {} token usage: {} / {} ({}%)",
-            scopeId, budget.getUsedTokens(), budget.getMonthlyBudget(),
-            getUsagePercent(budget));
-        checkAndNotifyBudgetAlert(scopeId, budget);
+            scopeId, fresh.getUsedTokens(), fresh.getMonthlyBudget(),
+            getUsagePercent(fresh));
+        checkAndNotifyBudgetAlert(scopeId, fresh);
+    }
+
+    @Scheduled(cron = "${llmwiki.token-usage.reset-cron:0 10 0 * * *}")
+    public void resetExpiredMonthlyUsage() {
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime nextReset = now.toLocalDate().withDayOfMonth(1).plusMonths(1).atStartOfDay();
+        int reset = scopeBudgetMapper.resetExpiredMonthlyUsage(now, nextReset);
+        if (reset > 0) {
+            log.info("Monthly token usage reset for {} scope(s)", reset);
+        }
     }
 
     public int getRemainingBudget(Long scopeId) {
@@ -79,8 +96,7 @@ public class TokenUsageMonitor {
                 scopeId,
                 null
             );
-            budget.setExceededNotified(1);
-            scopeBudgetMapper.updateById(budget);
+            markExceededNotified(scopeId);
             log.info("Sent budget exceeded notification for scope {}", scopeId);
         } else if (percent >= WARNING_THRESHOLD && (budget.getWarningNotified() == null || budget.getWarningNotified() == 0)) {
             notificationService.createNotification(
@@ -91,10 +107,21 @@ public class TokenUsageMonitor {
                 scopeId,
                 null
             );
-            budget.setWarningNotified(1);
-            scopeBudgetMapper.updateById(budget);
+            markWarningNotified(scopeId);
             log.info("Sent budget warning notification for scope {}", scopeId);
         }
+    }
+
+    private void markWarningNotified(Long scopeId) {
+        scopeBudgetMapper.update(null, new LambdaUpdateWrapper<ScopeBudgetDO>()
+            .eq(ScopeBudgetDO::getScopeId, scopeId)
+            .set(ScopeBudgetDO::getWarningNotified, 1));
+    }
+
+    private void markExceededNotified(Long scopeId) {
+        scopeBudgetMapper.update(null, new LambdaUpdateWrapper<ScopeBudgetDO>()
+            .eq(ScopeBudgetDO::getScopeId, scopeId)
+            .set(ScopeBudgetDO::getExceededNotified, 1));
     }
 
     private ScopeBudgetDO getOrCreateBudget(Long scopeId) {
@@ -107,10 +134,17 @@ public class TokenUsageMonitor {
             budget.setScopeId(scopeId);
             budget.setMonthlyBudget(getScopeMonthlyBudget(scopeId));
             budget.setUsedTokens(0);
-            budget.setResetDate(LocalDateTime.now().plusMonths(1));
+            budget.setResetDate(LocalDateTime.now().toLocalDate().withDayOfMonth(1).plusMonths(1).atStartOfDay());
             budget.setWarningNotified(0);
             budget.setExceededNotified(0);
-            scopeBudgetMapper.insert(budget);
+            try {
+                scopeBudgetMapper.insert(budget);
+            } catch (DuplicateKeyException e) {
+                log.debug("Scope budget already created concurrently for scope {}", scopeId);
+                budget = scopeBudgetMapper.selectOne(
+                    new LambdaQueryWrapper<ScopeBudgetDO>().eq(ScopeBudgetDO::getScopeId, scopeId)
+                );
+            }
         }
         return budget;
     }

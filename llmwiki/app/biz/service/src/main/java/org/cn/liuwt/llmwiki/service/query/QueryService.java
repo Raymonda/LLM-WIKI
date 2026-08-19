@@ -22,11 +22,19 @@ public class QueryService {
     private RateLimitService rateLimitService;
 
     public Flux<String> queryWikiStreaming(Long scopeId, String question, String sessionId, boolean deepMode) {
-        return harnessEngine.executeQueryStreaming(scopeId, question, sessionId, deepMode);
+        return queryWikiStreaming(scopeId, question, sessionId, deepMode, null);
+    }
+
+    public Flux<String> queryWikiStreaming(Long scopeId, String question, String sessionId, boolean deepMode, String assumedIntent) {
+        return harnessEngine.executeQueryStreaming(scopeId, question, sessionId, deepMode, assumedIntent);
     }
 
     public Flux<String> queryWikiStreamingMultiScope(List<Long> scopeIds, String question, String sessionId, boolean deepMode) {
-        return harnessEngine.executeQueryStreamingMultiScope(scopeIds, question, sessionId, deepMode);
+        return queryWikiStreamingMultiScope(scopeIds, question, sessionId, deepMode, null);
+    }
+
+    public Flux<String> queryWikiStreamingMultiScope(List<Long> scopeIds, String question, String sessionId, boolean deepMode, String assumedIntent) {
+        return harnessEngine.executeQueryStreamingMultiScope(scopeIds, question, sessionId, deepMode, assumedIntent);
     }
 
     public WikiPageDO saveAnswerToWiki(Long scopeId, String question, String answer, String sessionId) {

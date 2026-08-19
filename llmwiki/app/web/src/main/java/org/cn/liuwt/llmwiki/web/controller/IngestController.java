@@ -5,6 +5,7 @@ import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
+import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
 import org.cn.liuwt.llmwiki.common.util.result.Result;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
@@ -17,10 +18,12 @@ import org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel;
 import org.cn.liuwt.llmwiki.domain.service.wiki.SourceService;
 import org.cn.liuwt.llmwiki.domain.service.harness.baseline.ExecutionBaselineService;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
+import org.cn.liuwt.llmwiki.domain.service.system.ScopeService;
 import org.cn.liuwt.llmwiki.service.harness.mq.ControlMessage;
 import org.cn.liuwt.llmwiki.service.harness.mq.ExecutionNodeRegistry;
 import org.cn.liuwt.llmwiki.service.harness.mq.MqHealthService;
 import org.cn.liuwt.llmwiki.service.harness.mq.PipelineTaskMessage;
+import org.cn.liuwt.llmwiki.service.ingest.IngestOrchestrationService;
 import org.cn.liuwt.llmwiki.service.ingest.IngestService;
 import org.cn.liuwt.llmwiki.web.security.JwtTokenProvider;
 import org.slf4j.Logger;
@@ -75,11 +78,27 @@ public class IngestController {
     @Autowired
     private MqHealthService mqHealthService;
 
+    @Autowired
+    private IngestOrchestrationService ingestOrchestrationService;
+
+    @Autowired
+    private ScopeService scopeService;
+
     @Value("${llmwiki.rocketmq.enabled:false}")
     private boolean mqEnabled;
 
     private boolean isMqAvailable() {
         return rocketMQTemplate != null && mqEnabled;
+    }
+
+    private void assertExecutionReadable(ExecutionModel execution) {
+        if (execution == null || execution.getScopeId() == null) {
+            throw new BusinessException(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
+        }
+        Long userId = jwtTokenProvider.getCurrentUserId();
+        if (userId == null || !scopeService.canView(execution.getScopeId(), userId)) {
+            throw new BusinessException(ErrorCode.AUTH_ACCESS_DENIED);
+        }
     }
 
     @jakarta.annotation.PostConstruct
@@ -89,32 +108,21 @@ public class IngestController {
 
     @PostMapping("/start")
     public Result<ExecutionInfo> startIngest(@RequestBody IngestRequest request) {
-        Long scopeId = request.getScopeId();
+        // API key 客户端不传 scopeId：回填认证上下文的 scope（JwtAuthenticationFilter
+        // 或 ApiKeyAuthFilter 写入）。JWT 前端始终显式传值，行为不变。
+        Long scopeId = request.getScopeId() != null ? request.getScopeId()
+                : jwtTokenProvider.getCurrentScopeId();
         SourceModel source = sourceService.getSource(request.getSourceId(), scopeId);
         if (source == null) {
             return Result.failed(ErrorCode.INGEST_SOURCE_NOT_FOUND);
         }
         logDuplicateWarning(source, scopeId);
-
-        ExecutionModel execution = ingestService.createExecution(scopeId, request.getSourceId());
-        setNodeOwnership(execution.getId());
-        ExecutionInfo info = toExecutionInfo(execution);
-        String guidance = request.getGuidance();
-
-        dispatchToMqOrLocal(execution.getId(), scopeId, request.getSourceId(), guidance,
-                PipelineTaskMessage.TYPE_INGEST_START,
-                () -> submitLocalTask(execution.getId(), () -> {
-                    try {
-                        ingestService.runIngestPipeline(execution.getId(), scopeId, request.getSourceId(), guidance);
-                    } catch (Exception e) {
-                        log.error("Ingest pipeline failed for executionId={}", execution.getId(), e);
-                        ExecutionModel current = ingestService.getProgress(execution.getId());
-                        if (current == null || !"cancelled".equals(current.getStatus())) {
-                            ingestService.failExecution(execution.getId());
-                        }
-                    }
-                }));
-        return Result.success(info);
+        try {
+            ExecutionModel execution = ingestOrchestrationService.startIngest(scopeId, request.getSourceId(), request.getGuidance());
+            return Result.success(toExecutionInfo(execution));
+        } catch (IllegalArgumentException e) {
+            return Result.failed(ErrorCode.INGEST_SOURCE_NOT_FOUND);
+        }
     }
 
     @PostMapping("/analyze")
@@ -161,6 +169,7 @@ public class IngestController {
         if (execution == null) {
             return Result.failed(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
         }
+        assertExecutionReadable(execution);
         if (!"awaiting_confirmation".equals(execution.getStatus()) && !"awaiting_review".equals(execution.getStatus())) {
             return Result.failed(ErrorCode.INGEST_INVALID_STATUS_REVIEW);
         }
@@ -186,9 +195,10 @@ public class IngestController {
     @GetMapping(value = "/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamProgress(@PathVariable Long id) {
         log.warn("[DIAG] streamProgress called: executionId={}", id);
+        ExecutionModel current = ingestService.getProgress(id);
+        assertExecutionReadable(current);
         SseEmitter emitter = registry.createEmitter(id);
 
-        ExecutionModel current = ingestService.getProgress(id);
         if (current != null) {
             try {
                 emitter.send(SseEmitter.event()
@@ -284,12 +294,14 @@ public class IngestController {
     @GetMapping("/{id}/progress")
     public Result<ExecutionInfo> getProgress(@PathVariable Long id) {
         ExecutionModel execution = ingestService.getProgress(id);
+        assertExecutionReadable(execution);
         return Result.success(toExecutionInfo(execution));
     }
 
     @GetMapping("/{id}/result")
     public Result<ExecutionInfo> getResult(@PathVariable Long id) {
         ExecutionModel execution = ingestService.getResult(id);
+        assertExecutionReadable(execution);
         return Result.success(toExecutionInfo(execution));
     }
 
@@ -299,6 +311,7 @@ public class IngestController {
         if (execution == null) {
             return Result.failed(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
         }
+        assertExecutionReadable(execution);
         String currentStatus = execution.getStatus();
         if ("completed".equals(currentStatus) || "failed".equals(currentStatus)
                 || "cancelled".equals(currentStatus) || "budget_exhausted".equals(currentStatus)) {
@@ -329,6 +342,7 @@ public class IngestController {
         if (execution == null) {
             return Result.failed(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
         }
+        assertExecutionReadable(execution);
 
         String currentStatus = execution.getStatus();
         if ("running".equals(currentStatus) || "pending".equals(currentStatus) || "paused".equals(currentStatus)) {
@@ -349,6 +363,7 @@ public class IngestController {
         if (execution == null) {
             return Result.failed(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
         }
+        assertExecutionReadable(execution);
         String currentStatus = execution.getStatus();
         if ("completed".equals(currentStatus) || "failed".equals(currentStatus)
                 || "cancelled".equals(currentStatus) || "budget_exhausted".equals(currentStatus)
@@ -502,6 +517,7 @@ public class IngestController {
         if (execution == null) {
             return Result.failed(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
         }
+        assertExecutionReadable(execution);
         if (!"failed".equals(execution.getStatus()) && !"paused".equals(execution.getStatus())) {
             if ("cancelled".equals(execution.getStatus())) {
                 return Result.failed(ErrorCode.INGEST_CANCELLED_CANNOT_RESUME);
