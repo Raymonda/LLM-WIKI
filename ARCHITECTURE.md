@@ -127,6 +127,7 @@ Harness 编排所有 LLM 驱动的操作。核心组成：
 - **Wiki 工具集**：readFile、writeFile、searchWiki、listPages、getRelatedPages、updateLinks 等，供 Agent 工具调用
 - **治理与追踪**：ApprovalService（审批）、ExecutionTracker（执行记录）、SchemaManager / SchemaInjector（Schema 注入与补丁）
 - **并发控制**：`LlmConcurrencyBarrier` 全局信号量约束 LLM 并发，避免 Provider 限流
+- **批次调度**：`IngestBatchScheduler` 把持 Ingest 执行闸门——同一时刻至多 1 份资料运行 Pipeline，多份资料按批次串行推进
 - **多 Provider 路由**：`AiProviderRegistry` + Slot 路由，不同任务（分析 / OCR / 图表识别）可路由到不同 Provider
 
 ### 6.1 Ingest — 摄入流水线（编译 + 链接）
@@ -158,6 +159,8 @@ IndexerAgent（索引）
 - **来源追踪**：所有写入同步建立 `wiki_page_source` 关联，汇聚后补偿校验
 - **准确性约束**：STRUCTURED（权威性）文档的实体/摘要页中，规则条款与量化指标必须 blockquote 引用原文并标注章节
 - **实时进度**：全程 SSE 推送步骤级进度，支持暂停 / 取消
+- **批次调度**：≥2 份资料以 `ingest_batch` 聚合提交，由 `IngestBatchScheduler` 串行推进（分析 / 写入共用同一闸门）；分析完成的资料停留在 `awaiting_confirmation`（收件箱待审阅），用户确认后置 `confirmed` 重新入队，调度器按序推进 Phase 2
+- **批次状态分离**：批次状态（`active/paused/completed/cancelled`）与逐份 execution 状态独立；批次通知在首批待审阅 / 全部分析完成 / 全部处理完成三节点发出，逐份通知在批次内被抑制（`IngestOrchestrator`）
 
 ### 6.2 Query — 查询问答（运行时）
 
