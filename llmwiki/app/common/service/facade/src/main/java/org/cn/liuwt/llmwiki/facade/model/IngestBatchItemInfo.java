@@ -17,4 +17,5 @@ public class IngestBatchItemInfo {
     private String guidance;
     private LocalDateTime startedAt;
     private LocalDateTime completedAt;
+    private Boolean phase1Completed;
 }

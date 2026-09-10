@@ -99,6 +99,7 @@ public enum ErrorCode {
     INGEST_BATCH_EMPTY("INGEST_011", "No valid sources in batch"),
     INGEST_BATCH_TOO_LARGE("INGEST_012", "Batch size exceeds limit: {0}"),
     INGEST_BATCH_NOT_FOUND("INGEST_013", "Batch not found"),
+    INGEST_BATCH_INVALID_STATUS("INGEST_014", "Batch is not in the required state for this operation"),
 
     // Scope additional
     SCOPE_REQUEST_NOT_FOUND("SCOPE_120", "Join request not found"),

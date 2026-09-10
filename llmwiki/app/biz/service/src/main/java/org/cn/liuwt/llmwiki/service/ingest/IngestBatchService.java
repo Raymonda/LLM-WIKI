@@ -13,6 +13,7 @@ import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
 import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
+import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel.ExecutionStepModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
 import org.cn.liuwt.llmwiki.facade.model.IngestBatchCreateResponse;
@@ -248,6 +249,7 @@ public class IngestBatchService {
         Map<Long, SourceDO> sourceMap = sourceIds.isEmpty() ? Map.of()
             : sourceMapper.selectBatchIds(sourceIds).stream().collect(Collectors.toMap(SourceDO::getId, s -> s));
         Map<Long, String> analyzeOutputs = loadAnalyzeOutputs(executionIds);
+        Map<Long, Boolean> phase1Flags = loadPhase1Completed(executionIds);
 
         int safeSize = size > 0 ? size : 20;
         int safePage = page > 0 ? page : 1;
@@ -256,7 +258,8 @@ public class IngestBatchService {
         int to = (int) Math.min((long) from + safeSize, total);
         List<IngestBatchItemInfo> pageItems = new ArrayList<>();
         for (ExecutionDO item : items.subList(from, to)) {
-            pageItems.add(toItemInfo(item, sourceMap.get(item.getSourceId()), analyzeOutputs.get(item.getId())));
+            pageItems.add(toItemInfo(item, sourceMap.get(item.getSourceId()), analyzeOutputs.get(item.getId()),
+                phase1Flags.get(item.getId())));
         }
 
         IngestBatchDetailInfo detail = new IngestBatchDetailInfo();
@@ -294,6 +297,30 @@ public class IngestBatchService {
         return outputs;
     }
 
+    private Map<Long, Boolean> loadPhase1Completed(List<Long> executionIds) {
+        Map<Long, Boolean> flags = new HashMap<>();
+        if (executionIds.isEmpty()) {
+            return flags;
+        }
+        List<ExecutionStepDO> steps = executionStepMapper.selectList(new LambdaQueryWrapper<ExecutionStepDO>()
+            .in(ExecutionStepDO::getExecutionId, executionIds)
+            .orderByAsc(ExecutionStepDO::getStepOrder));
+        Map<Long, List<ExecutionStepModel>> stepsByExecution = steps.stream()
+            .collect(Collectors.groupingBy(ExecutionStepDO::getExecutionId,
+                Collectors.mapping(this::toStepModel, Collectors.toList())));
+        for (Long executionId : executionIds) {
+            flags.put(executionId, IngestStep.isPhase1Completed(stepsByExecution.getOrDefault(executionId, List.of())));
+        }
+        return flags;
+    }
+
+    private ExecutionStepModel toStepModel(ExecutionStepDO step) {
+        ExecutionStepModel model = new ExecutionStepModel();
+        model.setStepName(step.getStepName());
+        model.setStatus(step.getStatus());
+        return model;
+    }
+
     private IngestBatchInfo toBatchInfo(IngestBatchDO batch, List<ExecutionDO> items) {
         IngestBatchInfo info = new IngestBatchInfo();
         info.setBatchId(batch.getId());
@@ -318,7 +345,7 @@ public class IngestBatchService {
         return info;
     }
 
-    private IngestBatchItemInfo toItemInfo(ExecutionDO execution, SourceDO source, String analyzeOutput) {
+    private IngestBatchItemInfo toItemInfo(ExecutionDO execution, SourceDO source, String analyzeOutput, Boolean phase1Completed) {
         IngestBatchItemInfo info = new IngestBatchItemInfo();
         info.setExecutionId(execution.getId());
         info.setSourceId(execution.getSourceId());
@@ -330,6 +357,7 @@ public class IngestBatchService {
         info.setTotalTokens(execution.getTotalTokens());
         info.setErrorMessage(execution.getErrorMessage());
         info.setAnalyzeOutput(analyzeOutput);
+        info.setPhase1Completed(phase1Completed);
         info.setGuidance(execution.getGuidance());
         info.setStartedAt(execution.getStartedAt());
         info.setCompletedAt(execution.getCompletedAt());
