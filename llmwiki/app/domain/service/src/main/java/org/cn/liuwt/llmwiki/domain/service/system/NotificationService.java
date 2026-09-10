@@ -20,6 +20,11 @@ public class NotificationService {
     }
 
     public void createNotification(Long userId, String type, String title, String content, Long scopeId, Long relatedPageId, Long executionId) {
+        createNotification(userId, type, title, content, scopeId, relatedPageId, executionId, null);
+    }
+
+    public void createNotification(Long userId, String type, String title, String content,
+                                   Long scopeId, Long relatedPageId, Long executionId, Long batchId) {
         NotificationDO notification = new NotificationDO();
         notification.setUserId(userId);
         notification.setType(type);
@@ -28,6 +33,7 @@ public class NotificationService {
         notification.setScopeId(scopeId);
         notification.setRelatedPageId(relatedPageId);
         notification.setExecutionId(executionId);
+        notification.setBatchId(batchId);
         notification.setIsRead(0);
         notificationMapper.insert(notification);
     }
@@ -86,6 +92,7 @@ public class NotificationService {
         info.setScopeId(notificationDO.getScopeId());
         info.setRelatedPageId(notificationDO.getRelatedPageId());
         info.setExecutionId(notificationDO.getExecutionId());
+        info.setBatchId(notificationDO.getBatchId());
         info.setIsRead(notificationDO.getIsRead());
         info.setCreatedAt(notificationDO.getCreatedAt() != null ? notificationDO.getCreatedAt().toString() : "");
         return info;

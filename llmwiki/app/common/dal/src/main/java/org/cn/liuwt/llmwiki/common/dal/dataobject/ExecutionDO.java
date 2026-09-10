@@ -21,4 +21,6 @@ public class ExecutionDO {
     private LocalDateTime createdAt;
     private String errorMessage;
     private String nodeId;
+    private Long batchId;
+    private String guidance;
 }
