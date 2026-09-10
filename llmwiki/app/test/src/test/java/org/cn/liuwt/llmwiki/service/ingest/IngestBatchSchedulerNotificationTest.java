@@ -139,6 +139,35 @@ class IngestBatchSchedulerNotificationTest {
         verify(notificationService).createNotification(eq(7L), eq("ingest_batch_completed"), any(), any(), eq(10L), isNull(), isNull(), eq(9L));
     }
 
+    @Test
+    void shouldNotSettleWhenBatchHasNoItems() {
+        IngestBatchDO batch = newBatch(2);
+        when(batchMapper.selectById(9L)).thenReturn(batch);
+        ExecutionDO failed = item(2L, "failed", 9L);
+        when(executionMapper.selectList(any())).thenReturn(List.of());
+
+        scheduler.handleBatchSettlement(failed);
+
+        verify(batchMapper, never()).updateById(any(IngestBatchDO.class));
+        verify(notificationService, never()).createNotification(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void shouldReportAwaitingAndFailedCountsIndependently() {
+        IngestBatchDO batch = newBatch(3);
+        when(batchMapper.selectById(9L)).thenReturn(batch);
+        ExecutionDO awaiting1 = item(1L, "awaiting_confirmation", 9L);
+        ExecutionDO awaiting2 = item(2L, "awaiting_confirmation", 9L);
+        ExecutionDO completed = item(3L, "completed", 9L);
+        when(executionMapper.selectList(any())).thenReturn(List.of(awaiting1, awaiting2, completed));
+        when(notificationMapper.selectCount(any())).thenReturn(0L);
+
+        scheduler.handleBatchSettlement(completed);
+
+        verify(notificationService).createNotification(eq(7L), eq("ingest_batch_awaiting"), any(), eq("本批已有 2 份分析完成，可前往审阅收件箱集中确认"), eq(10L), isNull(), isNull(), eq(9L));
+        verify(notificationService).createNotification(eq(7L), eq("ingest_batch_analyzed"), any(), eq("本批 2 份待审阅、0 份失败"), eq(10L), isNull(), isNull(), eq(9L));
+    }
+
     private IngestBatchDO newBatch(int totalCount) {
         IngestBatchDO batch = new IngestBatchDO();
         batch.setId(9L);

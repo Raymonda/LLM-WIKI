@@ -235,6 +235,7 @@ public class IngestBatchScheduler {
 
     private void handleBatchSettlement(IngestBatchDO batch) {
         List<ExecutionDO> items = listBatchItems(batch.getId(), batch.getScopeId());
+        if (items.isEmpty()) return;
 
         long awaiting = items.stream().filter(i -> "awaiting_confirmation".equals(i.getStatus())).count();
         long failed = items.stream().filter(i -> "failed".equals(i.getStatus())).count();
