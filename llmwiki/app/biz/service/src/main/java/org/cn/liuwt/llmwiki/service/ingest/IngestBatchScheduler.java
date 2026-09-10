@@ -4,12 +4,15 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.IngestBatchDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.NotificationDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.IngestBatchMapper;
+import org.cn.liuwt.llmwiki.common.dal.mapper.NotificationMapper;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionStatusEvent;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
+import org.cn.liuwt.llmwiki.domain.service.system.NotificationService;
 import org.cn.liuwt.llmwiki.service.harness.mq.IngestDispatcher;
 import org.cn.liuwt.llmwiki.service.harness.mq.PipelineTaskMessage;
 import org.slf4j.Logger;
@@ -36,6 +39,9 @@ public class IngestBatchScheduler {
     private static final Set<String> SETTLE_STATUSES =
         Set.of("awaiting_confirmation", "completed", "failed", "cancelled", "paused", "budget_exhausted");
 
+    private static final Set<String> TERMINAL_EXECUTION_STATUSES =
+        Set.of("completed", "failed", "cancelled", "budget_exhausted");
+
     @Autowired
     private ExecutionMapper executionMapper;
 
@@ -50,6 +56,12 @@ public class IngestBatchScheduler {
 
     @Autowired
     private IngestService ingestService;
+
+    @Autowired
+    private NotificationMapper notificationMapper;
+
+    @Autowired
+    private NotificationService notificationService;
 
     private final ConcurrentHashMap<Long, ReentrantLock> scopeLocks = new ConcurrentHashMap<>();
 
@@ -92,6 +104,13 @@ public class IngestBatchScheduler {
             ExecutionDO execution = executionMapper.selectById(event.getExecutionId());
             if (execution == null) return;
             if (SETTLE_STATUSES.contains(event.getNewStatus())) {
+                if (execution.getBatchId() != null) {
+                    try {
+                        handleBatchSettlement(execution);
+                    } catch (Exception e) {
+                        log.warn("Batch settlement handling failed: batchId={}", execution.getBatchId(), e);
+                    }
+                }
                 kick(execution.getScopeId());
             }
         } catch (Exception e) {
@@ -198,5 +217,53 @@ public class IngestBatchScheduler {
                 ingestService.failExecution(execution.getId(), e.getMessage());
             }
         }
+    }
+
+    public void handleBatchSettlement(ExecutionDO execution) {
+        if (execution.getBatchId() == null) return;
+        IngestBatchDO batch = batchMapper.selectById(execution.getBatchId());
+        if (batch == null) return;
+        List<ExecutionDO> items = listBatchItems(batch.getId(), batch.getScopeId());
+
+        long awaiting = items.stream().filter(i -> "awaiting_confirmation".equals(i.getStatus())).count();
+        long failed = items.stream().filter(i -> "failed".equals(i.getStatus())).count();
+        long cancelled = items.stream().filter(i -> "cancelled".equals(i.getStatus())).count();
+        long completed = items.stream().filter(i -> "completed".equals(i.getStatus())).count();
+
+        if (awaiting >= 1 && batch.getTotalCount() != null && batch.getTotalCount() > 1) {
+            notifyOnce(batch, "ingest_batch_awaiting", "可以开始审阅了",
+                "本批已有 " + awaiting + " 份分析完成，可前往审阅收件箱集中确认");
+        }
+        boolean analysisDone = items.stream().noneMatch(i ->
+            "pending".equals(i.getStatus()) || "running".equals(i.getStatus()) || "paused".equals(i.getStatus()));
+        if (analysisDone) {
+            String detail = batch.getTotalCount() != null && batch.getTotalCount() == 1
+                ? "分析完成，待审阅"
+                : "本批 " + awaiting + " 份待审阅、" + failed + " 份失败";
+            notifyOnce(batch, "ingest_batch_analyzed", "分析完成", detail);
+        }
+        boolean allTerminal = items.stream().allMatch(i -> TERMINAL_EXECUTION_STATUSES.contains(i.getStatus()));
+        if (allTerminal && !"completed".equals(batch.getStatus()) && !"cancelled".equals(batch.getStatus())) {
+            batch.setStatus("completed");
+            batch.setCompletedAt(LocalDateTime.now());
+            batchMapper.updateById(batch);
+            notifyOnce(batch, "ingest_batch_completed", "处理完成",
+                "本批 " + batch.getTotalCount() + " 份已全部结束（" + completed + " 成功 / " + failed + " 失败 / " + cancelled + " 取消）");
+        }
+    }
+
+    private List<ExecutionDO> listBatchItems(Long batchId, Long scopeId) {
+        return executionMapper.selectList(new LambdaQueryWrapper<ExecutionDO>()
+            .eq(ExecutionDO::getBatchId, batchId)
+            .eq(ExecutionDO::getScopeId, scopeId));
+    }
+
+    private void notifyOnce(IngestBatchDO batch, String type, String title, String content) {
+        Long existing = notificationMapper.selectCount(new LambdaQueryWrapper<NotificationDO>()
+            .eq(NotificationDO::getBatchId, batch.getId())
+            .eq(NotificationDO::getScopeId, batch.getScopeId())
+            .eq(NotificationDO::getType, type));
+        if (existing != null && existing > 0) return;
+        notificationService.createNotification(batch.getUserId(), type, title, content, batch.getScopeId(), null, null, batch.getId());
     }
 }
