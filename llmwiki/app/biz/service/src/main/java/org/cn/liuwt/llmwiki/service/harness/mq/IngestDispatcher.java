@@ -92,6 +92,10 @@ public class IngestDispatcher {
         }
     }
 
+    public String getNodeId() {
+        return registry.getNodeId();
+    }
+
     private void sendPipelineTask(Long executionId, Long scopeId, Long sourceId, String guidance, String taskType) {
         PipelineTaskMessage msg = new PipelineTaskMessage();
         msg.setExecutionId(executionId);
