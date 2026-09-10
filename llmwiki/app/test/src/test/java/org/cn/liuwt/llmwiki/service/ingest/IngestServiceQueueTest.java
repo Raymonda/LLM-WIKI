@@ -72,8 +72,12 @@ class IngestServiceQueueTest {
 
         assertTrue(queued);
         verify(executionMapper).update(any(), captor.capture());
-        Map<String, Object> params = captor.getValue().getParamNameValuePairs();
+        LambdaUpdateWrapper<ExecutionDO> wrapper = captor.getValue();
+        wrapper.getSqlSegment();
+        Map<String, Object> params = wrapper.getParamNameValuePairs();
         assertTrue(params.containsValue("confirmed"));
+        assertTrue(params.containsValue("awaiting_confirmation"));
+        assertTrue(params.containsValue("awaiting_review"));
         assertTrue(params.containsValue("重点关注架构"));
     }
 
@@ -86,7 +90,12 @@ class IngestServiceQueueTest {
 
         assertTrue(queued);
         verify(executionMapper).update(any(), captor.capture());
-        assertTrue(captor.getValue().getParamNameValuePairs().containsValue("pending"));
+        LambdaUpdateWrapper<ExecutionDO> wrapper = captor.getValue();
+        wrapper.getSqlSegment();
+        Map<String, Object> params = wrapper.getParamNameValuePairs();
+        assertTrue(params.containsValue("pending"));
+        assertTrue(params.containsValue("failed"));
+        assertTrue(params.containsValue("paused"));
     }
 
     @Test
@@ -116,6 +125,24 @@ class IngestServiceQueueTest {
         assertFalse(queued);
         verify(executionMapper, never()).update(any(), any());
         verify(executionTracker, never()).resetStepForRetry(anyLong());
+    }
+
+    @Test
+    void shouldReturnFalseWhenQueueExecuteCasLoses() {
+        when(executionMapper.update(any(), any())).thenReturn(0);
+
+        boolean queued = ingestService.queueExecute(11L, null);
+
+        assertFalse(queued);
+    }
+
+    @Test
+    void shouldReturnFalseWhenQueueResumeCasLoses() {
+        when(executionMapper.update(any(), any())).thenReturn(0);
+
+        boolean queued = ingestService.queueResume(11L, null);
+
+        assertFalse(queued);
     }
 
     @SuppressWarnings("unchecked")

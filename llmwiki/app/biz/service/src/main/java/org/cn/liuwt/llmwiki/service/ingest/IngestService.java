@@ -32,6 +32,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -148,6 +149,7 @@ public class IngestService {
         return executionMapper.update(null, update) == 1;
     }
 
+    @Transactional
     public boolean queueReanalyze(Long executionId, String guidance) {
         ExecutionModel execution = executionTracker.getExecution(executionId);
         if (execution == null || (!"awaiting_confirmation".equals(execution.getStatus())

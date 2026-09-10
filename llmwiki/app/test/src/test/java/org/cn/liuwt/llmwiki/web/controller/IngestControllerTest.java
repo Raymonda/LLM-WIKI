@@ -136,7 +136,7 @@ class IngestControllerTest {
     }
 
     @Test
-    void shouldQueueExecuteAndKickScheduler() {
+    void shouldQueueExecuteAndKickSchedulerWhenQueueCasSucceeds() {
         ExecutionModel execution = new ExecutionModel();
         execution.setId(7L);
         execution.setScopeId(100L);
