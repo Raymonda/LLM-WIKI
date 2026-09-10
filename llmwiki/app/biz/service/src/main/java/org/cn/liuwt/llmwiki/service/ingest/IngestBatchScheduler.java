@@ -126,13 +126,20 @@ public class IngestBatchScheduler {
     @Scheduled(fixedDelayString = "${llmwiki.ingest.batch.recover-interval-ms:60000}")
     public void recoverScan() {
         try {
+            List<IngestBatchDO> activeBatches = batchMapper.selectList(new LambdaQueryWrapper<IngestBatchDO>()
+                .eq(IngestBatchDO::getStatus, "active"));
             Set<Long> scopeIds = executionMapper.selectList(new LambdaQueryWrapper<ExecutionDO>()
                     .eq(ExecutionDO::getType, "ingest")
                     .in(ExecutionDO::getStatus, "pending", "confirmed"))
                 .stream().map(ExecutionDO::getScopeId).collect(Collectors.toSet());
-            batchMapper.selectList(new LambdaQueryWrapper<IngestBatchDO>()
-                    .eq(IngestBatchDO::getStatus, "active"))
-                .forEach(b -> scopeIds.add(b.getScopeId()));
+            activeBatches.forEach(b -> scopeIds.add(b.getScopeId()));
+            activeBatches.forEach(batch -> {
+                try {
+                    handleBatchSettlement(batch);
+                } catch (Exception e) {
+                    log.warn("Batch settle recovery failed: batchId={}", batch.getId(), e);
+                }
+            });
             scopeIds.forEach(this::kick);
         } catch (Exception e) {
             log.error("Ingest batch recovery scan failed", e);
@@ -223,6 +230,10 @@ public class IngestBatchScheduler {
         if (execution.getBatchId() == null) return;
         IngestBatchDO batch = batchMapper.selectById(execution.getBatchId());
         if (batch == null) return;
+        handleBatchSettlement(batch);
+    }
+
+    private void handleBatchSettlement(IngestBatchDO batch) {
         List<ExecutionDO> items = listBatchItems(batch.getId(), batch.getScopeId());
 
         long awaiting = items.stream().filter(i -> "awaiting_confirmation".equals(i.getStatus())).count();
