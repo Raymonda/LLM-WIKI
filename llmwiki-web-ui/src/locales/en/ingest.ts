@@ -208,4 +208,10 @@ export default {
   statusWriting: 'Writing',
   statusConfirmed: 'Confirmed',
   statusCancelledItem: 'Cancelled',
+  batchPendingTitle: '{0} files selected',
+  batchCreateAndStart: 'Create batch & analyze',
+  batchUploadPartialFail: '{0} file(s) failed to upload and were excluded',
+  batchDuplicateHint: 'Duplicate sources: {0}',
+  batchExitView: 'Exit batch review',
+  batchFloatingAwaiting: '{0} item(s) awaiting review',
 }

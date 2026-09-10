@@ -3,7 +3,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
   Activity, Bell, X, Trash2,
-  Upload, Shield, AlertTriangle, CheckCircle2, Info, Loader2,
+  Upload, Shield, AlertTriangle, CheckCircle2, Info, Loader2, ClipboardCheck,
 } from 'lucide-vue-next'
 import { useActivityCenterStore, type NotificationInfo } from '@/stores/activityCenter'
 
@@ -22,6 +22,9 @@ const typeMeta: Record<string, { icon: any; labelKey: string; color: string }> =
   budget_exceeded: { icon: AlertTriangle, labelKey: 'common.pulseTypeBudgetExceeded', color: 'var(--error)' },
   awaiting_expired: { icon: Info, labelKey: 'common.pulseTypeAwaitingExpired', color: 'var(--warning)' },
   page_recalled: { icon: Info, labelKey: 'common.pulseTypePageRecalled', color: 'var(--text-secondary)' },
+  ingest_batch_awaiting: { icon: ClipboardCheck, labelKey: 'common.pulseTypeIngestBatchAwaiting', color: 'var(--accent-primary)' },
+  ingest_batch_analyzed: { icon: CheckCircle2, labelKey: 'common.pulseTypeIngestBatchAnalyzed', color: 'var(--success)' },
+  ingest_batch_completed: { icon: CheckCircle2, labelKey: 'common.pulseTypeIngestBatchCompleted', color: 'var(--success)' },
 }
 
 function getTypeMeta(type: string) {
@@ -36,6 +39,11 @@ function getTypeLabel(type: string) {
 function handleNotificationClick(notif: NotificationInfo) {
   if (notif.isRead === 0) {
     store.markNotificationRead(notif.id)
+  }
+  if (notif.batchId) {
+    router.push({ path: '/ingest', query: { batch: String(notif.batchId) } })
+    store.closePanel()
+    return
   }
   if (notif.executionId) {
     if (notif.type.startsWith('merge_')) {

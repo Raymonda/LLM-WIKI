@@ -1,21 +1,25 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { uploadSource, listSources, deleteSource, type SourceInfo, type DuplicateInfo } from '@/api/source'
 import { useAuthStore } from '@/stores/auth'
 import {
   Upload, FileText, CheckCircle, ChevronRight,
   Loader2, AlertTriangle, Trash2, ArrowRight, Sparkles,
   Search, FilePlus, FileEdit, XCircle, RotateCcw, AlertCircle, X,
-  PauseCircle, PlayCircle, ChevronDown, GitBranch, ClipboardCheck
+  PauseCircle, PlayCircle, ChevronDown, GitBranch, ClipboardCheck,
+  Layers
 } from 'lucide-vue-next'
 import IngestProgressBar from './components/IngestProgressBar.vue'
 import IngestStageNav, { type StageItem } from './components/IngestStageNav.vue'
 import IngestStepTimeline from './components/IngestStepTimeline.vue'
 import EntityDiscoveryWall from './components/EntityDiscoveryWall.vue'
 import AnalysisSummaryPanel from './components/AnalysisSummaryPanel.vue'
+import BatchOverviewPanel from './components/BatchOverviewPanel.vue'
+import ReviewInbox from './components/ReviewInbox.vue'
 import { useIngestProgressStore } from '@/stores/ingestProgress'
+import { useIngestBatchStore } from '@/stores/ingestBatch'
 import { useConfirmDialog } from '@/composables/useConfirmDialog'
 
 const { state: confirmState, showConfirm, onConfirm, onCancel, ConfirmDialog } = useConfirmDialog()
@@ -23,16 +27,30 @@ const { state: confirmState, showConfirm, onConfirm, onCancel, ConfirmDialog } =
 const { t } = useI18n()
 const router = useRouter()
 const authStore = useAuthStore()
+const route = useRoute()
 const store = useIngestProgressStore()
+const batchStore = useIngestBatchStore()
 
 const uploadError = ref('')
 const isUploading = ref(false)
 const existingSources = ref<SourceInfo[]>([])
 const loadingSources = ref(false)
 const duplicateWarning = ref<DuplicateInfo | null>(null)
+const batchPendingSources = ref<Array<{ id: number; name: string; size: number; format: string }>>([])
+const batchUploadFailures = ref<string[]>([])
+const batchDuplicateNames = ref<string[]>([])
+const batchGuidance = ref('')
+const batchBusy = ref(false)
+const batchError = ref('')
 
 const currentStep = computed(() => store.currentStep)
 const uploadedFile = computed(() => store.uploadedFile)
+const batchInbox = computed(() => batchStore.inbox)
+const batchMode = computed(() => batchStore.selectedBatchId != null)
+const selectedBatchInfo = computed(
+  () => batchStore.inbox.find(b => b.batchId === batchStore.selectedBatchId) ?? null,
+)
+const batchItems = computed(() => batchStore.currentBatch?.items ?? [])
 const userGuidance = computed({
   get: () => store.userGuidance,
   set: (v: string) => {
@@ -197,19 +215,40 @@ function actionLabel(action: string): string {
 
 async function handleFileUpload(event: Event) {
   const input = event.target as HTMLInputElement
-  if (!input.files?.length) return
+  const files = Array.from(input.files ?? [])
+  if (files.length === 0) return
   isUploading.value = true
   uploadError.value = ''
   duplicateWarning.value = null
+  batchUploadFailures.value = []
+  batchDuplicateNames.value = []
+  const uploaded: Array<{ id: number; name: string; size: number; format: string }> = []
   try {
-    const result = await uploadSource(input.files[0])
-    store.pendingUploadedFile = { id: result.id, name: result.name, size: result.size, format: result.format }
-    if (result.duplicateInfo) {
-      duplicateWarning.value = result.duplicateInfo
+    for (const file of files) {
+      try {
+        const result = await uploadSource(file)
+        uploaded.push({ id: result.id, name: result.name, size: result.size, format: result.format })
+        if (result.duplicateInfo) {
+          if (files.length === 1) {
+            duplicateWarning.value = result.duplicateInfo
+          } else {
+            batchDuplicateNames.value.push(result.name)
+          }
+        }
+      } catch (e: any) {
+        if (files.length === 1) {
+          uploadError.value = e.message || t('ingest.uploadFailed')
+        } else {
+          batchUploadFailures.value.push(file.name)
+        }
+      }
+    }
+    if (files.length === 1 && uploaded.length === 1) {
+      store.pendingUploadedFile = uploaded[0]
+    } else if (uploaded.length > 0) {
+      batchPendingSources.value = uploaded
     }
     await loadExistingSources()
-  } catch (e: any) {
-    uploadError.value = e.message || t('ingest.uploadFailed')
   } finally {
     isUploading.value = false
     input.value = ''
@@ -308,8 +347,102 @@ function handleBackToWiki() {
   router.push('/')
 }
 
+async function openBatch(batchId: number) {
+  await batchStore.selectBatch(batchId)
+  router.replace({ path: '/ingest', query: { batch: String(batchId) } })
+}
+
+function exitBatch() {
+  batchStore.selectBatch(null)
+  router.replace({ path: '/ingest' })
+}
+
+async function runBatchAction(action: () => Promise<unknown>) {
+  batchBusy.value = true
+  batchError.value = ''
+  try {
+    await action()
+  } catch (e: any) {
+    batchError.value = e.message || t('common.operationFailed')
+  } finally {
+    batchBusy.value = false
+  }
+}
+
+async function handleBatchConfirmAll() {
+  const batch = selectedBatchInfo.value
+  if (!batch) return
+  const confirmed = await showConfirm({
+    title: t('ingest.batchConfirmAll'),
+    message: t('ingest.batchConfirmAllMessage', [batch.awaitingCount]),
+    confirmText: t('ingest.batchConfirmAll'),
+    cancelText: t('ingest.cancel'),
+    type: 'warning',
+  })
+  if (!confirmed) return
+  await runBatchAction(() => batchStore.confirmAll(batch.batchId))
+}
+
+async function handleBatchPause() {
+  const batchId = batchStore.selectedBatchId
+  if (batchId == null) return
+  await runBatchAction(() => batchStore.pause(batchId))
+}
+
+async function handleBatchResume() {
+  const batchId = batchStore.selectedBatchId
+  if (batchId == null) return
+  await runBatchAction(() => batchStore.resume(batchId))
+}
+
+async function handleBatchCancel() {
+  const batchId = batchStore.selectedBatchId
+  if (batchId == null) return
+  const confirmed = await showConfirm({
+    title: t('ingest.batchCancelBatch'),
+    message: t('ingest.batchCancelMessage'),
+    confirmText: t('ingest.batchCancelBatch'),
+    cancelText: t('ingest.cancel'),
+    type: 'danger',
+    confirmVariant: 'danger',
+  })
+  if (!confirmed) return
+  await runBatchAction(() => batchStore.cancel(batchId))
+}
+
+async function handleItemConfirm(executionId: number, guidance?: string) {
+  await runBatchAction(() => batchStore.confirmOne(executionId, guidance))
+}
+
+async function handleItemReanalyze(executionId: number, guidance?: string) {
+  await runBatchAction(() => batchStore.reanalyzeOne(executionId, guidance))
+}
+
+async function handleItemRetry(executionId: number) {
+  await runBatchAction(() => batchStore.retryOne(executionId))
+}
+
+async function createBatchFromPending() {
+  if (batchPendingSources.value.length === 0) return
+  await runBatchAction(async () => {
+    const response = await batchStore.createBatchAndStart(
+      authStore.scopeId,
+      batchPendingSources.value.map(s => s.id),
+      batchGuidance.value || undefined,
+    )
+    batchPendingSources.value = []
+    batchGuidance.value = ''
+    await openBatch(response.batchId)
+  })
+}
+
 onMounted(async () => {
   await loadExistingSources()
+  await batchStore.refreshInbox().catch((e) => console.error('Failed to refresh batch inbox:', e))
+  const batchId = Number(route.query.batch)
+  if (Number.isFinite(batchId) && batchId > 0) {
+    await openBatch(batchId)
+  }
 })
 </script>
 
@@ -318,7 +451,7 @@ onMounted(async () => {
     <h1 class="ingest-view__title">{{ t('ingest.title') }}</h1>
     <p class="ingest-view__subtitle">{{ t('ingest.subtitle') }}</p>
 
-    <div v-if="allTaskSummaries.length > 0 || activeTaskId === null" class="ingest-view__task-tabs">
+    <div v-if="!batchMode && (allTaskSummaries.length > 0 || activeTaskId === null)" class="ingest-view__task-tabs">
       <button
         v-for="task in allTaskSummaries"
         :key="task.executionId"
@@ -345,6 +478,7 @@ onMounted(async () => {
     </div>
 
     <IngestStageNav
+      v-if="!batchMode"
       class="ingest-view__stage-nav"
       :stages="stages"
       :current-key="stageNavKey"
@@ -352,14 +486,54 @@ onMounted(async () => {
     />
 
     <IngestProgressBar
-      v-if="currentStep !== 'upload'"
+      v-if="!batchMode && currentStep !== 'upload'"
       class="ingest-view__progress"
       :progress="effectiveProgress"
       :remaining-ms="remainingMs"
       :status="progressBarStatus"
     />
 
-    <div class="ingest-view__content">
+    <div v-if="batchInbox.length > 0" class="ingest-view__batch-bar">
+      <button
+        v-for="batch in batchInbox"
+        :key="batch.batchId"
+        :class="['ingest-view__batch-chip', { 'ingest-view__batch-chip--active': batch.batchId === batchStore.selectedBatchId }]"
+        @click="openBatch(batch.batchId)"
+      >
+        <Layers :size="12" />
+        <span>{{ t('ingest.batchSelectLabel') }} #{{ batch.batchId }}</span>
+        <span v-if="batch.awaitingCount > 0" class="ingest-view__batch-chip-badge">{{ batch.awaitingCount }}</span>
+      </button>
+      <button v-if="batchMode" class="ingest-view__btn-ghost" @click="exitBatch">
+        {{ t('ingest.batchExitView') }}
+      </button>
+    </div>
+
+    <div v-if="batchMode" class="ingest-view__content">
+      <div v-if="batchError" class="ingest-view__error-banner">
+        <AlertTriangle :size="16" />
+        {{ batchError }}
+      </div>
+
+      <BatchOverviewPanel
+        :batch="selectedBatchInfo"
+        :busy="batchBusy"
+        @confirm-all="handleBatchConfirmAll"
+        @pause="handleBatchPause"
+        @resume="handleBatchResume"
+        @cancel="handleBatchCancel"
+      />
+
+      <ReviewInbox
+        :items="batchItems"
+        :busy="batchBusy"
+        @confirm="handleItemConfirm"
+        @reanalyze="handleItemReanalyze"
+        @retry="handleItemRetry"
+      />
+    </div>
+
+    <div v-else class="ingest-view__content">
       <!-- 上传 -->
       <div v-if="currentStep === 'upload'" class="ingest-view__panel">
         <h2 class="ingest-view__panel-title">{{ t('ingest.uploadPanelTitle') }}</h2>
@@ -390,8 +564,51 @@ onMounted(async () => {
           <Upload :size="32" class="ingest-view__upload-icon" />
           <p>{{ isUploading ? t('ingest.uploading') : t('ingest.dragDropOrClick') }}</p>
           <p class="ingest-view__upload-hint">{{ t('ingest.supportedFormatsFull') }}</p>
-          <input type="file" accept=".pdf,.md,.txt,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.json" @change="handleFileUpload" :disabled="isUploading" class="ingest-view__file-input" />
+          <input type="file" multiple accept=".pdf,.md,.txt,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.json" @change="handleFileUpload" :disabled="isUploading" class="ingest-view__file-input" />
         </label>
+
+        <div v-if="batchUploadFailures.length > 0" class="ingest-view__error-banner">
+          <AlertTriangle :size="16" />
+          {{ t('ingest.batchUploadPartialFail', [batchUploadFailures.length]) }}
+        </div>
+
+        <div v-if="batchDuplicateNames.length > 0" class="ingest-view__duplicate-warning">
+          <AlertTriangle :size="16" />
+          <span>{{ t('ingest.batchDuplicateHint', [batchDuplicateNames.join(t('common.commaSeparator'))]) }}</span>
+          <button class="ingest-view__duplicate-dismiss" @click="batchDuplicateNames = []" :title="t('ingest.dismissWarning')">
+            <X :size="14" />
+          </button>
+        </div>
+
+        <div v-if="batchPendingSources.length > 0" class="ingest-view__batch-pending">
+          <h3 class="ingest-view__batch-pending-title">{{ t('ingest.batchPendingTitle', [batchPendingSources.length]) }}</h3>
+          <div class="ingest-view__existing-list">
+            <div v-for="source in batchPendingSources" :key="source.id" class="ingest-view__existing-item">
+              <FileText :size="14" class="ingest-view__existing-icon" />
+              <span class="ingest-view__existing-name">{{ source.name }}</span>
+              <span class="ingest-view__existing-meta">{{ formatSize(source.size) }} · {{ source.format }}</span>
+            </div>
+          </div>
+          <div class="ingest-view__guidance">
+            <label class="ingest-view__guidance-label">
+              <Sparkles :size="14" />
+              {{ t('ingest.batchGuidanceLabel') }}
+            </label>
+            <textarea
+              v-model="batchGuidance"
+              class="ingest-view__guidance-input"
+              :placeholder="t('ingest.guidancePlaceholder')"
+              rows="3"
+            ></textarea>
+          </div>
+          <div class="ingest-view__panel-actions">
+            <button class="ingest-view__btn-primary" :disabled="batchBusy" @click="createBatchFromPending">
+              <Sparkles :size="16" />
+              {{ t('ingest.batchCreateAndStart') }}
+              <ArrowRight :size="16" />
+            </button>
+          </div>
+        </div>
 
         <div v-if="uploadedFile" class="ingest-view__guidance">
           <label class="ingest-view__guidance-label">
@@ -406,7 +623,7 @@ onMounted(async () => {
           ></textarea>
         </div>
 
-        <div class="ingest-view__panel-actions">
+        <div v-if="batchPendingSources.length === 0" class="ingest-view__panel-actions">
           <button class="ingest-view__btn-primary" :disabled="!uploadedFile || isPhaseRunning" @click="startAnalysis">
             <Sparkles :size="16" />
             {{ t('ingest.startAiAnalysis') }}
@@ -1875,5 +2092,68 @@ onMounted(async () => {
 .ingest-view__quality-badge--info {
   background: var(--info-light, #eff6ff);
   color: var(--info, #3b82f6);
+}
+
+.ingest-view__batch-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.ingest-view__batch-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--btn-height-sm);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  font-size: var(--font-body-sm);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
+}
+
+.ingest-view__batch-chip:hover {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+.ingest-view__batch-chip--active {
+  border-color: var(--accent-primary);
+  background: var(--accent-light);
+  color: var(--accent-primary);
+}
+
+.ingest-view__batch-chip-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--warning);
+  color: var(--text-on-accent);
+  font-size: var(--font-caption);
+  font-weight: var(--weight-semibold);
+}
+
+.ingest-view__batch-pending {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.ingest-view__batch-pending-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-body-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
 }
 </style>

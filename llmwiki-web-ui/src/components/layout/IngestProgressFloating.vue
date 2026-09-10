@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { CheckCircle2, AlertTriangle, Loader2, X, XCircle, ArrowRight, PauseCircle, ClipboardCheck } from 'lucide-vue-next'
 import { useIngestProgressStore } from '@/stores/ingestProgress'
+import { useIngestBatchStore } from '@/stores/ingestBatch'
 import { formatRemaining } from '@/views/ingest/progressModel'
 
 const store = useIngestProgressStore()
+const batchStore = useIngestBatchStore()
 const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
@@ -43,6 +45,20 @@ const extraTaskCount = computed(() => {
 const show = computed(() => {
   return mostUrgentTask.value !== null
 })
+
+const awaitingBatch = computed(() => {
+  return batchStore.inbox.find(b => b.awaitingCount > 0) ?? null
+})
+
+const showBatchFloating = computed(() => {
+  return !show.value && awaitingBatch.value !== null
+})
+
+function openBatchReview() {
+  const batch = awaitingBatch.value
+  if (!batch) return
+  router.push({ path: '/ingest', query: { batch: String(batch.batchId) } })
+}
 
 const ringSize = 28
 const ringRadius = 12
@@ -129,6 +145,14 @@ watch(show, (visible) => {
     }, AUTO_DISMISS_MS)
   }
 })
+
+onMounted(() => {
+  batchStore.startPolling()
+})
+
+onUnmounted(() => {
+  batchStore.stopPolling()
+})
 </script>
 
 <template>
@@ -196,10 +220,43 @@ watch(show, (visible) => {
 
       <div class="ingest-floating__tail">
         <span v-if="extraTaskCount > 0" class="ingest-floating__badge">{{ extraTaskCount }}</span>
+        <span
+          v-if="batchStore.awaitingTotal > 0"
+          class="ingest-floating__badge ingest-floating__badge--awaiting"
+          :title="t('ingest.inboxTitle')"
+        >{{ batchStore.awaitingTotal }}</span>
         <button v-if="canClose" class="ingest-floating__close" :aria-label="t('common.close')" @click.stop="handleClose">
           <X :size="14" />
         </button>
         <ArrowRight v-else :size="14" class="ingest-floating__arrow" />
+      </div>
+    </div>
+  </Transition>
+
+  <Transition name="ingest-floating-fade">
+    <div
+      v-if="showBatchFloating && awaitingBatch"
+      class="ingest-floating ingest-floating--review"
+      :class="{ 'ingest-floating--editor': isEditorRoute }"
+      role="button"
+      tabindex="0"
+      @click="openBatchReview"
+      @keydown.enter="openBatchReview"
+      @keydown.space.prevent="openBatchReview"
+    >
+      <div class="ingest-floating__indicator">
+        <ClipboardCheck :size="20" />
+      </div>
+
+      <div class="ingest-floating__body">
+        <div class="ingest-floating__head">
+          <span class="ingest-floating__phase">{{ t('ingest.inboxTitle') }}</span>
+        </div>
+        <div class="ingest-floating__sub">{{ t('ingest.batchFloatingAwaiting', [awaitingBatch.awaitingCount]) }}</div>
+      </div>
+
+      <div class="ingest-floating__tail">
+        <ArrowRight :size="14" class="ingest-floating__arrow" />
       </div>
     </div>
   </Transition>
@@ -322,6 +379,10 @@ watch(show, (visible) => {
   font-size: 10px;
   font-weight: 600;
   line-height: 1;
+}
+
+.ingest-floating__badge--awaiting {
+  background: var(--warning);
 }
 
 .ingest-floating__close {

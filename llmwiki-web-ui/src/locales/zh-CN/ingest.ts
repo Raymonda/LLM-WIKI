@@ -208,4 +208,10 @@ export default {
   statusWriting: '写入中',
   statusConfirmed: '已确认',
   statusCancelledItem: '已取消',
+  batchPendingTitle: '已选择 {0} 份资料',
+  batchCreateAndStart: '创建批次并开始分析',
+  batchUploadPartialFail: '{0} 份文件上传失败，未计入批次',
+  batchDuplicateHint: '重复来源：{0}',
+  batchExitView: '退出批次审阅',
+  batchFloatingAwaiting: '{0} 份资料待审阅',
 }
