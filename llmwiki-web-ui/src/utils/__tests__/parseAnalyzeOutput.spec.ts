@@ -42,4 +42,21 @@ describe('parseAnalyzeOutput', () => {
     expect(result.aiAnalysis).toBe('纯文本分析')
     expect(result.metadata).toBeNull()
   })
+
+  it('shouldNormalizeEntityAndPageDefaultsWhenOptionalFieldsMissing', () => {
+    const output = JSON.stringify({
+      metadata: {
+        entities: [{ name: 'X' }],
+        affectedPages: [{ title: '页面B' }],
+      },
+    })
+
+    const result = parseAnalyzeOutput(output)
+
+    expect(result.metadata?.entities[0].type).toBe('concept')
+    expect(result.metadata?.entities[0].description).toBeUndefined()
+    expect(result.metadata?.affectedPages[0].path).toBe('页面B')
+    expect(result.metadata?.affectedPages[0].action).toBe('更新')
+    expect(result.metadata?.affectedPages[0].id).toBeUndefined()
+  })
 })
