@@ -9,7 +9,9 @@ import org.cn.liuwt.llmwiki.domain.service.system.ScopeService;
 import org.cn.liuwt.llmwiki.domain.service.wiki.SourceService;
 import org.cn.liuwt.llmwiki.facade.model.ExecutionInfo;
 import org.cn.liuwt.llmwiki.facade.model.IngestRequest;
+import org.cn.liuwt.llmwiki.service.ingest.IngestBatchScheduler;
 import org.cn.liuwt.llmwiki.service.ingest.IngestOrchestrationService;
+import org.cn.liuwt.llmwiki.service.ingest.IngestService;
 import org.cn.liuwt.llmwiki.web.security.JwtTokenProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -17,8 +19,11 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -39,6 +44,12 @@ class IngestControllerTest {
 
     @Mock
     private ScopeService scopeService;
+
+    @Mock
+    private IngestService ingestService;
+
+    @Mock
+    private IngestBatchScheduler ingestBatchScheduler;
 
     @InjectMocks
     private IngestController controller;
@@ -122,5 +133,39 @@ class IngestControllerTest {
 
         assertThrows(BusinessException.class, () -> controller.startIngest(request));
         assertThrows(BusinessException.class, () -> controller.startAnalysis(request));
+    }
+
+    @Test
+    void shouldQueueExecuteAndKickScheduler() {
+        ExecutionModel execution = new ExecutionModel();
+        execution.setId(7L);
+        execution.setScopeId(100L);
+        execution.setStatus("awaiting_confirmation");
+        when(ingestService.getProgress(7L)).thenReturn(execution);
+        when(jwtTokenProvider.getCurrentUserId()).thenReturn(7L);
+        when(scopeService.canView(100L, 7L)).thenReturn(true);
+        when(ingestService.queueExecute(7L, null)).thenReturn(true);
+
+        Result<Void> result = controller.executeIngest(7L, null);
+
+        assertTrue(result.isSuccess());
+        verify(ingestBatchScheduler).kick(100L);
+    }
+
+    @Test
+    void shouldFailExecuteWhenQueueCasLoses() {
+        ExecutionModel execution = new ExecutionModel();
+        execution.setId(7L);
+        execution.setScopeId(100L);
+        execution.setStatus("awaiting_confirmation");
+        when(ingestService.getProgress(7L)).thenReturn(execution);
+        when(jwtTokenProvider.getCurrentUserId()).thenReturn(7L);
+        when(scopeService.canView(100L, 7L)).thenReturn(true);
+        when(ingestService.queueExecute(7L, null)).thenReturn(false);
+
+        Result<Void> result = controller.executeIngest(7L, null);
+
+        assertFalse(result.isSuccess());
+        verify(ingestBatchScheduler, never()).kick(any());
     }
 }

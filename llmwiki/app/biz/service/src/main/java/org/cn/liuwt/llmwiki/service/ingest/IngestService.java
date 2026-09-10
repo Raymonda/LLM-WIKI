@@ -1,6 +1,8 @@
 package org.cn.liuwt.llmwiki.service.ingest;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.LintFindingDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
@@ -8,6 +10,7 @@ import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageKeywordDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageLinkDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageSourceDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageTagDO;
+import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageKeywordMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageLinkMapper;
@@ -19,6 +22,7 @@ import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel.ExecutionStepMod
 import org.cn.liuwt.llmwiki.domain.service.harness.HarnessEngine;
 import org.cn.liuwt.llmwiki.domain.service.harness.PipelineOrchestrator;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.RateLimitService;
+import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
 import org.cn.liuwt.llmwiki.domain.service.harness.LintFindingService;
 import org.cn.liuwt.llmwiki.domain.service.search.SearchService;
@@ -76,6 +80,9 @@ public class IngestService {
     @Autowired
     private LintFindingService lintFindingService;
 
+    @Autowired
+    private ExecutionMapper executionMapper;
+
     public ExecutionModel createExecution(Long scopeId, Long sourceId) {
         ExecutionModel execution = executionTracker.createExecution("ingest", scopeId, sourceId, null);
         executionTracker.updateExecutionStatus(execution.getId(), "running");
@@ -104,6 +111,78 @@ public class IngestService {
 
     public ExecutionModel resumeIngestExecution(Long executionId, Long scopeId, Long sourceId, String guidance) {
         return pipelineOrchestrator.resumeIngestExecution(executionId, scopeId, sourceId, guidance);
+    }
+
+    public ExecutionModel createPendingIngestExecution(Long scopeId, Long sourceId, String guidance) {
+        ExecutionModel execution = executionTracker.createExecution("ingest", scopeId, sourceId, null);
+        if (guidance != null && !guidance.isBlank()) {
+            ExecutionDO patch = new ExecutionDO();
+            patch.setId(execution.getId());
+            patch.setGuidance(guidance);
+            executionMapper.updateById(patch);
+        }
+        return executionTracker.getExecution(execution.getId());
+    }
+
+    public boolean queueExecute(Long executionId, String guidance) {
+        LambdaUpdateWrapper<ExecutionDO> update = new LambdaUpdateWrapper<ExecutionDO>()
+            .eq(ExecutionDO::getId, executionId)
+            .in(ExecutionDO::getStatus, "awaiting_confirmation", "awaiting_review")
+            .set(ExecutionDO::getStatus, "confirmed");
+        if (guidance != null && !guidance.isBlank()) {
+            update.set(ExecutionDO::getGuidance, guidance);
+        }
+        return executionMapper.update(null, update) == 1;
+    }
+
+    public boolean queueResume(Long executionId, String guidance) {
+        LambdaUpdateWrapper<ExecutionDO> update = new LambdaUpdateWrapper<ExecutionDO>()
+            .eq(ExecutionDO::getId, executionId)
+            .in(ExecutionDO::getStatus, "failed", "paused")
+            .set(ExecutionDO::getStatus, "pending")
+            .set(ExecutionDO::getErrorMessage, null)
+            .set(ExecutionDO::getCompletedAt, null);
+        if (guidance != null && !guidance.isBlank()) {
+            update.set(ExecutionDO::getGuidance, guidance);
+        }
+        return executionMapper.update(null, update) == 1;
+    }
+
+    public boolean queueReanalyze(Long executionId, String guidance) {
+        ExecutionModel execution = executionTracker.getExecution(executionId);
+        if (execution == null || (!"awaiting_confirmation".equals(execution.getStatus())
+                && !"awaiting_review".equals(execution.getStatus()))) {
+            return false;
+        }
+        Long analyzeStepId = null;
+        Long firstUnfinishedId = null;
+        for (ExecutionStepModel step : executionTracker.listSteps(executionId)) {
+            String normalized = IngestStep.normalizeStepName(step.getStepName());
+            if (IngestStep.ANALYZE.name().equals(normalized)) {
+                analyzeStepId = step.getId();
+                break;
+            }
+            if (firstUnfinishedId == null && ("UPLOAD".equals(normalized) || "ANALYZE".equals(normalized))
+                    && !"completed".equals(step.getStatus())) {
+                firstUnfinishedId = step.getId();
+            }
+        }
+        Long targetStepId = analyzeStepId != null ? analyzeStepId : firstUnfinishedId;
+        if (targetStepId == null) {
+            return false;
+        }
+        LambdaUpdateWrapper<ExecutionDO> update = new LambdaUpdateWrapper<ExecutionDO>()
+            .eq(ExecutionDO::getId, executionId)
+            .in(ExecutionDO::getStatus, "awaiting_confirmation", "awaiting_review")
+            .set(ExecutionDO::getStatus, "pending");
+        if (guidance != null && !guidance.isBlank()) {
+            update.set(ExecutionDO::getGuidance, guidance);
+        }
+        if (executionMapper.update(null, update) != 1) {
+            return false;
+        }
+        executionTracker.resetStepForRetry(targetStepId);
+        return true;
     }
 
     public void failExecution(Long executionId) {

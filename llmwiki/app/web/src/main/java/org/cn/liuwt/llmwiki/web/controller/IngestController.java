@@ -15,13 +15,12 @@ import org.cn.liuwt.llmwiki.facade.model.ExecutionInfo;
 import org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel;
 import org.cn.liuwt.llmwiki.domain.service.wiki.SourceService;
 import org.cn.liuwt.llmwiki.domain.service.harness.baseline.ExecutionBaselineService;
-import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
 import org.cn.liuwt.llmwiki.domain.service.system.ScopeService;
 import org.cn.liuwt.llmwiki.service.harness.mq.ControlMessage;
 import org.cn.liuwt.llmwiki.service.harness.mq.ExecutionNodeRegistry;
 import org.cn.liuwt.llmwiki.service.harness.mq.IngestDispatcher;
 import org.cn.liuwt.llmwiki.service.harness.mq.MqHealthService;
-import org.cn.liuwt.llmwiki.service.harness.mq.PipelineTaskMessage;
+import org.cn.liuwt.llmwiki.service.ingest.IngestBatchScheduler;
 import org.cn.liuwt.llmwiki.service.ingest.IngestOrchestrationService;
 import org.cn.liuwt.llmwiki.service.ingest.IngestService;
 import org.cn.liuwt.llmwiki.web.security.JwtTokenProvider;
@@ -47,6 +46,9 @@ public class IngestController {
 
     @Autowired
     private IngestService ingestService;
+
+    @Autowired
+    private IngestBatchScheduler ingestBatchScheduler;
 
     @Autowired
     private SourceService sourceService;
@@ -132,29 +134,12 @@ public class IngestController {
         }
         logDuplicateWarning(source, scopeId);
 
-        ExecutionModel execution = ingestService.createExecution(scopeId, request.getSourceId());
-        setNodeOwnership(execution.getId());
+        ExecutionModel execution = ingestService.createPendingIngestExecution(scopeId, request.getSourceId(), request.getGuidance());
         ExecutionInfo info = toExecutionInfo(execution);
         if (baselineService != null) {
             info.setBaselineProfile(baselineService.getProfile(scopeId, source.getFormat()));
         }
-        String guidance = request.getGuidance();
-
-        ingestDispatcher.dispatch(execution.getId(), scopeId, request.getSourceId(), guidance,
-                PipelineTaskMessage.TYPE_INGEST_ANALYZE,
-                () -> {
-                    ingestDispatcher.submitLocalTask(execution.getId(), () -> {
-                        try {
-                            ingestService.runIngestAnalysis(execution.getId(), scopeId, request.getSourceId(), guidance);
-                        } catch (Exception e) {
-                            log.error("Ingest analysis failed for executionId={}", execution.getId(), e);
-                            ExecutionModel current = ingestService.getProgress(execution.getId());
-                            if (current == null || !"cancelled".equals(current.getStatus())) {
-                                ingestService.failExecution(execution.getId(), e.getMessage());
-                            }
-                        }
-                    });
-                });
+        ingestBatchScheduler.kick(scopeId);
         return Result.success(info);
     }
 
@@ -165,25 +150,11 @@ public class IngestController {
             return Result.failed(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
         }
         assertExecutionReadable(execution);
-        if (!"awaiting_confirmation".equals(execution.getStatus()) && !"awaiting_review".equals(execution.getStatus())) {
+        String guidance = request != null ? request.getGuidance() : null;
+        if (!ingestService.queueExecute(id, guidance)) {
             return Result.failed(ErrorCode.INGEST_INVALID_STATUS_REVIEW);
         }
-        String guidance = request != null ? request.getGuidance() : null;
-        setNodeOwnership(id);
-
-        ingestDispatcher.dispatch(id, execution.getScopeId(), execution.getSourceId(), guidance,
-                PipelineTaskMessage.TYPE_INGEST_EXECUTE,
-                () -> ingestDispatcher.submitLocalTask(id, () -> {
-                    try {
-                        ingestService.runIngestExecution(id, execution.getScopeId(), execution.getSourceId(), guidance);
-                    } catch (Exception e) {
-                        log.error("Ingest execution failed for executionId={}", id, e);
-                        ExecutionModel current = ingestService.getProgress(id);
-                        if (current == null || !"cancelled".equals(current.getStatus())) {
-                            ingestService.failExecution(id, e.getMessage());
-                        }
-                    }
-                }));
+        ingestBatchScheduler.kick(execution.getScopeId());
         return Result.success(null);
     }
 
@@ -194,25 +165,11 @@ public class IngestController {
             return Result.failed(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
         }
         assertExecutionReadable(execution);
-        if (!"awaiting_confirmation".equals(execution.getStatus()) && !"awaiting_review".equals(execution.getStatus())) {
+        String guidance = request != null ? request.getGuidance() : null;
+        if (!ingestService.queueReanalyze(id, guidance)) {
             return Result.failed(ErrorCode.INGEST_INVALID_STATUS_REVIEW);
         }
-        String guidance = request != null ? request.getGuidance() : null;
-        setNodeOwnership(id);
-
-        ingestDispatcher.dispatch(id, execution.getScopeId(), execution.getSourceId(), guidance,
-                PipelineTaskMessage.TYPE_INGEST_REANALYZE,
-                () -> ingestDispatcher.submitLocalTask(id, () -> {
-                    try {
-                        ingestService.reanalyzeIngest(id, execution.getScopeId(), execution.getSourceId(), guidance);
-                    } catch (Exception e) {
-                        log.error("Ingest re-analysis failed for executionId={}", id, e);
-                        ExecutionModel current = ingestService.getProgress(id);
-                        if (current == null || !"cancelled".equals(current.getStatus())) {
-                            ingestService.failExecution(id, e.getMessage());
-                        }
-                    }
-                }));
+        ingestBatchScheduler.kick(execution.getScopeId());
         return Result.success(null);
     }
 
@@ -429,7 +386,8 @@ public class IngestController {
         java.util.List<ExecutionModel> relevantModels = executions.stream()
             .filter(e -> {
                 String status = e.getStatus();
-                if ("running".equals(status) || "pending".equals(status) || "paused".equals(status)) return true;
+                if ("running".equals(status) || "pending".equals(status) || "paused".equals(status)
+                        || "awaiting_confirmation".equals(status) || "confirmed".equals(status)) return true;
                 if ("completed".equals(status) || "budget_exhausted".equals(status)) {
                     if (e.getCompletedAt() != null) {
                         java.time.LocalDateTime cutoff = java.time.LocalDateTime.now().minusMinutes(30);
@@ -556,34 +514,14 @@ public class IngestController {
             return Result.failed(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
         }
         assertExecutionReadable(execution);
-        if (!"failed".equals(execution.getStatus()) && !"paused".equals(execution.getStatus())) {
-            if ("cancelled".equals(execution.getStatus())) {
-                return Result.failed(ErrorCode.INGEST_CANCELLED_CANNOT_RESUME);
-            }
-            return Result.failed(ErrorCode.INGEST_INVALID_STATUS_RESUME, execution.getStatus());
+        if ("cancelled".equals(execution.getStatus())) {
+            return Result.failed(ErrorCode.INGEST_CANCELLED_CANNOT_RESUME);
         }
         String guidance = request != null ? request.getGuidance() : null;
-        setNodeOwnership(id);
-
-        boolean phase1Completed = IngestStep.isPhase1Completed(execution.getSteps());
-
-        ingestDispatcher.dispatch(id, execution.getScopeId(), execution.getSourceId(), guidance,
-                PipelineTaskMessage.TYPE_INGEST_RESUME,
-                () -> ingestDispatcher.submitLocalTask(id, () -> {
-                    try {
-                        if (phase1Completed) {
-                            ingestService.resumeIngestExecution(id, execution.getScopeId(), execution.getSourceId(), guidance);
-                        } else {
-                            ingestService.resumeIngestAnalysis(id, execution.getScopeId(), execution.getSourceId(), guidance);
-                        }
-                    } catch (Exception e) {
-                        log.error("Resume ingest failed for executionId={}", id, e);
-                        ExecutionModel current = ingestService.getProgress(id);
-                        if (current == null || !"cancelled".equals(current.getStatus())) {
-                            ingestService.failExecution(id, e.getMessage());
-                        }
-                    }
-                }));
+        if (!ingestService.queueResume(id, guidance)) {
+            return Result.failed(ErrorCode.INGEST_INVALID_STATUS_RESUME, execution.getStatus());
+        }
+        ingestBatchScheduler.kick(execution.getScopeId());
         return Result.success(toExecutionInfo(ingestService.getProgress(id)));
     }
 
@@ -616,10 +554,6 @@ public class IngestController {
         }
     }
 
-    private void setNodeOwnership(Long executionId) {
-        ingestDispatcher.bindNodeOwnership(executionId);
-    }
-
     private ExecutionInfo toExecutionInfo(ExecutionModel model) {
         if (model == null) return null;
         ExecutionInfo info = new ExecutionInfo();
@@ -628,6 +562,7 @@ public class IngestController {
         info.setStatus(model.getStatus());
         info.setScopeId(model.getScopeId());
         info.setSourceId(model.getSourceId());
+        info.setBatchId(model.getBatchId());
         info.setStartTime(model.getStartedAt());
         info.setEndTime(model.getCompletedAt());
         info.setTotalTokens(model.getTotalTokens());
@@ -649,6 +584,7 @@ public class IngestController {
         info.setStatus(model.getStatus());
         info.setScopeId(model.getScopeId());
         info.setSourceId(model.getSourceId());
+        info.setBatchId(model.getBatchId());
         info.setStartTime(model.getStartedAt());
         info.setEndTime(model.getCompletedAt());
         info.setTotalTokens(model.getTotalTokens());
