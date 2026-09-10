@@ -1,8 +1,6 @@
 package org.cn.liuwt.llmwiki.web.controller;
 
-import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
-import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
@@ -21,6 +19,7 @@ import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
 import org.cn.liuwt.llmwiki.domain.service.system.ScopeService;
 import org.cn.liuwt.llmwiki.service.harness.mq.ControlMessage;
 import org.cn.liuwt.llmwiki.service.harness.mq.ExecutionNodeRegistry;
+import org.cn.liuwt.llmwiki.service.harness.mq.IngestDispatcher;
 import org.cn.liuwt.llmwiki.service.harness.mq.MqHealthService;
 import org.cn.liuwt.llmwiki.service.harness.mq.PipelineTaskMessage;
 import org.cn.liuwt.llmwiki.service.ingest.IngestOrchestrationService;
@@ -29,7 +28,6 @@ import org.cn.liuwt.llmwiki.web.security.JwtTokenProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -37,11 +35,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 @RestController
 @RequestMapping("/api/ingest")
@@ -68,29 +64,19 @@ public class IngestController {
     private SourceMapper sourceMapper;
 
     @Autowired
-    private ExecutionMapper executionMapper;
-
-    @Autowired
     private ExecutionNodeRegistry registry;
-
-    @Autowired(required = false)
-    private org.apache.rocketmq.spring.core.RocketMQTemplate rocketMQTemplate;
 
     @Autowired
     private MqHealthService mqHealthService;
+
+    @Autowired
+    private IngestDispatcher ingestDispatcher;
 
     @Autowired
     private IngestOrchestrationService ingestOrchestrationService;
 
     @Autowired
     private ScopeService scopeService;
-
-    @Value("${llmwiki.rocketmq.enabled:false}")
-    private boolean mqEnabled;
-
-    private boolean isMqAvailable() {
-        return rocketMQTemplate != null && mqEnabled;
-    }
 
     private void assertExecutionReadable(ExecutionModel execution) {
         if (execution == null || execution.getScopeId() == null) {
@@ -154,10 +140,10 @@ public class IngestController {
         }
         String guidance = request.getGuidance();
 
-        dispatchToMqOrLocal(execution.getId(), scopeId, request.getSourceId(), guidance,
+        ingestDispatcher.dispatch(execution.getId(), scopeId, request.getSourceId(), guidance,
                 PipelineTaskMessage.TYPE_INGEST_ANALYZE,
                 () -> {
-                    submitLocalTask(execution.getId(), () -> {
+                    ingestDispatcher.submitLocalTask(execution.getId(), () -> {
                         try {
                             ingestService.runIngestAnalysis(execution.getId(), scopeId, request.getSourceId(), guidance);
                         } catch (Exception e) {
@@ -185,9 +171,9 @@ public class IngestController {
         String guidance = request != null ? request.getGuidance() : null;
         setNodeOwnership(id);
 
-        dispatchToMqOrLocal(id, execution.getScopeId(), execution.getSourceId(), guidance,
+        ingestDispatcher.dispatch(id, execution.getScopeId(), execution.getSourceId(), guidance,
                 PipelineTaskMessage.TYPE_INGEST_EXECUTE,
-                () -> submitLocalTask(id, () -> {
+                () -> ingestDispatcher.submitLocalTask(id, () -> {
                     try {
                         ingestService.runIngestExecution(id, execution.getScopeId(), execution.getSourceId(), guidance);
                     } catch (Exception e) {
@@ -214,9 +200,9 @@ public class IngestController {
         String guidance = request != null ? request.getGuidance() : null;
         setNodeOwnership(id);
 
-        dispatchToMqOrLocal(id, execution.getScopeId(), execution.getSourceId(), guidance,
+        ingestDispatcher.dispatch(id, execution.getScopeId(), execution.getSourceId(), guidance,
                 PipelineTaskMessage.TYPE_INGEST_REANALYZE,
-                () -> submitLocalTask(id, () -> {
+                () -> ingestDispatcher.submitLocalTask(id, () -> {
                     try {
                         ingestService.reanalyzeIngest(id, execution.getScopeId(), execution.getSourceId(), guidance);
                     } catch (Exception e) {
@@ -361,9 +347,9 @@ public class IngestController {
 
         ingestService.markExecutionCancelled(id);
 
-        if (isMqAvailable() && mqHealthService.shouldAttempt()) {
+        if (ingestDispatcher.isMqAvailable() && mqHealthService.shouldAttempt()) {
             try {
-                sendControlMessage(id, ControlMessage.ACTION_CANCEL, "用户手动取消");
+                ingestDispatcher.sendControl(id, ControlMessage.ACTION_CANCEL, "用户手动取消");
                 mqHealthService.markSendSuccess();
             } catch (Exception e) {
                 mqHealthService.markSendFailed();
@@ -421,9 +407,9 @@ public class IngestController {
 
         ingestService.pauseExecution(id, execution.getScopeId());
 
-        if (isMqAvailable() && mqHealthService.shouldAttempt()) {
+        if (ingestDispatcher.isMqAvailable() && mqHealthService.shouldAttempt()) {
             try {
-                sendControlMessage(id, ControlMessage.ACTION_PAUSE, "用户手动暂停");
+                ingestDispatcher.sendControl(id, ControlMessage.ACTION_PAUSE, "用户手动暂停");
                 mqHealthService.markSendSuccess();
             } catch (Exception e) {
                 mqHealthService.markSendFailed();
@@ -581,9 +567,9 @@ public class IngestController {
 
         boolean phase1Completed = IngestStep.isPhase1Completed(execution.getSteps());
 
-        dispatchToMqOrLocal(id, execution.getScopeId(), execution.getSourceId(), guidance,
+        ingestDispatcher.dispatch(id, execution.getScopeId(), execution.getSourceId(), guidance,
                 PipelineTaskMessage.TYPE_INGEST_RESUME,
-                () -> submitLocalTask(id, () -> {
+                () -> ingestDispatcher.submitLocalTask(id, () -> {
                     try {
                         if (phase1Completed) {
                             ingestService.resumeIngestExecution(id, execution.getScopeId(), execution.getSourceId(), guidance);
@@ -599,42 +585,6 @@ public class IngestController {
                     }
                 }));
         return Result.success(toExecutionInfo(ingestService.getProgress(id)));
-    }
-
-    private void submitLocalTask(Long executionId, Runnable task) {
-        AtomicReference<Future<?>> futureRef = new AtomicReference<>();
-        Future<?> future = registry.submitTask(() -> {
-            try {
-                task.run();
-            } finally {
-                Future<?> self = futureRef.get();
-                if (self != null) {
-                    registry.removeFutureIfSame(executionId, self);
-                }
-            }
-        });
-        futureRef.set(future);
-        registry.putFuture(executionId, future);
-        if (future.isDone()) {
-            registry.removeFutureIfSame(executionId, future);
-        }
-    }
-
-    private void dispatchToMqOrLocal(Long executionId, Long scopeId, Long sourceId, String guidance,
-                                     String taskType, Runnable localFallback) {
-        if (!isMqAvailable() || !mqHealthService.shouldAttempt()) {
-            localFallback.run();
-            return;
-        }
-        try {
-            sendPipelineTask(executionId, scopeId, sourceId, guidance, taskType);
-            mqHealthService.markSendSuccess();
-        } catch (Exception e) {
-            mqHealthService.markSendFailed();
-            log.error("Failed to send pipeline task to RocketMQ (type={}, executionId={}), falling back to local execution",
-                taskType, executionId, e);
-            localFallback.run();
-        }
     }
 
     private void cancelIngestLocally(Long executionId) {
@@ -666,43 +616,8 @@ public class IngestController {
         }
     }
 
-    private void sendPipelineTask(Long executionId, Long scopeId, Long sourceId, String guidance, String taskType) {
-        PipelineTaskMessage msg = new PipelineTaskMessage();
-        msg.setExecutionId(executionId);
-        msg.setScopeId(scopeId);
-        msg.setSourceId(sourceId);
-        msg.setGuidance(guidance);
-        msg.setTaskType(taskType);
-        msg.setNodeId(registry.getNodeId());
-        msg.setSubmittedAt(System.currentTimeMillis());
-        try {
-            rocketMQTemplate.convertAndSend(PipelineTaskMessage.TOPIC, msg);
-            log.info("[MQ] Pipeline task sent: executionId={}, taskType={}, topic={}", executionId, taskType, PipelineTaskMessage.TOPIC);
-        } catch (Exception e) {
-            log.error("[MQ] Failed to send pipeline task: executionId={}, topic={}", executionId, PipelineTaskMessage.TOPIC, e);
-            throw new RuntimeException("Failed to submit pipeline task", e);
-        }
-    }
-
-    private void sendControlMessage(Long executionId, String action, String reason) {
-        ControlMessage msg = new ControlMessage();
-        msg.setExecutionId(executionId);
-        msg.setAction(action);
-        msg.setReason(reason);
-        msg.setIssuedBy(registry.getNodeId());
-        msg.setIssuedAt(System.currentTimeMillis());
-        rocketMQTemplate.convertAndSend(ControlMessage.TOPIC, msg);
-    }
-
     private void setNodeOwnership(Long executionId) {
-        try {
-            ExecutionDO update = new ExecutionDO();
-            update.setId(executionId);
-            update.setNodeId(registry.getNodeId());
-            executionMapper.updateById(update);
-        } catch (Exception e) {
-            log.warn("Failed to set node ownership for executionId={}", executionId, e);
-        }
+        ingestDispatcher.bindNodeOwnership(executionId);
     }
 
     private ExecutionInfo toExecutionInfo(ExecutionModel model) {
