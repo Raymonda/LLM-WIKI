@@ -225,6 +225,9 @@ public class LintController {
     @GetMapping("/{id}/report")
     public Result<ExecutionInfo> getReport(@PathVariable Long id) {
         ExecutionModel execution = harnessEngine.getExecution(id);
+        if (execution == null) {
+            return Result.failed(ErrorCode.LINT_EXECUTION_NOT_FOUND, id);
+        }
         return Result.success(toExecutionInfo(execution));
     }
 
@@ -281,11 +284,6 @@ public class LintController {
     public Result<Map<String, Object>> getLatestReport(@RequestParam Long scopeId) {
         Map<String, Object> summary = lintFindingService.getHealthSummary(scopeId);
         return Result.success(summary);
-    }
-
-    @PostMapping("/{id}/execute-actions")
-    public Result<Void> executeActions(@PathVariable Long id) {
-        return Result.success();
     }
 
     @PostMapping("/findings/{id}/auto-resolve")
@@ -364,12 +362,9 @@ public class LintController {
     // 批量操作
     @PostMapping("/findings/batch/approve")
     public Result<Map<String, Object>> batchApproveFindings(@RequestBody Map<String, Object> body) {
-        @SuppressWarnings("unchecked")
-        List<Long> ids = ((List<Number>) body.get("ids")).stream()
-            .map(Number::longValue)
-            .toList();
-        Long scopeId = body.get("scopeId") != null ? ((Number) body.get("scopeId")).longValue() : null;
-        if (ids == null || ids.isEmpty()) {
+        List<Long> ids = parseIds(body);
+        Long scopeId = parseScopeId(body);
+        if (ids.isEmpty()) {
             return Result.success(Map.of("processed", 0, "failed", 0));
         }
         int processed = 0;
@@ -387,11 +382,8 @@ public class LintController {
 
     @PostMapping("/findings/batch/reject")
     public Result<Map<String, Object>> batchRejectFindings(@RequestBody Map<String, Object> body) {
-        @SuppressWarnings("unchecked")
-        List<Long> ids = ((List<Number>) body.get("ids")).stream()
-            .map(Number::longValue)
-            .toList();
-        if (ids == null || ids.isEmpty()) {
+        List<Long> ids = parseIds(body);
+        if (ids.isEmpty()) {
             return Result.success(Map.of("processed", 0, "failed", 0));
         }
         int processed = 0;
@@ -409,11 +401,8 @@ public class LintController {
 
     @PostMapping("/findings/batch/rollback")
     public Result<Map<String, Object>> batchRollbackFindings(@RequestBody Map<String, Object> body) {
-        @SuppressWarnings("unchecked")
-        List<Long> ids = ((List<Number>) body.get("ids")).stream()
-            .map(Number::longValue)
-            .toList();
-        if (ids == null || ids.isEmpty()) {
+        List<Long> ids = parseIds(body);
+        if (ids.isEmpty()) {
             return Result.success(Map.of("processed", 0, "failed", 0));
         }
         int processed = 0;
@@ -511,7 +500,7 @@ public class LintController {
         }
     }
 
-    private static final int LINT_TOTAL_STEPS = 9;
+    private static final int LINT_TOTAL_STEPS = 8;
 
     private ExecutionInfo toExecutionInfo(ExecutionModel model) {
         ExecutionInfo info = new ExecutionInfo();
@@ -617,11 +606,8 @@ public class LintController {
 
     @PostMapping("/findings/batch/approve-links")
     public Result<Map<String, Object>> batchApproveLinks(@RequestBody Map<String, Object> body) {
-        @SuppressWarnings("unchecked")
-        List<Long> ids = ((List<Number>) body.get("ids")).stream()
-            .map(Number::longValue)
-            .toList();
-        if (ids == null || ids.isEmpty()) {
+        List<Long> ids = parseIds(body);
+        if (ids.isEmpty()) {
             return Result.success(Map.of("processed", 0, "failed", 0));
         }
         int processed = 0;
@@ -640,11 +626,8 @@ public class LintController {
 
     @PostMapping("/findings/batch/reject-links")
     public Result<Map<String, Object>> batchRejectLinks(@RequestBody Map<String, Object> body) {
-        @SuppressWarnings("unchecked")
-        List<Long> ids = ((List<Number>) body.get("ids")).stream()
-            .map(Number::longValue)
-            .toList();
-        if (ids == null || ids.isEmpty()) {
+        List<Long> ids = parseIds(body);
+        if (ids.isEmpty()) {
             return Result.success(Map.of("processed", 0, "failed", 0));
         }
         int processed = 0;
@@ -658,6 +641,22 @@ public class LintController {
             }
         }
         return Result.success(Map.of("processed", processed, "failed", failed));
+    }
+
+    private List<Long> parseIds(Map<String, Object> body) {
+        Object raw = body != null ? body.get("ids") : null;
+        if (!(raw instanceof List<?> list)) {
+            return List.of();
+        }
+        return list.stream()
+            .filter(Number.class::isInstance)
+            .map(item -> ((Number) item).longValue())
+            .toList();
+    }
+
+    private Long parseScopeId(Map<String, Object> body) {
+        Object raw = body != null ? body.get("scopeId") : null;
+        return raw instanceof Number num ? num.longValue() : null;
     }
 
     private void submitLocalTask(Long executionId, Runnable task) {

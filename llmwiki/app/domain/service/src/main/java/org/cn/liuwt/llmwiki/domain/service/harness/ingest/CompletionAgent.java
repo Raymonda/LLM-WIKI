@@ -401,7 +401,13 @@ public class CompletionAgent {
     }
 
     private String generatePagePath(String metadataJson) {
-        String title = extractJsonField(metadataJson, "title");
+        String trimmed = metadataJson != null ? metadataJson.trim() : null;
+        String title;
+        if (trimmed != null && trimmed.startsWith("{")) {
+            title = extractJsonField(trimmed, "title");
+        } else {
+            title = trimmed;
+        }
         if (title == null || title.isEmpty()) title = "untitled";
         String normalized = title.toLowerCase();
         String sanitized = normalized.replaceAll("[^a-z0-9\\u4e00-\\u9fff_-]", "-");

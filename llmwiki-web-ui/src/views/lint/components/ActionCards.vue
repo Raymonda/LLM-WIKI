@@ -30,16 +30,17 @@ const props = defineProps<{
   mainTabCounts: Record<MainTabKey, number>
   pageSize: number
   pageSizeOptions: number[]
-  hasSelectedOpen: boolean
   hasSelectedAwaiting: boolean
   hasSelectedAutoResolved: boolean
   hasSelectedStale: boolean
-  selectedOpenCount: number
   selectedAwaitingCount: number
   selectedStaleCount: number
   selectedAutoResolvedCount: number
   hasSelectedCrossrefOpen: boolean
   selectedCrossrefOpenCount: number
+  hasSelectedFailed: boolean
+  selectedAutoResolvableCount: number
+  selectedFailedCount: number
 }>()
 
 const emit = defineEmits<{
@@ -73,6 +74,7 @@ const emit = defineEmits<{
   resolveCompliance: [id: number]
   conflictAction: [id: number, action: string]
   showBatchPreview: [action: string]
+  retryFailed: [id: number]
 }>()
 
 const typeLabelKeyMap: Record<string, string> = {
@@ -327,13 +329,13 @@ const visiblePages = computed(() => {
             <span class="action-cards__batch-count">{{ t('lint.selectedCountLabel', [selectedCount]) }}</span>
             <div class="action-cards__batch-actions">
               <button
-                v-if="hasSelectedOpen && !hasSelectedStale"
+                v-if="selectedAutoResolvableCount > 0"
                 class="action-cards__batch-btn action-cards__batch-btn--resolve"
                 :disabled="batchProcessing"
                 @click="emit('showBatchPreview', 'autoResolve')"
               >
                 <Loader2 v-if="batchProcessing" :size="12" class="action-cards__spin" />
-                <Zap v-else :size="12" />{{ t('lint.batchFixCount', [selectedOpenCount]) }}
+                <Zap v-else :size="12" />{{ t('lint.batchFixCount', [selectedAutoResolvableCount]) }}
               </button>
               <button
                 v-if="hasSelectedStale"
@@ -343,6 +345,15 @@ const visiblePages = computed(() => {
               >
                 <Loader2 v-if="batchProcessing" :size="12" class="action-cards__spin" />
                 <RefreshCw v-else :size="12" />{{ t('lint.batchRefreshCount', [selectedStaleCount]) }}
+              </button>
+              <button
+                v-if="hasSelectedFailed"
+                class="action-cards__batch-btn action-cards__batch-btn--refresh"
+                :disabled="batchProcessing"
+                @click="emit('showBatchPreview', 'retryFailed')"
+              >
+                <Loader2 v-if="batchProcessing" :size="12" class="action-cards__spin" />
+                <RefreshCw v-else :size="12" />{{ t('lint.batchRetryFailedCount', [selectedFailedCount]) }}
               </button>
               <button
                 v-if="hasSelectedAwaiting"
@@ -518,7 +529,7 @@ const visiblePages = computed(() => {
                 />
               </template>
 
-              <div v-if="mainTab !== 'archived' && mainTab !== 'ai_processed' && (!finding.rulingBriefJson || finding.status === 'open') && !(finding.status === 'auto_resolved' && !finding.rulingBriefJson) && !(finding.status === 'resolved' && !finding.rulingBriefJson) && !(finding.findingType === 'missing_crossref' && finding.crossrefSuggestions && finding.crossrefSuggestions.length > 0)" class="action-card__actions">
+              <div v-if="mainTab !== 'archived' && mainTab !== 'ai_processed' && (!finding.rulingBriefJson || finding.status === 'open' || finding.status === 'failed') && !(finding.status === 'auto_resolved' && !finding.rulingBriefJson) && !(finding.status === 'resolved' && !finding.rulingBriefJson) && !(finding.findingType === 'missing_crossref' && finding.crossrefSuggestions && finding.crossrefSuggestions.length > 0)" class="action-card__actions">
                 <button
                   v-if="finding.status === 'open' && finding.findingType === 'orphan'"
                   class="action-card__btn action-card__btn--primary"
@@ -529,7 +540,7 @@ const visiblePages = computed(() => {
                   <Zap v-else :size="12" />{{ t('lint.aiDiagnoseFix') }}
                 </button>
                 <button
-                  v-if="finding.status === 'open' && finding.findingType !== 'orphan' && finding.findingType !== 'content_thin' && finding.findingType !== 'schema_compliance'"
+                  v-if="finding.status === 'open' && finding.findingType !== 'orphan' && finding.findingType !== 'content_thin' && finding.findingType !== 'schema_compliance' && finding.findingType !== 'stale'"
                   class="action-card__btn action-card__btn--primary"
                   :disabled="processingIds.has(finding.id)"
                   @click="emit('autoResolve', finding.id)"
@@ -599,6 +610,15 @@ const visiblePages = computed(() => {
                   @click="emit('reassess', finding.id)"
                 >
                   <RefreshCw :size="12" />{{ t('lint.reassessBtn') }}
+                </button>
+                <button
+                  v-if="finding.status === 'failed'"
+                  class="action-card__btn action-card__btn--refresh"
+                  :disabled="processingIds.has(finding.id)"
+                  @click="emit('retryFailed', finding.id)"
+                >
+                  <Loader2 v-if="processingIds.has(finding.id)" :size="12" class="action-cards__spin" />
+                  <RefreshCw v-else :size="12" />{{ t('lint.retryFailedBtn') }}
                 </button>
                 <button
                   v-if="finding.status === 'auto_resolved' && !finding.rulingBriefJson"

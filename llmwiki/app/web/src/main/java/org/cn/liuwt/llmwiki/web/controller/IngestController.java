@@ -102,12 +102,28 @@ public class IngestController {
         }
     }
 
+    /**
+     * 解析本次写入的目标 scope。以认证上下文（已经成员校验）的 scope 为准；
+     * 请求体显式传入的 scopeId 只有在与认证 scope 一致、或调用者确为其成员时才接受，
+     * 否则拒绝，防止跨 scope 越权写入。
+     */
+    private Long resolveScopeId(Long requestedScopeId) {
+        Long authScopeId = jwtTokenProvider.getCurrentScopeId();
+        if (requestedScopeId == null || requestedScopeId.equals(authScopeId)) {
+            return authScopeId;
+        }
+        Long userId = jwtTokenProvider.getCurrentUserId();
+        if (userId != null && scopeService.canView(requestedScopeId, userId)) {
+            return requestedScopeId;
+        }
+        throw new BusinessException(ErrorCode.AUTH_ACCESS_DENIED);
+    }
+
     @PostMapping("/start")
     public Result<ExecutionInfo> startIngest(@RequestBody IngestRequest request) {
-        // API key 客户端不传 scopeId：回填认证上下文的 scope（JwtAuthenticationFilter
-        // 或 ApiKeyAuthFilter 写入）。JWT 前端始终显式传值，行为不变。
-        Long scopeId = request.getScopeId() != null ? request.getScopeId()
-                : jwtTokenProvider.getCurrentScopeId();
+        // scope 以认证上下文为准（API key 客户端不传 scopeId，JWT 前端传的 scopeId
+        // 必须经成员校验），防止请求体 scopeId 被伪造以跨 scope 写入。
+        Long scopeId = resolveScopeId(request.getScopeId());
         SourceModel source = sourceService.getSource(request.getSourceId(), scopeId);
         if (source == null) {
             return Result.failed(ErrorCode.INGEST_SOURCE_NOT_FOUND);
@@ -123,7 +139,7 @@ public class IngestController {
 
     @PostMapping("/analyze")
     public Result<ExecutionInfo> startAnalysis(@RequestBody IngestRequest request) {
-        Long scopeId = request.getScopeId();
+        Long scopeId = resolveScopeId(request.getScopeId());
         SourceModel source = sourceService.getSource(request.getSourceId(), scopeId);
         if (source == null) {
             return Result.failed(ErrorCode.INGEST_SOURCE_NOT_FOUND);
@@ -185,6 +201,35 @@ public class IngestController {
         return Result.success(null);
     }
 
+    @PostMapping("/{id}/reanalyze")
+    public Result<Void> reanalyzeIngest(@PathVariable Long id, @RequestBody(required = false) IngestRequest request) {
+        ExecutionModel execution = ingestService.getProgress(id);
+        if (execution == null) {
+            return Result.failed(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
+        }
+        assertExecutionReadable(execution);
+        if (!"awaiting_confirmation".equals(execution.getStatus()) && !"awaiting_review".equals(execution.getStatus())) {
+            return Result.failed(ErrorCode.INGEST_INVALID_STATUS_REVIEW);
+        }
+        String guidance = request != null ? request.getGuidance() : null;
+        setNodeOwnership(id);
+
+        dispatchToMqOrLocal(id, execution.getScopeId(), execution.getSourceId(), guidance,
+                PipelineTaskMessage.TYPE_INGEST_REANALYZE,
+                () -> submitLocalTask(id, () -> {
+                    try {
+                        ingestService.reanalyzeIngest(id, execution.getScopeId(), execution.getSourceId(), guidance);
+                    } catch (Exception e) {
+                        log.error("Ingest re-analysis failed for executionId={}", id, e);
+                        ExecutionModel current = ingestService.getProgress(id);
+                        if (current == null || !"cancelled".equals(current.getStatus())) {
+                            ingestService.failExecution(id, e.getMessage());
+                        }
+                    }
+                }));
+        return Result.success(null);
+    }
+
     @GetMapping(value = "/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamProgress(@PathVariable Long id) {
         ExecutionModel current = ingestService.getProgress(id);
@@ -219,6 +264,10 @@ public class IngestController {
                     emitter.complete();
                     registry.removeEmitter(id);
                     return emitter;
+                } else if ("awaiting_confirmation".equals(status)) {
+                    emitter.send(SseEmitter.event()
+                        .name("phase1_done")
+                        .data(toExecutionInfo(current)));
                 } else if ("paused".equals(status)) {
                     emitter.send(SseEmitter.event()
                         .name("pause")
@@ -310,7 +359,7 @@ public class IngestController {
             return Result.failed(ErrorCode.INGEST_ALREADY_FINISHED_CANCEL);
         }
 
-        ingestService.cancelExecution(id, execution.getScopeId());
+        ingestService.markExecutionCancelled(id);
 
         if (isMqAvailable() && mqHealthService.shouldAttempt()) {
             try {
@@ -325,6 +374,8 @@ public class IngestController {
             cancelIngestLocally(id);
         }
 
+        ingestService.cleanupCancelledExecution(id, execution.getScopeId());
+
         return Result.success();
     }
 
@@ -337,12 +388,17 @@ public class IngestController {
         assertExecutionReadable(execution);
 
         String currentStatus = execution.getStatus();
-        if ("running".equals(currentStatus) || "pending".equals(currentStatus) || "paused".equals(currentStatus)) {
-            ingestService.cancelExecution(id, execution.getScopeId());
+        boolean wasActive = "running".equals(currentStatus) || "pending".equals(currentStatus) || "paused".equals(currentStatus);
+        if (wasActive) {
+            ingestService.markExecutionCancelled(id);
         }
 
         registry.cancelAndRemoveFuture(id);
         registry.completeAndRemoveEmitter(id);
+
+        if (wasActive) {
+            ingestService.cleanupCancelledExecution(id, execution.getScopeId());
+        }
 
         executionTracker.deleteExecution(id);
         log.info("Deleted ingest execution id={} for scopeId={}", id, execution.getScopeId());
@@ -359,7 +415,7 @@ public class IngestController {
         String currentStatus = execution.getStatus();
         if ("completed".equals(currentStatus) || "failed".equals(currentStatus)
                 || "cancelled".equals(currentStatus) || "budget_exhausted".equals(currentStatus)
-                || "paused".equals(currentStatus)) {
+                || "paused".equals(currentStatus) || "awaiting_confirmation".equals(currentStatus)) {
             return Result.failed(ErrorCode.INGEST_ALREADY_FINISHED_PAUSE);
         }
 
@@ -429,6 +485,10 @@ public class IngestController {
                     .data(toExecutionInfo(execution)));
                 emitter.complete();
                 registry.removeEmitter(event.getExecutionId());
+            } else if ("awaiting_confirmation".equals(event.getNewStatus())) {
+                emitter.send(SseEmitter.event()
+                    .name("phase1_done")
+                    .data(toExecutionInfo(execution)));
             } else if ("paused".equals(event.getNewStatus())) {
                 emitter.send(SseEmitter.event()
                     .name("pause")

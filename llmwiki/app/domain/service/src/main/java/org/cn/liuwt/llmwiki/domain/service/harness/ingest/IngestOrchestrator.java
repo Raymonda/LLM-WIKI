@@ -80,13 +80,13 @@ public class IngestOrchestrator {
     public ExecutionModel runIngestPipelineWithExecution(Long executionId, Long scopeId, Long sourceId, String guidance, boolean suppressNotifications) {
         TokenUsageContext.set(scopeId, "ingest");
         try {
-            return doRunIngestPipeline(executionId, scopeId, sourceId, guidance, suppressNotifications);
+            return doRunIngestPipeline(executionId, scopeId, sourceId, guidance, suppressNotifications, false);
         } finally {
             TokenUsageContext.clear();
         }
     }
 
-    private ExecutionModel doRunIngestPipeline(Long executionId, Long scopeId, Long sourceId, String guidance, boolean suppressNotifications) {
+    private ExecutionModel doRunIngestPipeline(Long executionId, Long scopeId, Long sourceId, String guidance, boolean suppressNotifications, boolean stopAfterPhase1) {
         if (!rateLimitService.tryAcquireConcurrent(scopeId)) {
             throw new RuntimeException("并发执行数量已达上限，请等待当前任务完成后再试。scopeId=" + scopeId);
         }
@@ -137,6 +137,9 @@ public class IngestOrchestrator {
                 totalTokens += analyzeTokens;
 
                 checkStopped(executionId);
+                if (stopAfterPhase1) {
+                    return awaitReview(executionId, scopeId, sourceName, totalTokens, suppressNotifications);
+                }
                 ExecutionStepModel writeStep = createAndRunStep(executionId, IngestStep.WRITE, scopeId);
                 long writeStart = System.currentTimeMillis();
                 int writeTokens = writingAgent.process(context);
@@ -200,12 +203,60 @@ public class IngestOrchestrator {
         }
     }
 
+    private ExecutionModel awaitReview(Long executionId, Long scopeId, String sourceName, int totalTokens, boolean suppressNotifications) {
+        executionTracker.updateExecutionStatus(executionId, "awaiting_confirmation");
+        executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_END,
+            java.util.Map.of("pipeline", "ingest", "status", "awaiting_confirmation", "totalTokens", totalTokens));
+        if (!suppressNotifications) {
+            notificationService.createNotification(scopeId, "ingest_awaiting_confirmation",
+                "分析完成 — " + sourceName,
+                "请审阅分析结果，确认后写入知识库",
+                scopeId, null, executionId);
+        }
+        return executionTracker.getExecution(executionId);
+    }
+
     public ExecutionModel runIngestAnalysisWithExecution(Long executionId, Long scopeId, Long sourceId, String guidance) {
-        return runIngestPipelineWithExecution(executionId, scopeId, sourceId, guidance);
+        TokenUsageContext.set(scopeId, "ingest");
+        try {
+            return doRunIngestPipeline(executionId, scopeId, sourceId, guidance, false, true);
+        } finally {
+            TokenUsageContext.clear();
+        }
     }
 
     public ExecutionModel runIngestExecution(Long executionId, Long scopeId, Long sourceId, String guidance) {
-        return runIngestPipelineWithExecution(executionId, scopeId, sourceId, guidance);
+        TokenUsageContext.set(scopeId, "ingest");
+        try {
+            return doResumeIngestExecution(executionId, scopeId, sourceId, guidance);
+        } finally {
+            TokenUsageContext.clear();
+        }
+    }
+
+    public ExecutionModel reanalyzeIngest(Long executionId, Long scopeId, Long sourceId, String guidance) {
+        TokenUsageContext.set(scopeId, "ingest");
+        try {
+            ExecutionModel execution = executionTracker.getExecution(executionId);
+            if (execution == null || (!"awaiting_confirmation".equals(execution.getStatus())
+                    && !"awaiting_review".equals(execution.getStatus()))) {
+                throw new RuntimeException("该执行不在待确认状态，无法重新分析");
+            }
+            Long analyzeStepId = null;
+            for (ExecutionStepModel step : executionTracker.listSteps(executionId)) {
+                if (IngestStep.ANALYZE.name().equals(IngestStep.normalizeStepName(step.getStepName()))) {
+                    analyzeStepId = step.getId();
+                    break;
+                }
+            }
+            if (analyzeStepId == null) {
+                throw new RuntimeException("未找到分析步骤，无法重新分析: executionId=" + executionId);
+            }
+            executionTracker.resetStepForRetry(analyzeStepId);
+            return doResumeIngestAnalysis(executionId, scopeId, sourceId, guidance);
+        } finally {
+            TokenUsageContext.clear();
+        }
     }
 
     public ExecutionModel resumeIngestAnalysis(Long executionId, Long scopeId, Long sourceId, String guidance) {
@@ -231,8 +282,9 @@ public class IngestOrchestrator {
             }
 
             ExecutionModel execution = executionTracker.getExecution(executionId);
-            if (execution == null || (!"failed".equals(execution.getStatus()) && !"paused".equals(execution.getStatus()))) {
-                throw new RuntimeException("该执行不在失败或暂停状态，无法续传");
+            if (execution == null || (!"failed".equals(execution.getStatus()) && !"paused".equals(execution.getStatus())
+                    && !"awaiting_confirmation".equals(execution.getStatus()))) {
+                throw new RuntimeException("该执行当前状态无法继续分析阶段");
             }
 
             SourceDO sourceDO = sourceMapper.selectOne(
@@ -312,20 +364,7 @@ public class IngestOrchestrator {
                 }
 
                 checkStopped(executionId);
-                steps = executionTracker.listSteps(executionId);
-                ExecutionStepModel writeStep = findOrCreateStep(executionId, IngestStep.WRITE, scopeId, steps, steps.size() + 1);
-                long writeStart = System.currentTimeMillis();
-                int writeTokens = writingAgent.process(context);
-                completeStep(writeStep, scopeId, context.toWriteOutputJson(), writeTokens, System.currentTimeMillis() - writeStart);
-                totalTokens += writeTokens;
-
-                checkStopped(executionId);
-                steps = executionTracker.listSteps(executionId);
-                ExecutionStepModel completeStepObj = findOrCreateStep(executionId, IngestStep.COMPLETE, scopeId, steps, steps.size() + 1);
-                long completeStart = System.currentTimeMillis();
-                int completeTokens = completionAgent.process(context);
-                completeStep(completeStepObj, scopeId, buildCompletionOutput(context), completeTokens, System.currentTimeMillis() - completeStart);
-                totalTokens += completeTokens;
+                return awaitReview(executionId, scopeId, sourceDO.getName() != null ? sourceDO.getName() : "未知文件", totalTokens, false);
 
             } catch (Exception e) {
                 boolean isStopped = isStoppedOrPaused(executionId) || Thread.currentThread().isInterrupted();
@@ -337,12 +376,6 @@ public class IngestOrchestrator {
                 executionTracker.failExecution(executionId, e.getMessage());
                 throw e;
             }
-
-            ExecutionModel exec = executionTracker.getExecution(executionId);
-            if (!"failed".equals(exec.getStatus()) && !"cancelled".equals(exec.getStatus()) && !"paused".equals(exec.getStatus())) {
-                executionTracker.completeExecution(executionId, totalTokens);
-            }
-            return executionTracker.getExecution(executionId);
         } finally {
             rateLimitService.releaseConcurrent(scopeId);
         }
@@ -367,8 +400,9 @@ public class IngestOrchestrator {
 
         try {
             ExecutionModel execution = executionTracker.getExecution(executionId);
-            if (execution == null || (!"failed".equals(execution.getStatus()) && !"paused".equals(execution.getStatus()))) {
-                throw new RuntimeException("该执行不在失败或暂停状态，无法续传");
+            if (execution == null || (!"failed".equals(execution.getStatus()) && !"paused".equals(execution.getStatus())
+                    && !"awaiting_confirmation".equals(execution.getStatus()))) {
+                throw new RuntimeException("该执行当前状态无法继续执行阶段");
             }
 
             List<ExecutionStepModel> steps = executionTracker.listSteps(executionId);

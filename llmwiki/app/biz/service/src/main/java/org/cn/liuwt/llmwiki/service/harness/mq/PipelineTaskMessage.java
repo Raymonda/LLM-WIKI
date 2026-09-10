@@ -14,6 +14,7 @@ public class PipelineTaskMessage {
     public static final String TYPE_INGEST_ANALYZE = "INGEST_ANALYZE";
     public static final String TYPE_INGEST_EXECUTE = "INGEST_EXECUTE";
     public static final String TYPE_INGEST_RESUME = "INGEST_RESUME";
+    public static final String TYPE_INGEST_REANALYZE = "INGEST_REANALYZE";
 
     public static final String TYPE_LINT_START = "LINT_START";
 

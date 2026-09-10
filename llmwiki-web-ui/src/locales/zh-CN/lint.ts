@@ -73,6 +73,7 @@ export default {
   actionApproveLinks: '批量确认链接',
   actionRejectLinks: '批量拒绝链接',
   actionDismiss: '批量忽略',
+  actionRetryFailed: '批量重试',
   actionDefault: '批量操作',
   // LintView status labels
   statusOpen: '待处理',
@@ -111,6 +112,7 @@ export default {
   impactRejectLinks: '拒绝 {0} 个建议链接，问题将保留为待处理状态',
   impactRejectLinksNoCount: '拒绝建议链接',
   impactDismiss: '标记为已忽略，将移入已归档区',
+  impactRetryFailed: '将重新入队等待重试，问题状态回到待处理',
   // LintView risk hints
   riskRollback: '批量回滚是高风险操作。回滚后这些项将在下次体检中重新被诊断，页面健康度可能回退。',
   riskApprove: '采纳后将修改相关页面内容。已采纳的 AI 修复可在“AI 已处理”页中追溯或回滚。',
@@ -164,6 +166,7 @@ export default {
   selectedCountLabel: '已选 {0} 项',
   batchFixCount: '批量修复 ({0})',
   batchRefreshCount: '批量刷新 ({0})',
+  batchRetryFailedCount: '批量重试 ({0})',
   batchApproveCount: '批量审批 ({0})',
   batchRejectCount: '批量拒绝 ({0})',
   batchRollbackCount: '批量回滚 ({0})',
@@ -184,6 +187,7 @@ export default {
   approveBtn: '审批',
   rejectBtn: '拒绝',
   reassessBtn: '重新评估',
+  retryFailedBtn: '重试',
   paginationInfo: '第 {0} / {1} 页，共 {2} 条',
   pageSizeSuffix: '条/页',
   enrichDialogTitle: '补充页面内容',

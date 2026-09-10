@@ -10,6 +10,8 @@ import org.cn.liuwt.llmwiki.service.harness.mq.MqHealthService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.CompletableFuture;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -57,7 +59,7 @@ class IngestOrchestrationServiceTest {
         when(mqHealthService.shouldAttempt()).thenReturn(false);
         when(registry.submitTask(any())).thenAnswer(inv -> {
             ((Runnable) inv.getArgument(0)).run();
-            return null;
+            return CompletableFuture.completedFuture(null);
         });
 
         ExecutionModel result = orchestration.startIngest(5L, 55L, "guidance");
@@ -78,7 +80,7 @@ class IngestOrchestrationServiceTest {
         when(mqHealthService.shouldAttempt()).thenReturn(false);
         when(registry.submitTask(any())).thenAnswer(inv -> {
             ((Runnable) inv.getArgument(0)).run();
-            return null;
+            return CompletableFuture.completedFuture(null);
         });
         doThrow(new RuntimeException("boom")).when(ingestService)
             .runIngestPipeline(anyLong(), anyLong(), anyLong(), any());

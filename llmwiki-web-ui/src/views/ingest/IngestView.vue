@@ -8,12 +8,13 @@ import {
   Upload, FileText, CheckCircle, ChevronRight,
   Loader2, AlertTriangle, Trash2, ArrowRight, Sparkles,
   Search, FilePlus, FileEdit, XCircle, RotateCcw, AlertCircle, X,
-  PauseCircle, PlayCircle, ChevronDown, GitBranch
+  PauseCircle, PlayCircle, ChevronDown, GitBranch, ClipboardCheck
 } from 'lucide-vue-next'
 import IngestProgressBar from './components/IngestProgressBar.vue'
 import IngestStageNav, { type StageItem } from './components/IngestStageNav.vue'
 import IngestStepTimeline from './components/IngestStepTimeline.vue'
 import EntityDiscoveryWall from './components/EntityDiscoveryWall.vue'
+import AnalysisSummaryPanel from './components/AnalysisSummaryPanel.vue'
 import { useIngestProgressStore } from '@/stores/ingestProgress'
 import { useConfirmDialog } from '@/composables/useConfirmDialog'
 
@@ -65,6 +66,8 @@ const includeParsePhase = computed(() => store.includeParsePhase)
 const totalTokens = computed(() => store.totalTokens)
 const nowMs = computed(() => store.nowMs)
 const chunkPreviews = computed(() => store.chunkPreviews)
+const aiAnalysis = computed(() => store.aiAnalysis)
+const metadataRaw = computed(() => store.metadataRaw)
 const allTaskSummaries = computed(() => store.allTaskSummaries)
 const activeTaskId = computed(() => store.activeTaskId)
 const setActiveTask = store.setActiveTask
@@ -157,9 +160,17 @@ const parsedViolations = computed<ParsedViolation[]>(() => {
 const stages = computed<StageItem[]>(() => [
   { key: 'upload', label: t('ingest.stageUpload'), icon: Upload, hint: t('ingest.stageUploadHint') },
   { key: 'analyzing', label: t('ingest.stageAnalyzing'), icon: Search, hint: t('ingest.stageAnalyzingHint') },
+  { key: 'review', label: t('ingest.stageReview'), icon: ClipboardCheck, hint: t('ingest.stageReviewHint') },
   { key: 'executing', label: t('ingest.stageExecuting'), icon: FilePlus, hint: t('ingest.stageExecutingHint') },
   { key: 'done', label: t('ingest.stageDone'), icon: CheckCircle },
 ])
+
+const stageNavKey = computed(() => {
+  if (currentStep.value === 'paused') {
+    return stepStates.value.some(s => s.name === 'ANALYZE' && s.status === 'completed') ? 'executing' : 'analyzing'
+  }
+  return currentStep.value
+})
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B'
@@ -280,6 +291,14 @@ async function handleResumeIngest() {
   await store.resumeIngestExecution()
 }
 
+async function handleConfirmWrite() {
+  await store.confirmExecution()
+}
+
+async function handleReanalysis() {
+  await store.requestReanalysis()
+}
+
 function handleNewSource() {
   store.startNewSource()
 }
@@ -307,10 +326,11 @@ onMounted(async () => {
         @click="setActiveTask(task.executionId)"
       >
         <Loader2 v-if="task.isPhaseRunning" :size="12" class="ingest-view__stepper-spin" />
-        <CheckCircle v-else-if="task.currentStep === 'done'" :size="12" style="color: var(--success)" />
         <AlertTriangle v-else-if="task.status === 'failed' || task.status === 'budget_exhausted'" :size="12" style="color: var(--error)" />
         <XCircle v-else-if="task.status === 'cancelled'" :size="12" style="color: var(--text-tertiary)" />
         <PauseCircle v-else-if="task.status === 'paused'" :size="12" style="color: var(--warning)" />
+        <CheckCircle v-else-if="task.currentStep === 'done'" :size="12" style="color: var(--success)" />
+        <ClipboardCheck v-else-if="task.currentStep === 'review'" :size="12" style="color: var(--accent-primary)" />
         <FileText v-else :size="12" />
         <span>{{ task.sourceName || t('ingest.materialFallback', [task.executionId]) }}</span>
         <span v-if="task.isPhaseRunning" class="ingest-view__task-tab-progress">{{ Math.round(task.progress * 100) }}%</span>
@@ -327,7 +347,7 @@ onMounted(async () => {
     <IngestStageNav
       class="ingest-view__stage-nav"
       :stages="stages"
-      :current-key="currentStep"
+      :current-key="stageNavKey"
       :error-key="stageErrorKey"
     />
 
@@ -443,6 +463,60 @@ onMounted(async () => {
           <button class="ingest-view__btn-secondary" @click="handleNewSource">
             <RotateCcw :size="14" />
             {{ t('ingest.reUpload') }}
+          </button>
+        </div>
+      </div>
+
+      <!-- 审阅确认 -->
+      <div v-if="currentStep === 'review'" class="ingest-view__panel">
+        <div class="ingest-view__review-header">
+          <div class="ingest-view__review-icon-wrap">
+            <ClipboardCheck :size="36" />
+          </div>
+          <h2 class="ingest-view__review-title">{{ t('ingest.reviewTitle') }}</h2>
+          <p class="ingest-view__review-sub">{{ t('ingest.reviewSub') }}</p>
+        </div>
+
+        <AnalysisSummaryPanel :ai-analysis="aiAnalysis" :metadata="metadataRaw" />
+
+        <EntityDiscoveryWall :previews="chunkPreviews" />
+
+        <div v-if="affectedPages.length > 0" class="ingest-view__affected-group">
+          <h4 class="ingest-view__affected-group-title">{{ t('ingest.reviewAffectedTitle', [affectedPages.length]) }}</h4>
+          <div class="ingest-view__affected-items">
+            <div v-for="page in affectedPages" :key="page.path" class="ingest-view__affected-row">
+              <component :is="actionIcon(page.action)" :size="14" class="ingest-view__affected-row-icon" />
+              <span class="ingest-view__affected-row-title">{{ page.title }}</span>
+              <span class="ingest-view__affected-row-action" :class="'ingest-view__affected-row-action--' + page.action">{{ actionLabel(page.action) }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="ingest-view__guidance">
+          <label class="ingest-view__guidance-label">
+            <Sparkles :size="14" />
+            {{ t('ingest.reviewGuidanceLabel') }}
+          </label>
+          <textarea
+            v-model="userGuidance"
+            class="ingest-view__guidance-input"
+            :placeholder="t('ingest.reviewGuidancePlaceholder')"
+            rows="3"
+          ></textarea>
+        </div>
+
+        <div class="ingest-view__panel-actions">
+          <button class="ingest-view__btn-primary" @click="handleConfirmWrite">
+            <CheckCircle :size="16" />
+            {{ t('ingest.confirmWrite') }}
+          </button>
+          <button class="ingest-view__btn-secondary" @click="handleReanalysis">
+            <RotateCcw :size="16" />
+            {{ t('ingest.reanalyze') }}
+          </button>
+          <button class="ingest-view__btn-ghost" @click="handleNewSource">
+            <Upload :size="16" />
+            {{ t('ingest.reviewBack') }}
           </button>
         </div>
       </div>
@@ -1003,26 +1077,6 @@ onMounted(async () => {
   font-size: var(--font-body);
 }
 
-.ingest-view__compliance-banner {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  background: var(--warning-light, #fff8e1);
-  color: var(--warning, #ed6c02);
-  border-radius: var(--radius-md);
-  margin-bottom: var(--space-4);
-  font-size: var(--font-body);
-}
-
-.ingest-view__compliance-violations {
-  padding: var(--space-3) var(--space-4);
-  background: var(--bg-secondary);
-  border: 1px solid var(--warning, #ed6c02);
-  border-radius: var(--radius-md);
-  margin-bottom: var(--space-4);
-}
-
 .ingest-view__scan-warning {
   display: flex;
   align-items: center;
@@ -1204,13 +1258,6 @@ onMounted(async () => {
   margin-top: var(--space-2);
 }
 
-.ingest-view__panel-actions-right {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-left: auto;
-}
-
 .ingest-view__btn-primary {
   display: inline-flex;
   align-items: center;
@@ -1369,6 +1416,34 @@ onMounted(async () => {
   padding: var(--space-3) var(--space-4);
   font-size: var(--font-body-sm);
   color: var(--text-secondary);
+}
+
+/* Review page */
+.ingest-view__review-header {
+  text-align: center;
+  padding: var(--space-4) 0 var(--space-6);
+}
+
+.ingest-view__review-icon-wrap {
+  display: inline-flex;
+  color: var(--accent-primary);
+  margin-bottom: var(--space-3);
+}
+
+.ingest-view__review-title {
+  font-size: var(--font-h2);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  margin-bottom: var(--space-1);
+}
+
+.ingest-view__review-sub {
+  font-size: var(--font-body);
+  color: var(--text-secondary);
+}
+
+.ingest-view__panel > .analysis-panel {
+  margin-bottom: var(--space-2);
 }
 
 /* Paused page */

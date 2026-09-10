@@ -311,7 +311,7 @@ classDiagram
     ScopeModel o-- ScopeMemberModel : 1..* 成员
     ScopeModel o-- ScopeSubscriptionModel : 1..* 订阅源
     SourceModel o-- WikiPageModel : 1..* 编译产物
-    note for ExecutionModel "聚合根 · 执行状态机\nstatus: awaiting_review/executing/done/failed\n每步携带 approvalLevel/approvedBy 支撑人工闸门\nnodeId 支持分布式调度"
+    note for ExecutionModel "聚合根 · 执行状态机\nstatus: awaiting_confirmation/executing/done/failed\n每步携带 approvalLevel/approvedBy 支撑人工闸门\nnodeId 支持分布式调度"
     note for ExecutionPlan "值对象 · 不可变待办清单\nTodoStep 含依赖图，renderMarkdown 落 Agent 提示词"
     note for WikiPageModel "聚合根 · 知识产物容器\nhealth_status(draft/ok/stale) 驱动召回与晋升\nkeywords 供检索，links 维护双向引用"
     note for SourceModel "聚合根 · 事实基底\nraw/parsed 双路径固化存储，哈希防重，只增不改"
@@ -509,7 +509,7 @@ flowchart LR
   <table>
     <tr><th>用例</th><th>触达契约</th><th>核心行为</th><th>相对重要度</th></tr>
     <tr><td>UC1 账号与工作区</td><td><code>/api/auth</code>、<code>/api/scope</code></td><td>JWT 登录；Scope 建/改/删；<code>ScopeService.canView</code> 权限；月度预算 <code>scope_budget</code>（默认 50000 token）</td><td><span class="tag tag-mid">支撑型</span></td></tr>
-    <tr><td>UC2 知识摄入</td><td><code>/api/ingest/*</code>（22 端点）</td><td>两阶段（分析 / 执行）+ 人审审批 + 断点续传，把 raw 编译为 wiki</td><td><span class="tag tag-core">核心</span></td></tr>
+    <tr><td>UC2 知识摄入</td><td><code>/api/ingest/*</code>（12 端点）</td><td>两阶段（分析 / 执行）+ 人审闸门（确认写入 / 重新分析）+ 断点续传，把 raw 编译为 wiki</td><td><span class="tag tag-core">核心</span></td></tr>
     <tr><td>UC3 知识问答</td><td><code>/api/query/stream</code>(SSE)、<code>/api/query/save</code></td><td>两 Agent 两阶段回答；SSE 流式；可落库为新页面</td><td><span class="tag tag-core">核心</span></td></tr>
     <tr><td>UC4 知识体检</td><td><code>/api/lint/*</code>（25 端点）</td><td>八步流水线诊断 + 自动修复 + 报告 + Schema 提案；<code>@Scheduled</code> 定时巡检</td><td><span class="tag tag-core">核心</span></td></tr>
     <tr><td>UC5 Schema 共治</td><td><code>/api/schema/*</code></td><td>V2 三轮对话冷启动；补丁提案→审批→版本化应用；注入全部 Agent</td><td><span class="tag tag-mid">治理</span></td></tr>
@@ -530,7 +530,7 @@ flowchart LR
 flowchart TB
     S1["① 上传源材料<br/>POST /api/ingest/start<br/>source 落盘 raw/ 目录（不可变）"] --> S2
     S2["② 分析 ANALYZE<br/>Python doc_parser.py 解析<br/>AnalysisAgent 抽取元数据/大纲/事实块"] --> S3
-    S3["③ 人工评审（状态机闸门）<br/>status = awaiting_review<br/>前端展示分析产物基线 baselineProfile"] --> S4
+    S3["③ 人工评审（状态机闸门）<br/>status = awaiting_confirmation<br/>前端展示分析结果 + 受影响页面 + 引导方向"] --> S4
     S4["④ 执行 EXECUTE<br/>POST /api/ingest/{id}/execute<br/>WritingAgent 逐页写作 → 四道验证"] --> S5
     S5["⑤ 完成 DONE<br/>ES 索引 / 链接解析 / 关联发现"]
     S4 -.->|"任意步骤失败非阻塞"| S4x["执行记录标记失败<br/>可 resume 断点续传<br/>或 cancel 清理半成品"]
@@ -539,12 +539,12 @@ flowchart TB
 
   <h3>4.1.2 流水线与状态机（代码级）</h3>
   <ul>
-    <li><strong>状态机</strong>：<code>uploaded → analyzing → awaiting_review → executing → done</code>｜终止态：<code>failed / cancelled / paused</code>。</li>
+    <li><strong>状态机</strong>：<code>uploaded → analyzing → awaiting_confirmation → executing → done</code>｜终止态：<code>failed / cancelled / paused</code>。</li>
     <li><strong>执行模型</strong>：<span class="klass">ExecutionModel</span> + <span class="klass">ExecutionTracker</span> 记录每一步状态、<code>approval_level</code>（auto / review / approval）、<code>approved_by</code>、<code>tokens_used</code>，写入 <code>execution</code> 与 <code>execution_step</code> 表。</li>
     <li><strong>步骤执行器</strong>：<span class="klass">PipelineOrchestrator.runSteps(...)</span> 按 <span class="klass">ApprovalService</span> 的审批级别决定某步骤是否需要人工放行。</li>
     <li><strong>断点续传</strong>：<code>POST /api/ingest/{id}/resume</code> → <code>resumeIngestAnalysis() / resumeIngestExecution()</code>，从失败步骤重新执行。</li>
     <li><strong>半成品清理</strong>：<code>cancelExecution(cleanupHalfProducts)</code> —— 单来源删除已生成页面；多来源只删除关系线并 <code>source_count--</code>，保留他源已写页面。</li>
-    <li><strong>SSE 进度</strong>：<code>GET /api/ingest/{id}/stream</code> 事件 <code>init / step / done / pause</code>，失败后 <code>startPeriodicSync</code> 轮询补发，弥补断流丢帧。</li>
+    <li><strong>SSE 进度</strong>：<code>GET /api/ingest/{id}/stream</code> 事件 <code>init / step / step_progress / phase1_done / done / pause</code>；<code>phase1_done</code> 表示分析完成待审阅（SSE 连接保持不断开，供后续 Phase2 复用），失败后 <code>startPeriodicSync</code> 轮询补发，弥补断流丢帧。</li>
   </ul>
 
   <h3>4.1.3 时序图</h3>
@@ -567,14 +567,14 @@ sequenceDiagram
     P->>A: runSteps([UPLOAD, ANALYZE])
     A->>ST: 写入 raw/ 源文件 + parsed 中间产物
     ST-->>P: 步骤回执 + tokens / approval_level
-    P->>ST: updateExecution(status=awaiting_review)
-    P-->>H: ExecutionModel(id, status=awaiting_review)
+    P->>ST: updateExecution(status=awaiting_confirmation)
+    P-->>H: ExecutionModel(id, status=awaiting_confirmation)
     H-->>S: Result&lt;ExecutionModel&gt;
         S-->>C: 转发 Result
         C-->>U: HTTP 响应(executionId, status)
 
     rect rgb(60, 60, 20)
-    U->>U: 【人工闸门】审阅 baselineProfile
+    U->>U: 【人工闸门】审阅分析结果（确认写入 / 重新分析 / 暂不写入）
     end
 
     U->>C: POST /api/ingest/{id}/execute
@@ -589,7 +589,7 @@ sequenceDiagram
   </div>
   <div class="figcap">图 4.1.2 UC2 摄入时序（含人工闸门）</div>
 
-  <div class="callout"><strong>设计意图</strong>：① 两阶段人机协同把"AI 创造性错误"的成本前置——分析阶段错了只是白纸，执行阶段错了会污染知识库；② 断点续传 + 半成品清理保证<b>长耗时流水线可运维</b>（LLM token 昂贵，失败重来会浪费预算）；③ 执行入口 <code>/execute</code> 校验 <code>awaiting_review</code> 状态本身就是<b>状态机即安全边界</b>。</div>
+  <div class="callout"><strong>设计意图</strong>：① 两阶段人机协同把"AI 创造性错误"的成本前置——分析阶段错了只是白纸，执行阶段错了会污染知识库；② 断点续传 + 半成品清理保证<b>长耗时流水线可运维</b>（LLM token 昂贵，失败重来会浪费预算）；③ 执行入口 <code>/execute</code> 校验 <code>awaiting_confirmation</code> 状态本身就是<b>状态机即安全边界</b>。</div>
 </div>
 
 <!-- ==================== 第四章 UC3 问答 ==================== -->
@@ -1053,7 +1053,7 @@ flowchart TB
     <tr><th>契约</th><th>说明</th></tr>
     <tr><td>统一响应</td><td><code>Result&lt;T&gt;</code>：<code>success / code / msg / data / extra</code>；错误码 <code>ErrorCode</code> 枚举 + <code>BusinessException</code></td></tr>
     <tr><td>SSE 问答事件</td><td><code>start → mode → step(retrieving/generating/synthesizing) → answer-chunk* → answer-complete</code>｜异常 <code>error</code></td></tr>
-    <tr><td>SSE 摄入事件</td><td><code>init / step / done / pause</code> + startPeriodicSync 失败补发</td></tr>
+    <tr><td>SSE 摄入事件</td><td><code>init / step / step_progress / phase1_done / done / pause</code> + startPeriodicSync 失败补发</td></tr>
     <tr><td>鉴权头</td><td><code>Authorization: Bearer &lt;JWT&gt;</code>、<code>X-Scope-Id</code>、<code>Accept-Language</code></td></tr>
     <tr><td>执行模型</td><td><code>ExecutionModel</code>（id/type/status/steps）；<code>execution_step.approval_level = auto|review|approval</code></td></tr>
     <tr><td>页面健康</td><td><code>wiki_page.health_status = healthy|degraded|conflicted|recalled|default</code>；<code>source_count</code> 多来源计数</td></tr>

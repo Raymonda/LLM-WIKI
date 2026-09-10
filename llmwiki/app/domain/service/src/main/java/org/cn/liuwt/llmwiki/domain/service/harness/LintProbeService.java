@@ -77,7 +77,7 @@ public class LintProbeService {
         String previousFindingsSummary = buildPreviousFindingsSummary(previousFindings, rulesConfig);
         String previousHealthSummary = buildPreviousHealthSummary(healthDistribution);
 
-        Set<String> downgradedTypes = computeDowngradedTypes(previousFindings, rulesConfig);
+        Set<String> downgradedTypes = computeDowngradedTypes(scopeId, rulesConfig);
 
         // 增量模式下，利用诊断缓存过滤未变更页面
         List<WikiPageDO> effectiveFocusPages = focusPages;
@@ -585,15 +585,12 @@ public class LintProbeService {
         return sb.toString();
     }
 
-    private Set<String> computeDowngradedTypes(List<LintFindingDO> previousFindings, LintRulesConfig rulesConfig) {
-        if (previousFindings == null || previousFindings.isEmpty()) return Collections.emptySet();
+    private Set<String> computeDowngradedTypes(Long scopeId, LintRulesConfig rulesConfig) {
         LintRulesConfig.FeedbackLearningConfig flConfig = rulesConfig.getFeedbackLearning();
         int threshold = flConfig.getDismissCountToDowngrade();
         if (threshold <= 0) return Collections.emptySet();
 
-        Map<String, Long> dismissCounts = previousFindings.stream()
-            .filter(f -> "ignored".equals(f.getUserFeedback()) || "dismissed".equals(f.getStatus()))
-            .collect(Collectors.groupingBy(LintFindingDO::getFindingType, Collectors.counting()));
+        Map<String, Long> dismissCounts = lintFindingService.countDismissedOrIgnoredByType(scopeId);
 
         Set<String> downgraded = new HashSet<>();
         dismissCounts.forEach((type, count) -> {

@@ -100,16 +100,8 @@ export function createLintSSE(executionId: number): EventSource {
   return new EventSource(url)
 }
 
-export function getLintReport(executionId: number): Promise<LintExecutionInfo> {
-  return api.get(`/lint/${executionId}/report`)
-}
-
 export function getFindings(executionId: number): Promise<LintFindingInfo[]> {
   return api.get(`/lint/${executionId}/findings`)
-}
-
-export function listScopeFindings(scopeId: number, type?: string, status?: string, priority?: string): Promise<LintFindingInfo[]> {
-  return api.get('/lint/scope/findings', { params: { scopeId, type, status, priority } })
 }
 
 export function listScopeFindingsPaged(scopeId: number, page: number, size: number, type?: string, status?: string, priority?: string, archived?: boolean): Promise<PageResult<LintFindingInfo>> {
@@ -135,10 +127,6 @@ export function autoResolveFinding(id: number, handlingMethod?: string): Promise
 
 export function resolveSchemaCompliance(id: number): Promise<void> {
   return api.post(`/lint/findings/${id}/resolve-compliance`)
-}
-
-export function batchAutoResolveStale(scopeId: number): Promise<Record<string, unknown>> {
-  return api.post(`/lint/scope/${scopeId}/batch-auto-resolve-stale`)
 }
 
 export function triggerRepair(id: number, scopeId: number): Promise<Record<string, unknown>> {

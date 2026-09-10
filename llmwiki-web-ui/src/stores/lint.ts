@@ -37,9 +37,15 @@ export const MANUAL_TYPE_OPTIONS: { value: string; label: string }[] = [
 ]
 
 const MAIN_TAB_STATUS_FILTER: Record<MainTabKey, string> = {
-  manual: 'open,awaiting_approval,repairing,deferred',
+  manual: 'open,awaiting_approval,repairing,deferred,failed',
   ai_processed: 'auto_resolved',
   archived: 'resolved,dismissed,rolled_back'
+}
+
+export const AUTO_RESOLVE_EXCLUDED_TYPES = ['stale', 'orphan', 'content_thin', 'schema_compliance']
+
+export function isAutoResolvable(f: LintFindingInfo): boolean {
+  return f.status === 'open' && !AUTO_RESOLVE_EXCLUDED_TYPES.includes(f.findingType)
 }
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50]
@@ -125,8 +131,12 @@ export const useLintStore = defineStore('lint', () => {
     currentItems.value.filter(f => selectedIds.value.has(f.id))
   )
 
-  const selectedOpenIds = computed(() =>
-    selectedItems.value.filter(f => f.status === 'open').map(f => f.id)
+  const selectedAutoResolvableItems = computed(() =>
+    selectedItems.value.filter(isAutoResolvable)
+  )
+
+  const selectedAutoResolvableIds = computed(() =>
+    selectedAutoResolvableItems.value.map(f => f.id)
   )
 
   const selectedAwaitingIds = computed(() =>
@@ -150,18 +160,18 @@ export const useLintStore = defineStore('lint', () => {
     selectedItems.value.filter(f => f.findingType === 'missing_crossref' && f.status === 'open').map(f => f.id)
   )
   
-  const hasSelectedOpen = computed(() => selectedOpenIds.value.length > 0)
   const hasSelectedAwaiting = computed(() => selectedAwaitingIds.value.length > 0)
   const hasSelectedAutoResolved = computed(() => selectedAutoResolvedIds.value.length > 0)
   const hasSelectedFailed = computed(() => selectedFailedIds.value.length > 0)
   const hasSelectedStale = computed(() => selectedStaleOpenIds.value.length > 0)
   const hasSelectedCrossrefOpen = computed(() => selectedCrossrefOpenIds.value.length > 0)
 
-  const selectedOpenCount = computed(() => selectedOpenIds.value.length)
   const selectedAwaitingCount = computed(() => selectedAwaitingIds.value.length)
   const selectedStaleCount = computed(() => selectedStaleOpenIds.value.length)
   const selectedAutoResolvedCount = computed(() => selectedAutoResolvedIds.value.length)
   const selectedCrossrefOpenCount = computed(() => selectedCrossrefOpenIds.value.length)
+  const selectedAutoResolvableCount = computed(() => selectedAutoResolvableIds.value.length)
+  const selectedFailedCount = computed(() => selectedFailedIds.value.length)
 
   const currentTabTotal = computed(() => findingsPaged.value?.total ?? 0)
 
@@ -407,7 +417,10 @@ export const useLintStore = defineStore('lint', () => {
     }
   }
 
-  document.addEventListener('visibilitychange', onVisibilityChange)
+  function startVisibilityWatcher() {
+    document.removeEventListener('visibilitychange', onVisibilityChange)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+  }
 
   function cleanup() {
     disconnectSSE()
@@ -763,10 +776,10 @@ export const useLintStore = defineStore('lint', () => {
   }
 
   async function batchAutoResolveSelected() {
-    if (selectedOpenIds.value.length === 0 || batchProcessing.value) return
+    if (selectedAutoResolvableIds.value.length === 0 || batchProcessing.value) return
     batchProcessing.value = true
     try {
-      const ids = selectedOpenIds.value
+      const ids = selectedAutoResolvableIds.value
       const results = await Promise.allSettled(ids.map(id => autoResolveFinding(id)))
       await Promise.allSettled(ids.map(id => recordFindingFeedback(id, 'accepted').catch(() => {})))
       clearSelection()
@@ -775,6 +788,23 @@ export const useLintStore = defineStore('lint', () => {
       if (failed > 0) setActionError(`${failed} 条修复失败`)
     } catch (e: any) {
       setActionError(e.message || '批量修复失败')
+    } finally {
+      batchProcessing.value = false
+    }
+  }
+
+  async function batchRetryFailedSelected() {
+    if (selectedFailedIds.value.length === 0 || batchProcessing.value) return
+    batchProcessing.value = true
+    try {
+      const ids = selectedFailedIds.value
+      const results = await Promise.allSettled(ids.map(id => retryFailedFinding(id)))
+      clearSelection()
+      await refreshAfterAction()
+      const failed = results.filter(r => r.status === 'rejected').length
+      if (failed > 0) setActionError(`${failed} 条重试失败`)
+    } catch (e: any) {
+      setActionError(e.message || '批量重试失败')
     } finally {
       batchProcessing.value = false
     }
@@ -871,20 +901,22 @@ export const useLintStore = defineStore('lint', () => {
     hasProblemsCount, totalCount, totalActiveFindings, lastLintTime,
     findingCountsByType, healthScore, healthScoreDisplay, currentItems,
     selectedCount, allCurrentSelected,
-    selectedItems, selectedOpenIds, selectedAwaitingIds, selectedAutoResolvedIds, selectedFailedIds, selectedStaleOpenIds, selectedCrossrefOpenIds,
-    hasSelectedOpen, hasSelectedAwaiting, hasSelectedAutoResolved, hasSelectedFailed, hasSelectedStale, hasSelectedCrossrefOpen,
-    selectedOpenCount, selectedAwaitingCount, selectedStaleCount, selectedAutoResolvedCount, selectedCrossrefOpenCount,
+    selectedItems, selectedAwaitingIds, selectedAutoResolvedIds, selectedFailedIds, selectedStaleOpenIds, selectedCrossrefOpenIds,
+    selectedAutoResolvableItems, selectedAutoResolvableIds,
+    hasSelectedAwaiting, hasSelectedAutoResolved, hasSelectedFailed, hasSelectedStale, hasSelectedCrossrefOpen,
+    selectedAwaitingCount, selectedStaleCount, selectedAutoResolvedCount, selectedCrossrefOpenCount,
+    selectedAutoResolvableCount, selectedFailedCount,
     currentTabTotal,
     loadOverview, loadTabCounts, loadFindings,
     switchMainTab, setManualTypeFilter, goToPage, setPageSize,
-    triggerLint, startPolling, stopPolling, disconnectSSE, checkActiveLint, cleanup,
+    triggerLint, startPolling, stopPolling, disconnectSSE, checkActiveLint, startVisibilityWatcher, cleanup,
     dismissFinding, reassessFinding, autoResolveAction, resolveComplianceAction, triggerRepairAction,
     approveFindingAction, executeConflictRulingAction, rejectFindingAction, rollbackFindingAction, retryFailedFindingAction, retryOrphanFixAction, enrichPageAction,
     approveLinkAction, rejectLinkAction, ignoreLinkAction,
     batchApproveLinksAction, batchRejectLinksAction,
     toggleSelect, toggleSelectAll, clearSelection,
     batchAutoResolveSelected, batchDismissSelected, batchTriggerRepairSelected,
-    batchApprove, batchReject, batchRollback,
+    batchApprove, batchReject, batchRollback, batchRetryFailedSelected,
     setActionError,
   }
 })

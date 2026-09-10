@@ -94,6 +94,10 @@ public class IngestService {
         return pipelineOrchestrator.runIngestExecution(executionId, scopeId, sourceId, guidance);
     }
 
+    public ExecutionModel reanalyzeIngest(Long executionId, Long scopeId, Long sourceId, String guidance) {
+        return pipelineOrchestrator.reanalyzeIngest(executionId, scopeId, sourceId, guidance);
+    }
+
     public ExecutionModel resumeIngestAnalysis(Long executionId, Long scopeId, Long sourceId, String guidance) {
         return pipelineOrchestrator.resumeIngestAnalysis(executionId, scopeId, sourceId, guidance);
     }
@@ -124,6 +128,15 @@ public class IngestService {
     }
 
     public void cancelExecution(Long executionId, Long scopeId) {
+        markExecutionCancelled(executionId);
+        cleanupCancelledExecution(executionId, scopeId);
+    }
+
+    /**
+     * 仅落库取消状态（execution + running steps + source），不触碰已生成产物。
+     * 必须先于线程中断调用：pipeline 在检查点读取 execution 状态并主动退出。
+     */
+    public void markExecutionCancelled(Long executionId) {
         ExecutionModel exec = executionTracker.getExecution(executionId);
         if (exec == null) return;
 
@@ -136,13 +149,22 @@ public class IngestService {
             }
         }
 
-        cleanupHalfProducts(scopeId, exec.getSourceId());
-
         SourceDO sourceDO = sourceMapper.selectById(exec.getSourceId());
         if (sourceDO != null && !"processed".equals(sourceDO.getStatus())) {
             sourceDO.setStatus("cancelled");
             sourceMapper.updateById(sourceDO);
         }
+    }
+
+    /**
+     * 清理取消执行的半成品产物。必须在线程中断（cancelAndRemoveFuture）之后调用，
+     * 否则仍在运行的 pipeline 线程会在清理后继续写入，产生游离半成品。
+     */
+    public void cleanupCancelledExecution(Long executionId, Long scopeId) {
+        ExecutionModel exec = executionTracker.getExecution(executionId);
+        Long sourceId = exec != null ? exec.getSourceId() : null;
+
+        cleanupHalfProducts(scopeId, sourceId);
 
         rateLimitService.unregisterPipeline(scopeId);
 
@@ -216,7 +238,8 @@ public class IngestService {
                 log.info("Deleted half-product page: id={}, title={}, path={}", page.getId(), page.getTitle(), filePath);
             } else {
                 wikiPageSourceMapper.deleteById(rel.getId());
-                page.setSourceCount(page.getSourceCount() - 1);
+                Integer sourceCount = page.getSourceCount();
+                page.setSourceCount(sourceCount != null && sourceCount > 0 ? sourceCount - 1 : 0);
                 wikiPageMapper.updateById(page);
                 log.info("Removed source relation from multi-source page: pageId={}, sourceId={}", page.getId(), sourceId);
             }

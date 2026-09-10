@@ -110,6 +110,9 @@ public enum ErrorCode {
     LINT_SUPPLEMENT_REQUIRED("LINT_002", "Supplement content is required"),
     LINT_APPROVE_LINK_FAILED("LINT_003", "Failed to approve link: {0}"),
     LINT_MISSING_PARAMS("LINT_004", "Missing required parameters: sourceTitle and targetTitle"),
+    LINT_FINDING_NOT_FOUND("LINT_005", "Finding not found: {0}"),
+    LINT_INVALID_STATUS_TRANSITION("LINT_006", "Invalid finding status transition: {0} -> {1}"),
+    LINT_EXECUTION_NOT_FOUND("LINT_007", "Lint execution not found: {0}"),
 
     // Bootstrap additional
     BOOTSTRAP_INVALID_CAPABILITIES("BOOT_007", "No valid capability domains found"),

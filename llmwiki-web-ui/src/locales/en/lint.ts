@@ -73,6 +73,7 @@ export default {
   actionApproveLinks: 'Batch Approve Links',
   actionRejectLinks: 'Batch Reject Links',
   actionDismiss: 'Batch Dismiss',
+  actionRetryFailed: 'Batch Retry',
   actionDefault: 'Batch Action',
   // LintView status labels
   statusOpen: 'Open',
@@ -111,6 +112,7 @@ export default {
   impactRejectLinks: 'Reject {0} suggested links, issue will remain open',
   impactRejectLinksNoCount: 'Reject suggested links',
   impactDismiss: 'Mark as ignored, will be moved to archived',
+  impactRetryFailed: 'Will be re-queued for retry, status returns to open',
   // LintView risk hints
   riskRollback: 'Batch rollback is a high-risk operation. After rollback, these items will be re-diagnosed in the next check, and page health may regress.',
   riskApprove: 'Adopting will modify related page content. Adopted AI fixes can be traced or rolled back in the "AI Processed" tab.',
@@ -164,6 +166,7 @@ export default {
   selectedCountLabel: '{0} selected',
   batchFixCount: 'Batch Fix ({0})',
   batchRefreshCount: 'Batch Refresh ({0})',
+  batchRetryFailedCount: 'Batch Retry ({0})',
   batchApproveCount: 'Batch Approve ({0})',
   batchRejectCount: 'Batch Reject ({0})',
   batchRollbackCount: 'Batch Rollback ({0})',
@@ -184,6 +187,7 @@ export default {
   approveBtn: 'Approve',
   rejectBtn: 'Reject',
   reassessBtn: 'Reassess',
+  retryFailedBtn: 'Retry',
   paginationInfo: 'Page {0} / {1}, {2} items',
   pageSizeSuffix: '/ page',
   enrichDialogTitle: 'Enrich Page Content',

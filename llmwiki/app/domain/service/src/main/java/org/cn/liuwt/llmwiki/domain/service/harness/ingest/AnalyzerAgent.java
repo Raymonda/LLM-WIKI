@@ -67,10 +67,14 @@ public class AnalyzerAgent {
 
     @PostConstruct
     public void initExecutor() {
-        if (analysisPoolSize != 8) {
-            ((java.util.concurrent.ThreadPoolExecutor) analysisExecutor).setCorePoolSize(analysisPoolSize);
-            ((java.util.concurrent.ThreadPoolExecutor) analysisExecutor).setMaximumPoolSize(analysisPoolSize);
+        if (analysisPoolSize <= 0 || analysisPoolSize == 8) {
+            return;
         }
+        java.util.concurrent.ThreadPoolExecutor tpe = (java.util.concurrent.ThreadPoolExecutor) analysisExecutor;
+        // 先抬高上界再设下界，避免 core > max 触发 IllegalArgumentException
+        tpe.setMaximumPoolSize(Math.max(tpe.getMaximumPoolSize(), analysisPoolSize));
+        tpe.setCorePoolSize(analysisPoolSize);
+        tpe.setMaximumPoolSize(analysisPoolSize);
     }
 
     @PreDestroy

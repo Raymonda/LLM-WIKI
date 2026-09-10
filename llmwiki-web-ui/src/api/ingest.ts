@@ -72,6 +72,14 @@ export function resumeIngest(executionId: number, guidance?: string): Promise<Ex
   return api.post(`/ingest/${executionId}/resume`, { guidance })
 }
 
+export function executeIngest(executionId: number, guidance?: string): Promise<void> {
+  return api.post(`/ingest/${executionId}/execute`, { guidance })
+}
+
+export function reanalyzeIngest(executionId: number, guidance?: string): Promise<void> {
+  return api.post(`/ingest/${executionId}/reanalyze`, { guidance })
+}
+
 export function listActiveIngest(scopeId: number): Promise<ExecutionInfo[]> {
   return api.get('/ingest/active', { params: { scopeId } })
 }

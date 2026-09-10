@@ -1077,7 +1077,7 @@ public class WikiFileServiceImpl implements WikiFileService {
         List<LintFindingDO> openFindings = lintFindingMapper.selectList(
             new LambdaQueryWrapper<LintFindingDO>()
                 .eq(LintFindingDO::getScopeId, scopeId)
-                .in(LintFindingDO::getStatus, "open", "awaiting_approval", "repairing", "deferred")
+                .in(LintFindingDO::getStatus, "open", "awaiting_approval", "repairing", "deferred", "failed")
                 .isNull(LintFindingDO::getArchivedAt)
                 .ne(LintFindingDO::getFindingType, "schema_violation")
                 .eq(LintFindingDO::getAssetId, pageId)

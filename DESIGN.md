@@ -176,6 +176,8 @@ step → ... → done                           （Phase 2 完成，SSE 关闭�
 - `phase1_done`：execution 状态变为 `awaiting_confirmation`，前端跳转审阅态
 - `done`：执行 completed/failed 时触发，关闭连接
 
+**暂停语义**：`analyzing` / `executing` 期间可暂停（`paused`），恢复后回到对应阶段继续；审阅态（`review`）为决策等待点，不提供暂停操作。
+
 **进度估时**：后端返回每步骤 baseline 耗时画像，前端优先使用实测均值，冷启动 fallback 默认常量；整体进度单调递增，审阅态锁定在下界等待用户决策。
 
 **全局悬浮进度**：用户在分析/执行期间离开 `/ingest` 路由时，右下角悬浮卡片持续可见（阶段标签 + 文件名 + 环形进度 + 剩余时间），点击跳回完整视图。

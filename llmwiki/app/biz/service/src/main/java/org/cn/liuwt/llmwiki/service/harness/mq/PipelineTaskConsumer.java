@@ -161,6 +161,9 @@ public class PipelineTaskConsumer implements RocketMQListener<PipelineTaskMessag
             case PipelineTaskMessage.TYPE_INGEST_EXECUTE:
                 ingestService.runIngestExecution(msg.getExecutionId(), msg.getScopeId(), msg.getSourceId(), msg.getGuidance());
                 break;
+            case PipelineTaskMessage.TYPE_INGEST_REANALYZE:
+                ingestService.reanalyzeIngest(msg.getExecutionId(), msg.getScopeId(), msg.getSourceId(), msg.getGuidance());
+                break;
             case PipelineTaskMessage.TYPE_INGEST_RESUME:
                 ExecutionModel execution = executionTracker.getExecution(msg.getExecutionId());
                 if (execution != null) {

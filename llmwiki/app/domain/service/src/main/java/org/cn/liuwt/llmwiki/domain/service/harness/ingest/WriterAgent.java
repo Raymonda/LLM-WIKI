@@ -122,12 +122,13 @@ public class WriterAgent {
 
     @PostConstruct
     public void initExecutor() {
-        if (writerPoolCoreSize != 6) {
-            writerExecutor.setCorePoolSize(writerPoolCoreSize);
-        }
-        if (writerPoolMaxSize != 16) {
-            writerExecutor.setMaximumPoolSize(writerPoolMaxSize);
-        }
+        int core = writerPoolCoreSize > 0 ? writerPoolCoreSize : 6;
+        int max = writerPoolMaxSize > 0 ? writerPoolMaxSize : 16;
+        if (max < core) max = core;
+        // 先抬高上界再设下界，避免中间态出现 core > max 触发 IllegalArgumentException
+        writerExecutor.setMaximumPoolSize(Math.max(writerExecutor.getMaximumPoolSize(), max));
+        writerExecutor.setCorePoolSize(core);
+        writerExecutor.setMaximumPoolSize(max);
     }
 
     @PreDestroy
@@ -2034,11 +2035,12 @@ public class WriterAgent {
     }
 
     private String generatePagePath(String metadataJson) {
+        String trimmed = metadataJson != null ? metadataJson.trim() : null;
         String title;
-        if (metadataJson != null && metadataJson.contains("title")) {
-            title = extractJsonField(metadataJson, "title");
+        if (trimmed != null && trimmed.startsWith("{")) {
+            title = extractJsonField(trimmed, "title");
         } else {
-            title = metadataJson != null ? metadataJson : "untitled";
+            title = trimmed;
         }
         if (title == null || title.isEmpty()) title = "untitled";
         String normalized = title.toLowerCase();

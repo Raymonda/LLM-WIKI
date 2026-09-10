@@ -3,7 +3,7 @@ import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { ShieldCheck, XCircle, Zap, RotateCcw, ThumbsUp, ThumbsDown, Link2, EyeOff, RefreshCw, AlertTriangle, X, ListChecks, Sparkles, Archive, FileWarning, Swords, Unlink } from 'lucide-vue-next'
-import { useLintStore, type MainTabKey } from '@/stores/lint'
+import { useLintStore, isAutoResolvable, type MainTabKey } from '@/stores/lint'
 import { type LintFindingInfo } from '@/api/lint'
 import HealthDashboard from './components/HealthDashboard.vue'
 import LintTrigger from './components/LintTrigger.vue'
@@ -26,6 +26,7 @@ const mainTabs: { key: MainTabKey; icon: any; labelKey: string }[] = [
 ]
 
 onMounted(async () => {
+  store.startVisibilityWatcher()
   const hasActive = await store.checkActiveLint()
   if (!hasActive) {
     store.loadOverview()
@@ -49,7 +50,9 @@ function showBatchPreviewDialog(action: string) {
   const filtered = store.selectedItems.filter(f => {
     switch (action) {
       case 'autoResolve':
-        return f.status === 'open' && f.findingType !== 'stale' && f.findingType !== 'orphan' && f.findingType !== 'content_thin' && f.findingType !== 'schema_compliance'
+        return isAutoResolvable(f)
+      case 'retryFailed':
+        return f.status === 'failed'
       case 'triggerRepair':
         return f.status === 'open' && f.findingType === 'stale'
       case 'approve':
@@ -102,6 +105,9 @@ function confirmBatchAction() {
     case 'dismiss':
       store.batchDismissSelected()
       break
+    case 'retryFailed':
+      store.batchRetryFailedSelected()
+      break
   }
 }
 
@@ -113,7 +119,8 @@ const actionLabelKeyMap: Record<string, string> = {
   rollback: 'lint.actionRollback',
   approveLinks: 'lint.actionApproveLinks',
   rejectLinks: 'lint.actionRejectLinks',
-  dismiss: 'lint.actionDismiss'
+  dismiss: 'lint.actionDismiss',
+  retryFailed: 'lint.actionRetryFailed'
 }
 
 function getActionLabel(action: string): string {
@@ -129,7 +136,8 @@ function getActionIcon(action: string) {
     rollback: RotateCcw,
     approveLinks: Link2,
     rejectLinks: X,
-    dismiss: EyeOff
+    dismiss: EyeOff,
+    retryFailed: RefreshCw
   }
   return icons[action] || AlertTriangle
 }
@@ -208,6 +216,8 @@ function getImpactDescription(action: string, f: LintFindingInfo): string {
         : t('lint.impactRejectLinksNoCount')
     case 'dismiss':
       return t('lint.impactDismiss')
+    case 'retryFailed':
+      return t('lint.impactRetryFailed')
     default:
       return ''
   }
@@ -364,12 +374,13 @@ function getRiskHint(action: string): { icon: any; tone: 'error' | 'warning' | '
       :main-tab-counts="store.mainTabCounts"
       :page-size="store.pageSize"
       :page-size-options="store.pageSizeOptions"
-      :has-selected-open="store.hasSelectedOpen"
       :has-selected-awaiting="store.hasSelectedAwaiting"
       :has-selected-auto-resolved="store.hasSelectedAutoResolved"
       :has-selected-stale="store.hasSelectedStale"
       :has-selected-crossref-open="store.hasSelectedCrossrefOpen"
-      :selected-open-count="store.selectedOpenCount"
+      :has-selected-failed="store.hasSelectedFailed"
+      :selected-auto-resolvable-count="store.selectedAutoResolvableCount"
+      :selected-failed-count="store.selectedFailedCount"
       :selected-awaiting-count="store.selectedAwaitingCount"
       :selected-stale-count="store.selectedStaleCount"
       :selected-auto-resolved-count="store.selectedAutoResolvedCount"
@@ -389,6 +400,7 @@ function getRiskHint(action: string): { icon: any; tone: 'error' | 'warning' | '
       @reject="store.rejectFindingAction"
       @rollback="store.rollbackFindingAction"
       @retry-orphan="store.retryOrphanFixAction"
+      @retry-failed="store.retryFailedFindingAction"
       @enrich-page="store.enrichPageAction"
       @approve-link="store.approveLinkAction"
       @reject-link="store.rejectLinkAction"

@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { CheckCircle2, AlertTriangle, Loader2, X, XCircle, ArrowRight, PauseCircle } from 'lucide-vue-next'
+import { CheckCircle2, AlertTriangle, Loader2, X, XCircle, ArrowRight, PauseCircle, ClipboardCheck } from 'lucide-vue-next'
 import { useIngestProgressStore } from '@/stores/ingestProgress'
 import { formatRemaining } from '@/views/ingest/progressModel'
 
@@ -27,6 +27,8 @@ const mostUrgentTask = computed(() => {
   if (cancelled) return cancelled
   const running = all.find(t => t.isPhaseRunning)
   if (running) return running
+  const reviewing = all.find(t => t.currentStep === 'review')
+  if (reviewing) return reviewing
   const paused = all.find(t => t.status === 'paused')
   if (paused) return paused
   const done = all.find(t => t.currentStep === 'done')
@@ -57,6 +59,7 @@ const displayPhase = computed(() => {
   if (t.status === 'cancelled') return 'cancelled'
   if (t.status === 'paused') return 'paused'
   if (t.currentStep === 'done') return 'done'
+  if (t.currentStep === 'review') return 'review'
   if (t.isPhaseRunning) return 'executing'
   return 'analyzing'
 })
@@ -73,6 +76,7 @@ const phaseLabel = computed(() => {
     case 'failed': return t('ingest.floatingPhaseFailed')
     case 'cancelled': return t('ingest.floatingPhaseCancelled')
     case 'paused': return t('ingest.floatingPhasePaused')
+    case 'review': return t('ingest.floatingPhaseReview')
     default: return t('ingest.floatingPhaseDefault')
   }
 })
@@ -84,6 +88,7 @@ const secondaryLine = computed(() => {
   if (task.status === 'cancelled') return t('ingest.floatingPhaseCancelled')
   if (task.status === 'failed' || task.status === 'budget_exhausted') return task.pipelineError || t('ingest.floatingFailedRetry')
   if (task.currentStep === 'done') return t('ingest.floatingClickResult')
+  if (task.currentStep === 'review') return t('ingest.floatingReviewHint')
   if (store.currentTip) return store.currentTip
   return store.remainingMs > 0 ? t('ingest.floatingRemaining', [formatRemaining(store.remainingMs)]) : ''
 })
@@ -147,6 +152,9 @@ watch(show, (visible) => {
         </template>
         <template v-else-if="displayPhase === 'paused'">
           <PauseCircle :size="20" />
+        </template>
+        <template v-else-if="displayPhase === 'review'">
+          <ClipboardCheck :size="20" />
         </template>
         <template v-else-if="displayPhase === 'failed'">
           <AlertTriangle :size="20" />
@@ -375,6 +383,15 @@ watch(show, (visible) => {
 
 .ingest-floating--paused {
   border-color: var(--warning);
+}
+
+.ingest-floating--review .ingest-floating__indicator {
+  background: var(--accent-light);
+  color: var(--accent-primary);
+}
+
+.ingest-floating--review {
+  border-color: var(--accent-primary);
 }
 
 @keyframes ingest-floating-spin {
