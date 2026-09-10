@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class IngestOrchestratorBatchContextTest {
 
     @Test
-    void shouldTreatExecutionWithBatchIdAsBatchContext() {
+    void shouldTreatAsBatchContextWhenExecutionHasBatchId() {
         ExecutionModel execution = new ExecutionModel();
         execution.setBatchId(9L);
 
@@ -17,14 +17,14 @@ class IngestOrchestratorBatchContextTest {
     }
 
     @Test
-    void shouldNotTreatStandaloneExecutionAsBatchContext() {
+    void shouldNotTreatAsBatchContextWhenBatchIdIsNull() {
         ExecutionModel execution = new ExecutionModel();
 
         assertFalse(IngestOrchestrator.isBatchContext(execution));
     }
 
     @Test
-    void shouldNotTreatNullExecutionAsBatchContext() {
+    void shouldNotTreatAsBatchContextWhenExecutionIsNull() {
         assertFalse(IngestOrchestrator.isBatchContext(null));
     }
 }
