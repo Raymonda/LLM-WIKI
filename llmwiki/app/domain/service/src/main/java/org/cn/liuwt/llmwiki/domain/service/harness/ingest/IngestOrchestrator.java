@@ -73,6 +73,10 @@ public class IngestOrchestrator {
     @Autowired
     private ExecutionEventLogService executionEventLog;
 
+    public static boolean isBatchContext(ExecutionModel execution) {
+        return execution != null && execution.getBatchId() != null;
+    }
+
     public ExecutionModel runIngestPipelineWithExecution(Long executionId, Long scopeId, Long sourceId, String guidance) {
         return runIngestPipelineWithExecution(executionId, scopeId, sourceId, guidance, false);
     }
@@ -98,6 +102,8 @@ public class IngestOrchestrator {
 
             executionTracker.updateExecutionStatus(executionId, "running");
 
+            boolean suppressAll = suppressNotifications || isBatchContext(executionTracker.getExecution(executionId));
+
             SourceDO sourceDO = sourceMapper.selectOne(
                 new LambdaQueryWrapper<SourceDO>()
                     .eq(SourceDO::getId, sourceId)
@@ -108,7 +114,7 @@ public class IngestOrchestrator {
             }
 
             String sourceName = sourceDO.getName() != null ? sourceDO.getName() : "未知文件";
-            if (!suppressNotifications) {
+            if (!suppressAll) {
                 notificationService.createNotification(scopeId, "ingest_started",
                     "正在处理 — " + sourceName,
                     "AI 正在分析文档内容，完成后可查看生成的知识页面",
@@ -116,7 +122,7 @@ public class IngestOrchestrator {
             }
 
             IngestContext context = new IngestContext(scopeId, sourceId, executionId, guidance);
-            context.setSuppressNotifications(suppressNotifications);
+            context.setSuppressNotifications(suppressAll);
             int totalTokens = 0;
             executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_START,
                 java.util.Map.of("pipeline", "ingest", "scopeId", scopeId, "sourceId", sourceId));
@@ -138,7 +144,7 @@ public class IngestOrchestrator {
 
                 checkStopped(executionId);
                 if (stopAfterPhase1) {
-                    return awaitReview(executionId, scopeId, sourceName, totalTokens, suppressNotifications);
+                    return awaitReview(executionId, scopeId, sourceName, totalTokens, suppressAll);
                 }
                 ExecutionStepModel writeStep = createAndRunStep(executionId, IngestStep.WRITE, scopeId);
                 long writeStart = System.currentTimeMillis();
@@ -186,7 +192,7 @@ public class IngestOrchestrator {
                 } else {
                     completeContent = "文档已成功处理，知识页面已更新";
                 }
-                if (!suppressNotifications) {
+                if (!suppressAll) {
                     notificationService.createNotification(scopeId, "ingest_completed",
                         "处理完成 — " + sourceName,
                         completeContent,
@@ -283,7 +289,7 @@ public class IngestOrchestrator {
 
             ExecutionModel execution = executionTracker.getExecution(executionId);
             if (execution == null || (!"failed".equals(execution.getStatus()) && !"paused".equals(execution.getStatus())
-                    && !"awaiting_confirmation".equals(execution.getStatus()))) {
+                    && !"awaiting_confirmation".equals(execution.getStatus()) && !"running".equals(execution.getStatus()))) {
                 throw new RuntimeException("该执行当前状态无法继续分析阶段");
             }
 
@@ -364,7 +370,8 @@ public class IngestOrchestrator {
                 }
 
                 checkStopped(executionId);
-                return awaitReview(executionId, scopeId, sourceDO.getName() != null ? sourceDO.getName() : "未知文件", totalTokens, false);
+                boolean suppressAll = isBatchContext(executionTracker.getExecution(executionId));
+                return awaitReview(executionId, scopeId, sourceDO.getName() != null ? sourceDO.getName() : "未知文件", totalTokens, suppressAll);
 
             } catch (Exception e) {
                 boolean isStopped = isStoppedOrPaused(executionId) || Thread.currentThread().isInterrupted();
@@ -401,7 +408,7 @@ public class IngestOrchestrator {
         try {
             ExecutionModel execution = executionTracker.getExecution(executionId);
             if (execution == null || (!"failed".equals(execution.getStatus()) && !"paused".equals(execution.getStatus())
-                    && !"awaiting_confirmation".equals(execution.getStatus()))) {
+                    && !"awaiting_confirmation".equals(execution.getStatus()) && !"running".equals(execution.getStatus()))) {
                 throw new RuntimeException("该执行当前状态无法继续执行阶段");
             }
 

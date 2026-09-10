@@ -306,6 +306,7 @@ public class ExecutionTrackerImpl implements ExecutionTracker {
         model.setTotalTokens(executionDO.getTotalTokens());
         model.setErrorMessage(executionDO.getErrorMessage());
         model.setNodeId(executionDO.getNodeId());
+        model.setBatchId(executionDO.getBatchId());
         return model;
     }
 
