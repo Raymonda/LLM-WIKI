@@ -253,7 +253,7 @@ public class IngestBatchService {
         int safePage = page > 0 ? page : 1;
         int total = items.size();
         int from = (int) Math.min((long) (safePage - 1) * safeSize, total);
-        int to = Math.min(from + safeSize, total);
+        int to = (int) Math.min((long) from + safeSize, total);
         List<IngestBatchItemInfo> pageItems = new ArrayList<>();
         for (ExecutionDO item : items.subList(from, to)) {
             pageItems.add(toItemInfo(item, sourceMap.get(item.getSourceId()), analyzeOutputs.get(item.getId())));

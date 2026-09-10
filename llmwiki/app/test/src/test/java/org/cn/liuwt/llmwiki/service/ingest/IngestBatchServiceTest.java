@@ -55,7 +55,7 @@ class IngestBatchServiceTest {
     }
 
     @Test
-    void shouldSkipSourcesWithActiveExecutionAndReportWarnings() {
+    void shouldSkipSourcesAndReportWarningsWhenSourceHasActiveExecution() {
         ReflectionTestUtils.setField(service, "maxBatchSize", 50);
         SourceDO ok = new SourceDO();
         ok.setId(1L);
