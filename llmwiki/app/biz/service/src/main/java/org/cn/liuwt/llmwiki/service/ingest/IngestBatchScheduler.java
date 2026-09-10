@@ -54,6 +54,7 @@ public class IngestBatchScheduler {
     private final ConcurrentHashMap<Long, ReentrantLock> scopeLocks = new ConcurrentHashMap<>();
 
     public void kick(Long scopeId) {
+        if (scopeId == null) return;
         ReentrantLock lock = scopeLocks.computeIfAbsent(scopeId, k -> new ReentrantLock());
         if (!lock.tryLock()) {
             return;

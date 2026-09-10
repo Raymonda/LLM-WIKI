@@ -26,6 +26,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -51,10 +52,12 @@ class IngestBatchSchedulerTest {
     @Test
     void shouldNotDispatchWhenAnotherIngestRunningInScope() {
         when(executionMapper.selectCount(any())).thenReturn(1L);
+        lenient().when(executionMapper.selectList(any())).thenReturn(List.of(executionWithId(1L, "pending", null)));
 
         scheduler.kick(10L);
 
         verify(executionMapper, never()).update(any(), any());
+        verify(dispatcher, never()).dispatch(any(), any(), any(), any(), any(), any());
     }
 
     @Test
