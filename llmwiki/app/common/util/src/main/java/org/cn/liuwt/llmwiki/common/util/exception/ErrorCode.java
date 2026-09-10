@@ -96,6 +96,9 @@ public enum ErrorCode {
     INGEST_CANCELLED_CANNOT_RESUME("INGEST_008", "Cancelled execution cannot be resumed, please start a new ingest"),
     INGEST_INVALID_STATUS_RESUME("INGEST_009", "Only failed or paused executions can be resumed, current status: {0}"),
     INGEST_EXECUTION_NOT_FOUND("INGEST_010", "Execution record not found"),
+    INGEST_BATCH_EMPTY("INGEST_011", "No valid sources in batch"),
+    INGEST_BATCH_TOO_LARGE("INGEST_012", "Batch size exceeds limit: {0}"),
+    INGEST_BATCH_NOT_FOUND("INGEST_013", "Batch not found"),
 
     // Scope additional
     SCOPE_REQUEST_NOT_FOUND("SCOPE_120", "Join request not found"),
