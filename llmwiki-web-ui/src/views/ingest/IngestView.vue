@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter, useRoute } from 'vue-router'
 import { uploadSource, listSources, deleteSource, type SourceInfo, type DuplicateInfo } from '@/api/source'
@@ -245,6 +245,7 @@ async function handleFileUpload(event: Event) {
     }
     if (files.length === 1 && uploaded.length === 1) {
       store.pendingUploadedFile = uploaded[0]
+      batchPendingSources.value = []
     } else if (uploaded.length > 0) {
       batchPendingSources.value = uploaded
     }
@@ -436,12 +437,31 @@ async function createBatchFromPending() {
   })
 }
 
+watch(
+  () => route.query.batch,
+  (val) => {
+    const id = Number(val)
+    if (Number.isInteger(id) && id > 0) {
+      if (id === batchStore.selectedBatchId) return
+      batchStore.selectBatch(id).catch((e) => {
+        console.error('Failed to open batch from route:', e)
+        exitBatch()
+      })
+    } else if (batchStore.selectedBatchId != null) {
+      batchStore.selectBatch(null)
+    }
+  },
+)
+
 onMounted(async () => {
   await loadExistingSources()
   await batchStore.refreshInbox().catch((e) => console.error('Failed to refresh batch inbox:', e))
   const batchId = Number(route.query.batch)
-  if (Number.isFinite(batchId) && batchId > 0) {
-    await openBatch(batchId)
+  if (Number.isInteger(batchId) && batchId > 0) {
+    await openBatch(batchId).catch((e) => {
+      console.error('Failed to open batch from route:', e)
+      exitBatch()
+    })
   }
 })
 </script>
