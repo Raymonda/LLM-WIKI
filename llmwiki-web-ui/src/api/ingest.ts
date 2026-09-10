@@ -12,6 +12,7 @@ export interface ExecutionInfo {
   totalTokens: number | null
   errorMessage: string | null
   sourceName: string | null
+  batchId?: number | null
   baselineProfile?: Record<string, number> | null
 }
 
@@ -82,4 +83,82 @@ export function reanalyzeIngest(executionId: number, guidance?: string): Promise
 
 export function listActiveIngest(scopeId: number): Promise<ExecutionInfo[]> {
   return api.get('/ingest/active', { params: { scopeId } })
+}
+
+export interface IngestBatchItemInfo {
+  executionId: number
+  sourceId: number | null
+  sourceName: string | null
+  sourceFormat: string | null
+  status: string
+  totalTokens: number | null
+  errorMessage: string | null
+  analyzeOutput: string | null
+  guidance: string | null
+  startedAt: string | null
+  completedAt: string | null
+  phase1Completed: boolean | null
+}
+
+export interface IngestBatchInfo {
+  batchId: number
+  status: string
+  totalCount: number
+  guidance: string | null
+  createdAt: string | null
+  completedAt: string | null
+  awaitingCount: number
+  pendingCount: number
+  runningCount: number
+  confirmedCount: number
+  completedCount: number
+  failedCount: number
+  cancelledCount: number
+}
+
+export interface IngestBatchDetailInfo {
+  batchId: number
+  status: string
+  totalCount: number
+  guidance: string | null
+  createdAt: string | null
+  completedAt: string | null
+  items: IngestBatchItemInfo[]
+  total: number
+  page: number
+  size: number
+}
+
+export interface IngestBatchCreateResponse {
+  batchId: number
+  executionIds: number[]
+  warnings: string[]
+}
+
+export function createIngestBatch(scopeId: number, sourceIds: number[], guidance?: string): Promise<IngestBatchCreateResponse> {
+  return api.post('/ingest/batch', { scopeId, sourceIds, guidance })
+}
+
+export function fetchBatchInbox(scopeId: number): Promise<IngestBatchInfo[]> {
+  return api.get('/ingest/batch/inbox', { params: { scopeId } })
+}
+
+export function getBatchDetail(batchId: number, page = 1, size = 20): Promise<IngestBatchDetailInfo> {
+  return api.get(`/ingest/batch/${batchId}`, { params: { page, size } })
+}
+
+export function confirmBatchItems(batchId: number, executionIds?: number[]): Promise<number> {
+  return api.post(`/ingest/batch/${batchId}/confirm`, { executionIds: executionIds ?? null })
+}
+
+export function pauseBatch(batchId: number): Promise<void> {
+  return api.post(`/ingest/batch/${batchId}/pause`)
+}
+
+export function resumeBatch(batchId: number): Promise<void> {
+  return api.post(`/ingest/batch/${batchId}/resume`)
+}
+
+export function cancelBatch(batchId: number): Promise<void> {
+  return api.post(`/ingest/batch/${batchId}/cancel`)
 }
