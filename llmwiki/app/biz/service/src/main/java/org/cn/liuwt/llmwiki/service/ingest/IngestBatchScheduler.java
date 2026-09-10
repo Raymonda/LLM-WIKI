@@ -242,6 +242,8 @@ public class IngestBatchScheduler {
         long cancelled = items.stream().filter(i -> "cancelled".equals(i.getStatus())).count();
         long completed = items.stream().filter(i -> "completed".equals(i.getStatus())).count();
 
+        if ("cancelled".equals(batch.getStatus())) return;
+
         if (awaiting >= 1 && batch.getTotalCount() != null && batch.getTotalCount() > 1) {
             notifyOnce(batch, "ingest_batch_awaiting", "可以开始审阅了",
                 "本批已有 " + awaiting + " 份分析完成，可前往审阅收件箱集中确认");
@@ -250,7 +252,7 @@ public class IngestBatchScheduler {
             "pending".equals(i.getStatus()) || "running".equals(i.getStatus()) || "paused".equals(i.getStatus()));
         if (analysisDone) {
             String detail = batch.getTotalCount() != null && batch.getTotalCount() == 1
-                ? "分析完成，待审阅"
+                ? (awaiting >= 1 ? "分析完成，待审阅" : "分析失败")
                 : "本批 " + awaiting + " 份待审阅、" + failed + " 份失败";
             notifyOnce(batch, "ingest_batch_analyzed", "分析完成", detail);
         }

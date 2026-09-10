@@ -168,6 +168,33 @@ class IngestBatchSchedulerNotificationTest {
         verify(notificationService).createNotification(eq(7L), eq("ingest_batch_analyzed"), any(), eq("本批 2 份待审阅、0 份失败"), eq(10L), isNull(), isNull(), eq(9L));
     }
 
+    @Test
+    void shouldNotNotifyWhenBatchAlreadyCancelled() {
+        IngestBatchDO batch = newBatch(2);
+        batch.setStatus("cancelled");
+        when(batchMapper.selectById(9L)).thenReturn(batch);
+        ExecutionDO cancelled1 = item(1L, "cancelled", 9L);
+        ExecutionDO cancelled2 = item(2L, "cancelled", 9L);
+        when(executionMapper.selectList(any())).thenReturn(List.of(cancelled1, cancelled2));
+
+        scheduler.handleBatchSettlement(cancelled2);
+
+        verify(notificationService, never()).createNotification(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void shouldReportFailureWhenSingleItemBatchFails() {
+        IngestBatchDO batch = newBatch(1);
+        when(batchMapper.selectById(9L)).thenReturn(batch);
+        ExecutionDO failed = item(1L, "failed", 9L);
+        when(executionMapper.selectList(any())).thenReturn(List.of(failed));
+        when(notificationMapper.selectCount(any())).thenReturn(0L);
+
+        scheduler.handleBatchSettlement(failed);
+
+        verify(notificationService).createNotification(eq(7L), eq("ingest_batch_analyzed"), any(), eq("分析失败"), eq(10L), isNull(), isNull(), eq(9L));
+    }
+
     private IngestBatchDO newBatch(int totalCount) {
         IngestBatchDO batch = new IngestBatchDO();
         batch.setId(9L);

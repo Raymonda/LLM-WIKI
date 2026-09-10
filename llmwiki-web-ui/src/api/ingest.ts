@@ -143,7 +143,7 @@ export function fetchBatchInbox(scopeId: number): Promise<IngestBatchInfo[]> {
   return api.get('/ingest/batch/inbox', { params: { scopeId } })
 }
 
-export function getBatchDetail(batchId: number, page = 1, size = 20): Promise<IngestBatchDetailInfo> {
+export function getBatchDetail(batchId: number, page = 1, size = 50): Promise<IngestBatchDetailInfo> {
   return api.get(`/ingest/batch/${batchId}`, { params: { page, size } })
 }
 

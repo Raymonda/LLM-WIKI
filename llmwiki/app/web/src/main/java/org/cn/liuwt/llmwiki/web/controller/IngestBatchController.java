@@ -52,7 +52,7 @@ public class IngestBatchController {
     @GetMapping("/{id}")
     public Result<IngestBatchDetailInfo> getBatchDetail(@PathVariable Long id,
                                                         @RequestParam(defaultValue = "1") int page,
-                                                        @RequestParam(defaultValue = "20") int size) {
+                                                        @RequestParam(defaultValue = "50") int size) {
         assertBatchReadable(ingestBatchService.getBatch(id));
         return Result.success(ingestBatchService.getBatchDetail(id, page, size));
     }

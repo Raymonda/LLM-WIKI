@@ -251,7 +251,7 @@ public class IngestBatchService {
         Map<Long, String> analyzeOutputs = loadAnalyzeOutputs(executionIds);
         Map<Long, Boolean> phase1Flags = loadPhase1Completed(executionIds);
 
-        int safeSize = size > 0 ? size : 20;
+        int safeSize = size > 0 ? size : 50;
         int safePage = page > 0 ? page : 1;
         int total = items.size();
         int from = (int) Math.min((long) (safePage - 1) * safeSize, total);
