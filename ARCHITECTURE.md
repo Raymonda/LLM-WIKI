@@ -160,7 +160,7 @@ IndexerAgent（索引）
 - **准确性约束**：STRUCTURED（权威性）文档的实体/摘要页中，规则条款与量化指标必须 blockquote 引用原文并标注章节
 - **实时进度**：全程 SSE 推送步骤级进度，支持暂停 / 取消
 - **批次调度**：≥2 份资料以 `ingest_batch` 聚合提交，由 `IngestBatchScheduler` 串行推进（分析 / 写入共用同一闸门）；分析完成的资料停留在 `awaiting_confirmation`（收件箱待审阅），用户确认后置 `confirmed` 重新入队，调度器按序推进 Phase 2
-- **批次状态分离**：批次状态（`active/paused/completed/cancelled`）与逐份 execution 状态独立；批次通知在首批待审阅 / 全部分析完成 / 全部处理完成三节点发出，逐份通知在批次内被抑制（`IngestOrchestrator`）
+- **批次状态分离**：批次状态（`active/paused/completed/cancelled`）与逐份 execution 状态独立；批次通知在首批待审阅 / 全部分析完成 / 全部处理完成三节点发出，批次内逐份通知被抑制（`IngestOrchestrator`：`ingest_started` / `ingest_completed` / `ingest_awaiting_confirmation` 三类；单项失败保留逐条通知，异常需可达）
 
 ### 6.2 Query — 查询问答（运行时）
 
