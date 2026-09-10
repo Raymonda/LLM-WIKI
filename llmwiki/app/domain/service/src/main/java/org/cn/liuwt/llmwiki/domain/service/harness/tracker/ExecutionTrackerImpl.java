@@ -35,6 +35,7 @@ public class ExecutionTrackerImpl implements ExecutionTracker {
     /**
      * 启动清扫：上次进程退出（重启/崩溃）会留下 running/pending 状态的孤儿执行记录，
      * 前端会一直转圈。启动时统一标记为 failed 并中断其 running 步骤。
+     * 排队中的 pending ingest（已入队待分发）不清扫，由批次调度器恢复扫描接管。
      */
     @jakarta.annotation.PostConstruct
     public void sweepOrphanedExecutions() {
@@ -42,22 +43,31 @@ public class ExecutionTrackerImpl implements ExecutionTracker {
             new LambdaQueryWrapper<ExecutionDO>()
                 .in(ExecutionDO::getStatus, "running", "pending")
         );
-        if (orphaned.isEmpty()) {
+        List<ExecutionDO> sweepable = new java.util.ArrayList<>();
+        for (ExecutionDO executionDO : orphaned) {
+            boolean queuedIngest = "pending".equals(executionDO.getStatus()) && "ingest".equals(executionDO.getType());
+            if (!queuedIngest) {
+                sweepable.add(executionDO);
+            }
+        }
+        if (sweepable.isEmpty()) {
             return;
         }
         LocalDateTime now = LocalDateTime.now();
-        for (ExecutionDO executionDO : orphaned) {
+        for (ExecutionDO executionDO : sweepable) {
             executionDO.setStatus("failed");
             executionDO.setErrorMessage("服务重启，执行中断");
             executionDO.setCompletedAt(now);
             executionMapper.updateById(executionDO);
         }
+        List<Long> sweptIds = sweepable.stream().map(ExecutionDO::getId).toList();
         executionStepMapper.update(null,
             new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ExecutionStepDO>()
+                .in(ExecutionStepDO::getExecutionId, sweptIds)
                 .in(ExecutionStepDO::getStatus, "running", "pending")
                 .set(ExecutionStepDO::getStatus, "failed")
         );
-        log.warn("Startup sweep: marked {} orphaned execution(s) as failed", orphaned.size());
+        log.warn("Startup sweep: marked {} orphaned execution(s) as failed", sweepable.size());
     }
 
     @Override
