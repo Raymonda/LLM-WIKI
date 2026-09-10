@@ -73,7 +73,7 @@ class ExecutionTrackerSweepTest {
     }
 
     @Test
-    void shouldScopeStepSweepToSweptExecutions() {
+    void shouldScopeStepSweepToSweptExecutionsWhenSweepingOrphans() {
         ExecutionDO interruptedRun = new ExecutionDO();
         interruptedRun.setId(2L);
         interruptedRun.setType("ingest");
