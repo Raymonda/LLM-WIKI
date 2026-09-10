@@ -111,6 +111,11 @@ public class ExecutionTrackerImpl implements ExecutionTracker {
     public void failExecution(Long executionId, String errorMessage) {
         ExecutionDO executionDO = executionMapper.selectById(executionId);
         if (executionDO != null) {
+            String current = executionDO.getStatus();
+            if ("completed".equals(current) || "cancelled".equals(current) || "failed".equals(current) || "paused".equals(current)) {
+                log.info("Execution {} already in state {}, skipping failExecution", executionId, current);
+                return;
+            }
             executionDO.setStatus("failed");
             executionDO.setErrorMessage(errorMessage);
             executionDO.setCompletedAt(LocalDateTime.now());
@@ -200,8 +205,9 @@ public class ExecutionTrackerImpl implements ExecutionTracker {
     public void completeExecution(Long executionId, Integer totalTokens) {
         ExecutionDO executionDO = executionMapper.selectById(executionId);
         if (executionDO != null) {
-            if ("completed".equals(executionDO.getStatus())) {
-                log.info("Execution {} already completed, skipping duplicate completeExecution", executionId);
+            String current = executionDO.getStatus();
+            if ("completed".equals(current) || "failed".equals(current) || "cancelled".equals(current)) {
+                log.info("Execution {} already in terminal state {}, skipping completeExecution", executionId, current);
                 return;
             }
             executionDO.setStatus("completed");

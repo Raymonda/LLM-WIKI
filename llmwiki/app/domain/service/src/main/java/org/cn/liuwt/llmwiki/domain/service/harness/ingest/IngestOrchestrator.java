@@ -90,112 +90,114 @@ public class IngestOrchestrator {
         if (!rateLimitService.tryAcquireConcurrent(scopeId)) {
             throw new RuntimeException("并发执行数量已达上限，请等待当前任务完成后再试。scopeId=" + scopeId);
         }
-        if (!rateLimitService.checkCallRate(scopeId)) {
-            rateLimitService.releaseConcurrent(scopeId);
-            throw new RuntimeException("AI 调用频率过高，请稍后再试。scopeId=" + scopeId);
-        }
-
-        executionTracker.updateExecutionStatus(executionId, "running");
-
-        SourceDO sourceDO = sourceMapper.selectOne(
-            new LambdaQueryWrapper<SourceDO>()
-                .eq(SourceDO::getId, sourceId)
-                .eq(SourceDO::getScopeId, scopeId)
-        );
-        if (sourceDO == null) {
-            rateLimitService.releaseConcurrent(scopeId);
-            throw new RuntimeException("Source not found: id=" + sourceId + ", scopeId=" + scopeId);
-        }
-
-        String sourceName = sourceDO.getName() != null ? sourceDO.getName() : "未知文件";
-        if (!suppressNotifications) {
-            notificationService.createNotification(scopeId, "ingest_started",
-                "正在处理 — " + sourceName,
-                "AI 正在分析文档内容，完成后可查看生成的知识页面",
-                scopeId, null, executionId);
-        }
-
-        IngestContext context = new IngestContext(scopeId, sourceId, executionId, guidance);
-        context.setSuppressNotifications(suppressNotifications);
-        int totalTokens = 0;
-        executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_START,
-            java.util.Map.of("pipeline", "ingest", "scopeId", scopeId, "sourceId", sourceId));
 
         try {
-            ExecutionStepModel uploadStep = createAndRunStep(executionId, IngestStep.UPLOAD, scopeId);
-            long uploadStart = System.currentTimeMillis();
-            int uploadTokens = uploadAgent.process(context);
-            completeStep(uploadStep, scopeId, context.toParseOutputJson(sourceDO), estimateTokens(context.getSourceContent()) + uploadTokens, System.currentTimeMillis() - uploadStart);
-            totalTokens += uploadTokens;
-
-            ExecutionStepModel analyzeStep = createAndRunStep(executionId, IngestStep.ANALYZE, scopeId);
-            long analyzeStart = System.currentTimeMillis();
-            int analyzeTokens = analysisAgent.process(context, executionId, analyzeStep.getId());
-            applyTargetTitleToContext(context);
-            completeStep(analyzeStep, scopeId, buildAnalysisOutput(context), analyzeTokens, System.currentTimeMillis() - analyzeStart);
-            totalTokens += analyzeTokens;
-
-            ExecutionStepModel writeStep = createAndRunStep(executionId, IngestStep.WRITE, scopeId);
-            long writeStart = System.currentTimeMillis();
-            int writeTokens = writingAgent.process(context);
-            completeStep(writeStep, scopeId, context.toWriteOutputJson(), writeTokens, System.currentTimeMillis() - writeStart);
-            totalTokens += writeTokens;
-
-            ExecutionStepModel completeStep = createAndRunStep(executionId, IngestStep.COMPLETE, scopeId);
-            long completeStart = System.currentTimeMillis();
-            int completeTokens = completionAgent.process(context);
-            completeStep(completeStep, scopeId, buildCompletionOutput(context), completeTokens, System.currentTimeMillis() - completeStart);
-            totalTokens += completeTokens;
-
-        } catch (Exception e) {
-            boolean isStopped = isStoppedOrPaused(executionId) || Thread.currentThread().isInterrupted();
-            if (isStopped) {
-                log.warn("Ingest pipeline stopped/paused: executionId={}, scopeId={}, sourceId={}", executionId, scopeId, sourceId);
-                rateLimitService.releaseConcurrent(scopeId);
-                throw e;
+            if (!rateLimitService.checkCallRate(scopeId)) {
+                throw new RuntimeException("AI 调用频率过高，请稍后再试。scopeId=" + scopeId);
             }
-            log.error("Ingest pipeline failed: executionId={}, scopeId={}, sourceId={}", executionId, scopeId, sourceId, e);
-            executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.ERROR,
-                java.util.Map.of("pipeline", "ingest",
-                    "message", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
-            executionTracker.failExecution(executionId, e.getMessage());
-            rateLimitService.releaseConcurrent(scopeId);
+
+            executionTracker.updateExecutionStatus(executionId, "running");
+
+            SourceDO sourceDO = sourceMapper.selectOne(
+                new LambdaQueryWrapper<SourceDO>()
+                    .eq(SourceDO::getId, sourceId)
+                    .eq(SourceDO::getScopeId, scopeId)
+            );
+            if (sourceDO == null) {
+                throw new RuntimeException("Source not found: id=" + sourceId + ", scopeId=" + scopeId);
+            }
+
+            String sourceName = sourceDO.getName() != null ? sourceDO.getName() : "未知文件";
             if (!suppressNotifications) {
-                notificationService.createNotification(scopeId, "ingest_failed",
-                    "处理失败 — " + sourceName,
-                    e.getMessage() != null ? e.getMessage() : "未知错误，请重试",
+                notificationService.createNotification(scopeId, "ingest_started",
+                    "正在处理 — " + sourceName,
+                    "AI 正在分析文档内容，完成后可查看生成的知识页面",
                     scopeId, null, executionId);
             }
-            throw e;
-        }
 
-        ExecutionModel exec = executionTracker.getExecution(executionId);
-        if (!"failed".equals(exec.getStatus()) && !"cancelled".equals(exec.getStatus()) && !"paused".equals(exec.getStatus())) {
-            executionTracker.completeExecution(executionId, totalTokens);
-            globalSummaryService.invalidate(scopeId);
-            executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_END,
-                java.util.Map.of("pipeline", "ingest", "status", "completed", "totalTokens", totalTokens));
-        } else {
-            executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_END,
-                java.util.Map.of("pipeline", "ingest", "status", exec.getStatus()));
-        }
-        rateLimitService.releaseConcurrent(scopeId);
+            IngestContext context = new IngestContext(scopeId, sourceId, executionId, guidance);
+            context.setSuppressNotifications(suppressNotifications);
+            int totalTokens = 0;
+            executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_START,
+                java.util.Map.of("pipeline", "ingest", "scopeId", scopeId, "sourceId", sourceId));
 
-        int conflictCount = context.getConflictAnnotations() != null ? context.getConflictAnnotations().size() : 0;
-        String completeContent;
-        if (conflictCount > 0) {
-            completeContent = "处理完成，发现 " + conflictCount + " 处知识矛盾，建议查看";
-        } else {
-            completeContent = "文档已成功处理，知识页面已更新";
-        }
-        if (!suppressNotifications) {
-            notificationService.createNotification(scopeId, "ingest_completed",
-                "处理完成 — " + sourceName,
-                completeContent,
-                scopeId, null, executionId);
-        }
+            try {
+                ExecutionStepModel uploadStep = createAndRunStep(executionId, IngestStep.UPLOAD, scopeId);
+                long uploadStart = System.currentTimeMillis();
+                int uploadTokens = uploadAgent.process(context);
+                completeStep(uploadStep, scopeId, context.toParseOutputJson(sourceDO), estimateTokens(context.getSourceContent()) + uploadTokens, System.currentTimeMillis() - uploadStart);
+                totalTokens += uploadTokens;
 
-        return executionTracker.getExecution(executionId);
+                checkStopped(executionId);
+                ExecutionStepModel analyzeStep = createAndRunStep(executionId, IngestStep.ANALYZE, scopeId);
+                long analyzeStart = System.currentTimeMillis();
+                int analyzeTokens = analysisAgent.process(context, executionId, analyzeStep.getId());
+                applyTargetTitleToContext(context);
+                completeStep(analyzeStep, scopeId, buildAnalysisOutput(context), analyzeTokens, System.currentTimeMillis() - analyzeStart);
+                totalTokens += analyzeTokens;
+
+                checkStopped(executionId);
+                ExecutionStepModel writeStep = createAndRunStep(executionId, IngestStep.WRITE, scopeId);
+                long writeStart = System.currentTimeMillis();
+                int writeTokens = writingAgent.process(context);
+                completeStep(writeStep, scopeId, context.toWriteOutputJson(), writeTokens, System.currentTimeMillis() - writeStart);
+                totalTokens += writeTokens;
+
+                checkStopped(executionId);
+                ExecutionStepModel completeStep = createAndRunStep(executionId, IngestStep.COMPLETE, scopeId);
+                long completeStart = System.currentTimeMillis();
+                int completeTokens = completionAgent.process(context);
+                completeStep(completeStep, scopeId, buildCompletionOutput(context), completeTokens, System.currentTimeMillis() - completeStart);
+                totalTokens += completeTokens;
+
+            } catch (Exception e) {
+                boolean isStopped = isStoppedOrPaused(executionId) || Thread.currentThread().isInterrupted();
+                if (isStopped) {
+                    log.warn("Ingest pipeline stopped/paused: executionId={}, scopeId={}, sourceId={}", executionId, scopeId, sourceId);
+                    throw e;
+                }
+                log.error("Ingest pipeline failed: executionId={}, scopeId={}, sourceId={}", executionId, scopeId, sourceId, e);
+                executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.ERROR,
+                    java.util.Map.of("pipeline", "ingest",
+                        "message", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+                executionTracker.failExecution(executionId, e.getMessage());
+                if (!suppressNotifications) {
+                    notificationService.createNotification(scopeId, "ingest_failed",
+                        "处理失败 — " + sourceName,
+                        e.getMessage() != null ? e.getMessage() : "未知错误，请重试",
+                        scopeId, null, executionId);
+                }
+                throw e;
+            }
+
+            ExecutionModel exec = executionTracker.getExecution(executionId);
+            if (!"failed".equals(exec.getStatus()) && !"cancelled".equals(exec.getStatus()) && !"paused".equals(exec.getStatus())) {
+                executionTracker.completeExecution(executionId, totalTokens);
+                globalSummaryService.invalidate(scopeId);
+                executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_END,
+                    java.util.Map.of("pipeline", "ingest", "status", "completed", "totalTokens", totalTokens));
+                int conflictCount = context.getConflictAnnotations() != null ? context.getConflictAnnotations().size() : 0;
+                String completeContent;
+                if (conflictCount > 0) {
+                    completeContent = "处理完成，发现 " + conflictCount + " 处知识矛盾，建议查看";
+                } else {
+                    completeContent = "文档已成功处理，知识页面已更新";
+                }
+                if (!suppressNotifications) {
+                    notificationService.createNotification(scopeId, "ingest_completed",
+                        "处理完成 — " + sourceName,
+                        completeContent,
+                        scopeId, null, executionId);
+                }
+            } else {
+                executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_END,
+                    java.util.Map.of("pipeline", "ingest", "status", exec.getStatus()));
+            }
+
+            return executionTracker.getExecution(executionId);
+        } finally {
+            rateLimitService.releaseConcurrent(scopeId);
+        }
     }
 
     public ExecutionModel runIngestAnalysisWithExecution(Long executionId, Long scopeId, Long sourceId, String guidance) {
@@ -222,119 +224,128 @@ public class IngestOrchestrator {
         if (!rateLimitService.tryAcquireConcurrent(scopeId)) {
             throw new RuntimeException("并发执行数量已达上限");
         }
-        if (!rateLimitService.checkCallRate(scopeId)) {
-            rateLimitService.releaseConcurrent(scopeId);
-            throw new RuntimeException("AI 调用频率过高");
-        }
-
-        ExecutionModel execution = executionTracker.getExecution(executionId);
-        if (execution == null || (!"failed".equals(execution.getStatus()) && !"paused".equals(execution.getStatus()))) {
-            rateLimitService.releaseConcurrent(scopeId);
-            throw new RuntimeException("该执行不在失败或暂停状态，无法续传");
-        }
-
-        SourceDO sourceDO = sourceMapper.selectOne(
-            new LambdaQueryWrapper<SourceDO>()
-                .eq(SourceDO::getId, sourceId)
-                .eq(SourceDO::getScopeId, scopeId)
-        );
-        if (sourceDO == null) {
-            rateLimitService.releaseConcurrent(scopeId);
-            throw new RuntimeException("Source not found: id=" + sourceId + ", scopeId=" + scopeId);
-        }
-
-        List<ExecutionStepModel> steps = executionTracker.listSteps(executionId);
-        ExecutionStepModel resumeStep = null;
-        for (ExecutionStepModel step : steps) {
-            String normalized = IngestStep.normalizeStepName(step.getStepName());
-            if ("UPLOAD".equals(normalized) || "ANALYZE".equals(normalized)) {
-                if (!"completed".equals(step.getStatus()) && !"paused".equals(step.getStatus())) {
-                    resumeStep = step;
-                    break;
-                }
-            }
-        }
-
-        if (resumeStep == null) {
-            rateLimitService.releaseConcurrent(scopeId);
-            throw new RuntimeException("Phase1 所有步骤已完成，无法续传分析阶段");
-        }
-
-        log.info("Resuming Phase1 from step {} for executionId={}", resumeStep.getStepName(), executionId);
-
-        IngestContext context = IngestContext.reconstructFromSteps(scopeId, sourceId, executionId, guidance, steps, storageProvider, sourceDO);
-
-        executionTracker.resetStepForRetry(resumeStep.getId());
-        executionTracker.resetExecutionForRetry(executionId);
-
-        int totalTokens = 0;
-        for (ExecutionStepModel step : steps) {
-            if ("completed".equals(step.getStatus())) {
-                totalTokens += step.getTokensUsed() != null ? step.getTokensUsed() : 0;
-            }
-        }
 
         try {
-            String resumeNormalized = IngestStep.normalizeStepName(resumeStep.getStepName());
-
-            if ("UPLOAD".equals(resumeNormalized)) {
-                executionTracker.updateStepStatus(resumeStep.getId(), "running");
-                long start = System.currentTimeMillis();
-                int tokens = uploadAgent.process(context);
-                completeStep(resumeStep, scopeId, context.toParseOutputJson(sourceDO), estimateTokens(context.getSourceContent()) + tokens, System.currentTimeMillis() - start);
-                totalTokens += tokens;
-
-                steps = executionTracker.listSteps(executionId);
-                ExecutionStepModel analyzeStep = findOrCreateStep(executionId, IngestStep.ANALYZE, scopeId, steps, steps.size() + 1);
-                long analyzeStart = System.currentTimeMillis();
-                int analyzeTokens = analysisAgent.process(context, executionId, analyzeStep.getId());
-                applyTargetTitleToContext(context);
-                completeStep(analyzeStep, scopeId, buildAnalysisOutput(context), analyzeTokens, System.currentTimeMillis() - analyzeStart);
-                totalTokens += analyzeTokens;
-
-            } else if ("ANALYZE".equals(resumeNormalized)) {
-                executionTracker.updateStepStatus(resumeStep.getId(), "running");
-                long analyzeStart = System.currentTimeMillis();
-                int analyzeTokens = analysisAgent.process(context, executionId, resumeStep.getId());
-                applyTargetTitleToContext(context);
-                completeStep(resumeStep, scopeId, buildAnalysisOutput(context), analyzeTokens, System.currentTimeMillis() - analyzeStart);
-                totalTokens += analyzeTokens;
+            if (!rateLimitService.checkCallRate(scopeId)) {
+                throw new RuntimeException("AI 调用频率过高");
             }
 
-            steps = executionTracker.listSteps(executionId);
-            ExecutionStepModel writeStep = findOrCreateStep(executionId, IngestStep.WRITE, scopeId, steps, steps.size() + 1);
-            long writeStart = System.currentTimeMillis();
-            int writeTokens = writingAgent.process(context);
-            completeStep(writeStep, scopeId, context.toWriteOutputJson(), writeTokens, System.currentTimeMillis() - writeStart);
-            totalTokens += writeTokens;
+            ExecutionModel execution = executionTracker.getExecution(executionId);
+            if (execution == null || (!"failed".equals(execution.getStatus()) && !"paused".equals(execution.getStatus()))) {
+                throw new RuntimeException("该执行不在失败或暂停状态，无法续传");
+            }
 
-            steps = executionTracker.listSteps(executionId);
-            ExecutionStepModel completeStepObj = findOrCreateStep(executionId, IngestStep.COMPLETE, scopeId, steps, steps.size() + 1);
-            long completeStart = System.currentTimeMillis();
-            int completeTokens = completionAgent.process(context);
-            completeStep(completeStepObj, scopeId, buildCompletionOutput(context), completeTokens, System.currentTimeMillis() - completeStart);
-            totalTokens += completeTokens;
+            SourceDO sourceDO = sourceMapper.selectOne(
+                new LambdaQueryWrapper<SourceDO>()
+                    .eq(SourceDO::getId, sourceId)
+                    .eq(SourceDO::getScopeId, scopeId)
+            );
+            if (sourceDO == null) {
+                throw new RuntimeException("Source not found: id=" + sourceId + ", scopeId=" + scopeId);
+            }
 
-        } catch (Exception e) {
-            boolean isStopped = isStoppedOrPaused(executionId) || Thread.currentThread().isInterrupted();
-            if (isStopped) {
-                log.warn("Phase1 resume stopped/paused: executionId={}", executionId);
-                rateLimitService.releaseConcurrent(scopeId);
+            List<ExecutionStepModel> steps = executionTracker.listSteps(executionId);
+            ExecutionStepModel resumeStep = null;
+            for (ExecutionStepModel step : steps) {
+                String normalized = IngestStep.normalizeStepName(step.getStepName());
+                if ("UPLOAD".equals(normalized) || "ANALYZE".equals(normalized)) {
+                    if (!"completed".equals(step.getStatus())) {
+                        resumeStep = step;
+                        break;
+                    }
+                }
+            }
+
+            if (resumeStep == null) {
+                boolean uploadCompleted = steps.stream().anyMatch(s ->
+                    IngestStep.UPLOAD.name().equals(IngestStep.normalizeStepName(s.getStepName()))
+                        && "completed".equals(s.getStatus()));
+                boolean analyzeCompleted = steps.stream().anyMatch(s ->
+                    IngestStep.ANALYZE.name().equals(IngestStep.normalizeStepName(s.getStepName()))
+                        && "completed".equals(s.getStatus()));
+                if (analyzeCompleted || !uploadCompleted) {
+                    throw new RuntimeException("Phase1 所有步骤已完成，无法续传分析阶段");
+                }
+                resumeStep = findOrCreateStep(executionId, IngestStep.ANALYZE, scopeId, steps, steps.size() + 1);
+            }
+
+            log.info("Resuming Phase1 from step {} for executionId={}", resumeStep.getStepName(), executionId);
+
+            IngestContext context = IngestContext.reconstructFromSteps(scopeId, sourceId, executionId, guidance, steps, storageProvider, sourceDO);
+
+            executionTracker.resetStepForRetry(resumeStep.getId());
+            executionTracker.resetExecutionForRetry(executionId);
+
+            int totalTokens = 0;
+            for (ExecutionStepModel step : steps) {
+                if ("completed".equals(step.getStatus())) {
+                    totalTokens += step.getTokensUsed() != null ? step.getTokensUsed() : 0;
+                }
+            }
+
+            try {
+                String resumeNormalized = IngestStep.normalizeStepName(resumeStep.getStepName());
+
+                if ("UPLOAD".equals(resumeNormalized)) {
+                    executionTracker.updateStepStatus(resumeStep.getId(), "running");
+                    long start = System.currentTimeMillis();
+                    int tokens = uploadAgent.process(context);
+                    completeStep(resumeStep, scopeId, context.toParseOutputJson(sourceDO), estimateTokens(context.getSourceContent()) + tokens, System.currentTimeMillis() - start);
+                    totalTokens += tokens;
+
+                    checkStopped(executionId);
+                    steps = executionTracker.listSteps(executionId);
+                    ExecutionStepModel analyzeStep = findOrCreateStep(executionId, IngestStep.ANALYZE, scopeId, steps, steps.size() + 1);
+                    long analyzeStart = System.currentTimeMillis();
+                    int analyzeTokens = analysisAgent.process(context, executionId, analyzeStep.getId());
+                    applyTargetTitleToContext(context);
+                    completeStep(analyzeStep, scopeId, buildAnalysisOutput(context), analyzeTokens, System.currentTimeMillis() - analyzeStart);
+                    totalTokens += analyzeTokens;
+
+                } else if ("ANALYZE".equals(resumeNormalized)) {
+                    executionTracker.updateStepStatus(resumeStep.getId(), "running");
+                    long analyzeStart = System.currentTimeMillis();
+                    int analyzeTokens = analysisAgent.process(context, executionId, resumeStep.getId());
+                    applyTargetTitleToContext(context);
+                    completeStep(resumeStep, scopeId, buildAnalysisOutput(context), analyzeTokens, System.currentTimeMillis() - analyzeStart);
+                    totalTokens += analyzeTokens;
+                }
+
+                checkStopped(executionId);
+                steps = executionTracker.listSteps(executionId);
+                ExecutionStepModel writeStep = findOrCreateStep(executionId, IngestStep.WRITE, scopeId, steps, steps.size() + 1);
+                long writeStart = System.currentTimeMillis();
+                int writeTokens = writingAgent.process(context);
+                completeStep(writeStep, scopeId, context.toWriteOutputJson(), writeTokens, System.currentTimeMillis() - writeStart);
+                totalTokens += writeTokens;
+
+                checkStopped(executionId);
+                steps = executionTracker.listSteps(executionId);
+                ExecutionStepModel completeStepObj = findOrCreateStep(executionId, IngestStep.COMPLETE, scopeId, steps, steps.size() + 1);
+                long completeStart = System.currentTimeMillis();
+                int completeTokens = completionAgent.process(context);
+                completeStep(completeStepObj, scopeId, buildCompletionOutput(context), completeTokens, System.currentTimeMillis() - completeStart);
+                totalTokens += completeTokens;
+
+            } catch (Exception e) {
+                boolean isStopped = isStoppedOrPaused(executionId) || Thread.currentThread().isInterrupted();
+                if (isStopped) {
+                    log.warn("Phase1 resume stopped/paused: executionId={}", executionId);
+                    throw e;
+                }
+                log.error("Phase1 resume failed: executionId={}", executionId, e);
+                executionTracker.failExecution(executionId, e.getMessage());
                 throw e;
             }
-            log.error("Phase1 resume failed: executionId={}", executionId, e);
-            executionTracker.failExecution(executionId, e.getMessage());
+
+            ExecutionModel exec = executionTracker.getExecution(executionId);
+            if (!"failed".equals(exec.getStatus()) && !"cancelled".equals(exec.getStatus()) && !"paused".equals(exec.getStatus())) {
+                executionTracker.completeExecution(executionId, totalTokens);
+            }
+            return executionTracker.getExecution(executionId);
+        } finally {
             rateLimitService.releaseConcurrent(scopeId);
-            throw e;
         }
-
-        rateLimitService.releaseConcurrent(scopeId);
-
-        ExecutionModel exec = executionTracker.getExecution(executionId);
-        if (!"failed".equals(exec.getStatus()) && !"cancelled".equals(exec.getStatus())) {
-            executionTracker.completeExecution(executionId, totalTokens);
-        }
-        return executionTracker.getExecution(executionId);
     }
 
     public ExecutionModel resumeIngestExecution(Long executionId, Long scopeId, Long sourceId, String guidance) {
@@ -354,108 +365,122 @@ public class IngestOrchestrator {
             throw new RuntimeException("并发执行数量已达上限");
         }
 
-        ExecutionModel execution = executionTracker.getExecution(executionId);
-        if (execution == null || (!"failed".equals(execution.getStatus()) && !"paused".equals(execution.getStatus()))) {
-            rateLimitService.releaseConcurrent(scopeId);
-            throw new RuntimeException("该执行不在失败或暂停状态，无法续传");
-        }
-
-        List<ExecutionStepModel> steps = executionTracker.listSteps(executionId);
-        for (ExecutionStepModel step : steps) {
-            String normalized = IngestStep.normalizeStepName(step.getStepName());
-            if ("UPLOAD".equals(normalized) || "ANALYZE".equals(normalized)) {
-                if (!"completed".equals(step.getStatus()) && !"paused".equals(step.getStatus())) {
-                    rateLimitService.releaseConcurrent(scopeId);
-                    throw new RuntimeException("Phase1 存在未完成步骤，请先续传分析阶段");
-                }
-            }
-        }
-
-        SourceDO sourceDO = sourceMapper.selectOne(
-            new LambdaQueryWrapper<SourceDO>()
-                .eq(SourceDO::getId, sourceId)
-                .eq(SourceDO::getScopeId, scopeId)
-        );
-        if (sourceDO == null) {
-            rateLimitService.releaseConcurrent(scopeId);
-            throw new RuntimeException("Source not found: id=" + sourceId + ", scopeId=" + scopeId);
-        }
-
-        ExecutionStepModel resumeStep = null;
-        for (ExecutionStepModel step : steps) {
-            String normalized = IngestStep.normalizeStepName(step.getStepName());
-            if ("WRITE".equals(normalized) || "COMPLETE".equals(normalized)) {
-                if (!"completed".equals(step.getStatus()) && !"paused".equals(step.getStatus())) {
-                    resumeStep = step;
-                    break;
-                }
-            }
-        }
-
-        if (resumeStep == null) {
-            rateLimitService.releaseConcurrent(scopeId);
-            throw new RuntimeException("Phase2 所有步骤已完成，无法续传执行阶段");
-        }
-
-        log.info("Resuming Phase2 from step {} for executionId={}", resumeStep.getStepName(), executionId);
-
-        IngestContext context = IngestContext.reconstructFromSteps(scopeId, sourceId, executionId, guidance, steps, storageProvider, sourceDO);
-        applyTargetTitleToContext(context);
-
-        executionTracker.resetStepForRetry(resumeStep.getId());
-        executionTracker.resetExecutionForRetry(executionId);
-
-        int totalTokens = 0;
-        for (ExecutionStepModel step : steps) {
-            if ("completed".equals(step.getStatus())) {
-                totalTokens += step.getTokensUsed() != null ? step.getTokensUsed() : 0;
-            }
-        }
-
         try {
-            String resumeNormalized = IngestStep.normalizeStepName(resumeStep.getStepName());
-
-            if ("WRITE".equals(resumeNormalized)) {
-                executionTracker.updateStepStatus(resumeStep.getId(), "running");
-                long writeStart = System.currentTimeMillis();
-                int writeTokens = writingAgent.process(context);
-                completeStep(resumeStep, scopeId, context.toWriteOutputJson(), writeTokens, System.currentTimeMillis() - writeStart);
-                totalTokens += writeTokens;
-
-                steps = executionTracker.listSteps(executionId);
-                ExecutionStepModel completeStepObj = findOrCreateStep(executionId, IngestStep.COMPLETE, scopeId, steps, steps.size() + 1);
-                long completeStart = System.currentTimeMillis();
-                int completeTokens = completionAgent.process(context);
-                completeStep(completeStepObj, scopeId, buildCompletionOutput(context), completeTokens, System.currentTimeMillis() - completeStart);
-                totalTokens += completeTokens;
-
-            } else if ("COMPLETE".equals(resumeNormalized)) {
-                executionTracker.updateStepStatus(resumeStep.getId(), "running");
-                long completeStart = System.currentTimeMillis();
-                int completeTokens = completionAgent.process(context);
-                completeStep(resumeStep, scopeId, buildCompletionOutput(context), completeTokens, System.currentTimeMillis() - completeStart);
-                totalTokens += completeTokens;
+            ExecutionModel execution = executionTracker.getExecution(executionId);
+            if (execution == null || (!"failed".equals(execution.getStatus()) && !"paused".equals(execution.getStatus()))) {
+                throw new RuntimeException("该执行不在失败或暂停状态，无法续传");
             }
 
-        } catch (Exception e) {
-            boolean isStopped = isStoppedOrPaused(executionId) || Thread.currentThread().isInterrupted();
-            if (isStopped) {
-                log.warn("Phase2 resume stopped: executionId={}", executionId);
-                rateLimitService.releaseConcurrent(scopeId);
+            List<ExecutionStepModel> steps = executionTracker.listSteps(executionId);
+            for (ExecutionStepModel step : steps) {
+                String normalized = IngestStep.normalizeStepName(step.getStepName());
+                if ("UPLOAD".equals(normalized) || "ANALYZE".equals(normalized)) {
+                    if (!"completed".equals(step.getStatus())) {
+                        throw new RuntimeException("Phase1 存在未完成步骤，请先续传分析阶段");
+                    }
+                }
+            }
+
+            SourceDO sourceDO = sourceMapper.selectOne(
+                new LambdaQueryWrapper<SourceDO>()
+                    .eq(SourceDO::getId, sourceId)
+                    .eq(SourceDO::getScopeId, scopeId)
+            );
+            if (sourceDO == null) {
+                throw new RuntimeException("Source not found: id=" + sourceId + ", scopeId=" + scopeId);
+            }
+
+            ExecutionStepModel resumeStep = null;
+            for (ExecutionStepModel step : steps) {
+                String normalized = IngestStep.normalizeStepName(step.getStepName());
+                if ("WRITE".equals(normalized) || "COMPLETE".equals(normalized)) {
+                    if (!"completed".equals(step.getStatus())) {
+                        resumeStep = step;
+                        break;
+                    }
+                }
+            }
+
+            int totalTokens = 0;
+            for (ExecutionStepModel step : steps) {
+                if ("completed".equals(step.getStatus())) {
+                    totalTokens += step.getTokensUsed() != null ? step.getTokensUsed() : 0;
+                }
+            }
+
+            if (resumeStep == null) {
+                boolean writeCompleted = steps.stream().anyMatch(s ->
+                    IngestStep.WRITE.name().equals(IngestStep.normalizeStepName(s.getStepName()))
+                        && "completed".equals(s.getStatus()));
+                if (!writeCompleted) {
+                    resumeStep = findOrCreateStep(executionId, IngestStep.WRITE, scopeId, steps, steps.size() + 1);
+                } else {
+                    boolean completeCompleted = steps.stream().anyMatch(s ->
+                        IngestStep.COMPLETE.name().equals(IngestStep.normalizeStepName(s.getStepName()))
+                            && "completed".equals(s.getStatus()));
+                    if (completeCompleted) {
+                        executionTracker.resetExecutionForRetry(executionId);
+                        executionTracker.completeExecution(executionId, totalTokens);
+                        return executionTracker.getExecution(executionId);
+                    }
+                    resumeStep = findOrCreateStep(executionId, IngestStep.COMPLETE, scopeId, steps, steps.size() + 1);
+                }
+            }
+
+            log.info("Resuming Phase2 from step {} for executionId={}", resumeStep.getStepName(), executionId);
+
+            IngestContext context = IngestContext.reconstructFromSteps(scopeId, sourceId, executionId, guidance, steps, storageProvider, sourceDO);
+            applyTargetTitleToContext(context);
+
+            executionTracker.resetStepForRetry(resumeStep.getId());
+            executionTracker.resetExecutionForRetry(executionId);
+
+            try {
+                checkStopped(executionId);
+                String resumeNormalized = IngestStep.normalizeStepName(resumeStep.getStepName());
+
+                if ("WRITE".equals(resumeNormalized)) {
+                    executionTracker.updateStepStatus(resumeStep.getId(), "running");
+                    long writeStart = System.currentTimeMillis();
+                    int writeTokens = writingAgent.process(context);
+                    completeStep(resumeStep, scopeId, context.toWriteOutputJson(), writeTokens, System.currentTimeMillis() - writeStart);
+                    totalTokens += writeTokens;
+
+                    checkStopped(executionId);
+                    steps = executionTracker.listSteps(executionId);
+                    ExecutionStepModel completeStepObj = findOrCreateStep(executionId, IngestStep.COMPLETE, scopeId, steps, steps.size() + 1);
+                    long completeStart = System.currentTimeMillis();
+                    int completeTokens = completionAgent.process(context);
+                    completeStep(completeStepObj, scopeId, buildCompletionOutput(context), completeTokens, System.currentTimeMillis() - completeStart);
+                    totalTokens += completeTokens;
+
+                } else if ("COMPLETE".equals(resumeNormalized)) {
+                    executionTracker.updateStepStatus(resumeStep.getId(), "running");
+                    long completeStart = System.currentTimeMillis();
+                    int completeTokens = completionAgent.process(context);
+                    completeStep(resumeStep, scopeId, buildCompletionOutput(context), completeTokens, System.currentTimeMillis() - completeStart);
+                    totalTokens += completeTokens;
+                }
+
+            } catch (Exception e) {
+                boolean isStopped = isStoppedOrPaused(executionId) || Thread.currentThread().isInterrupted();
+                if (isStopped) {
+                    log.warn("Phase2 resume stopped: executionId={}", executionId);
+                    throw e;
+                }
+                log.error("Phase2 resume failed: executionId={}", executionId, e);
+                executionTracker.failExecution(executionId, e.getMessage());
                 throw e;
             }
-            log.error("Phase2 resume failed: executionId={}", executionId, e);
-            executionTracker.failExecution(executionId, e.getMessage());
-            rateLimitService.releaseConcurrent(scopeId);
-            throw e;
-        }
 
-        ExecutionModel exec = executionTracker.getExecution(executionId);
-        if (!"failed".equals(exec.getStatus()) && !"cancelled".equals(exec.getStatus()) && !"paused".equals(exec.getStatus())) {
-            executionTracker.completeExecution(executionId, totalTokens);
+            ExecutionModel exec = executionTracker.getExecution(executionId);
+            if (!"failed".equals(exec.getStatus()) && !"cancelled".equals(exec.getStatus()) && !"paused".equals(exec.getStatus())) {
+                executionTracker.completeExecution(executionId, totalTokens);
+            }
+            return executionTracker.getExecution(executionId);
+        } finally {
+            rateLimitService.releaseConcurrent(scopeId);
         }
-        rateLimitService.releaseConcurrent(scopeId);
-        return executionTracker.getExecution(executionId);
     }
 
     private String buildAnalysisOutput(IngestContext context) {
@@ -468,8 +493,7 @@ public class IngestOrchestrator {
             String metadata = context.getMetadataJson();
             if (metadata != null && !metadata.isEmpty()) {
                 try {
-                    com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                    output.put("metadata", mapper.readTree(metadata));
+                    output.put("metadata", MAPPER.readTree(metadata));
                 } catch (Exception e) {
                     output.put("metadata", metadata);
                 }
@@ -488,7 +512,7 @@ public class IngestOrchestrator {
             if (context.getEntityRelationshipSummary() != null) {
                 output.put("entityRelationshipSummaryLength", context.getEntityRelationshipSummary().length());
             }
-            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(output);
+            return MAPPER.writeValueAsString(output);
         } catch (Exception e) {
             log.warn("buildAnalysisOutput failed: {}", e.getMessage());
             return context.getMetadataJson() != null ? context.getMetadataJson() : "{}";
@@ -519,7 +543,7 @@ public class IngestOrchestrator {
             if (!context.getSchemaGapHints().isEmpty()) {
                 output.put("schemaGaps", context.getSchemaGapHints());
             }
-            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(output);
+            return MAPPER.writeValueAsString(output);
         } catch (Exception e) {
             log.warn("buildCompletionOutput failed: {}", e.getMessage());
             return "{\"status\":\"completed\"}";
@@ -575,6 +599,12 @@ public class IngestOrchestrator {
     private boolean isStoppedOrPaused(Long executionId) {
         ExecutionModel current = executionTracker.getExecution(executionId);
         return current != null && ("cancelled".equals(current.getStatus()) || "paused".equals(current.getStatus()));
+    }
+
+    private void checkStopped(Long executionId) {
+        if (isStoppedOrPaused(executionId) || Thread.currentThread().isInterrupted()) {
+            throw new RuntimeException("Execution stopped or paused: executionId=" + executionId);
+        }
     }
 
     private static final ObjectMapper MAPPER = new ObjectMapper();

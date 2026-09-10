@@ -83,6 +83,10 @@ public class ExecutionNodeRegistry {
         return executionFutures.remove(executionId);
     }
 
+    public boolean removeFutureIfSame(Long executionId, Future<?> expected) {
+        return executionFutures.remove(executionId, expected);
+    }
+
     public Future<?> cancelAndRemoveFuture(Long executionId) {
         Future<?> future = executionFutures.remove(executionId);
         if (future != null && !future.isDone()) {

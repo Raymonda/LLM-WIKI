@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Service
 public class IngestOrchestrationService {
@@ -69,14 +70,22 @@ public class IngestOrchestrationService {
     }
 
     private void submitLocalTask(Long executionId, Runnable task) {
+        AtomicReference<Future<?>> futureRef = new AtomicReference<>();
         Future<?> future = registry.submitTask(() -> {
             try {
                 task.run();
             } finally {
-                registry.removeFuture(executionId);
+                Future<?> self = futureRef.get();
+                if (self != null) {
+                    registry.removeFutureIfSame(executionId, self);
+                }
             }
         });
+        futureRef.set(future);
         registry.putFuture(executionId, future);
+        if (future.isDone()) {
+            registry.removeFutureIfSame(executionId, future);
+        }
     }
 
     private void dispatchToMqOrLocal(Long executionId, Long scopeId, Long sourceId, String guidance,

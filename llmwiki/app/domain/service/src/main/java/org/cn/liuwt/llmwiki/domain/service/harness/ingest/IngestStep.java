@@ -1,5 +1,8 @@
 package org.cn.liuwt.llmwiki.domain.service.harness.ingest;
 
+import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel.ExecutionStepModel;
+
+import java.util.List;
 import java.util.Map;
 
 public enum IngestStep {
@@ -39,7 +42,33 @@ public enum IngestStep {
     public long baselineMs() { return baselineMs; }
 
     public static String normalizeStepName(String legacyName) {
-        return LEGACY_NAME_MAP.getOrDefault(legacyName, legacyName);
+        if (legacyName == null) {
+            return null;
+        }
+        int dotIndex = legacyName.lastIndexOf('.');
+        String plainName = dotIndex >= 0 ? legacyName.substring(dotIndex + 1) : legacyName;
+        return LEGACY_NAME_MAP.getOrDefault(plainName, plainName);
+    }
+
+    public static boolean isPhase1Completed(List<ExecutionStepModel> steps) {
+        if (steps == null || steps.isEmpty()) {
+            return false;
+        }
+        boolean analyzeCompleted = false;
+        for (ExecutionStepModel step : steps) {
+            String normalized = normalizeStepName(step.getStepName());
+            boolean phase1Step = UPLOAD.name().equals(normalized) || ANALYZE.name().equals(normalized);
+            if (!phase1Step) {
+                continue;
+            }
+            if (!"completed".equals(step.getStatus())) {
+                return false;
+            }
+            if (ANALYZE.name().equals(normalized)) {
+                analyzeCompleted = true;
+            }
+        }
+        return analyzeCompleted;
     }
 
     public static IngestStep[] phase1() {

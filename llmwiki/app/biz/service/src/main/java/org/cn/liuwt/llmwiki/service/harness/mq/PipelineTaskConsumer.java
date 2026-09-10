@@ -5,6 +5,7 @@ import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.HarnessEngine;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.bootstrap.SchemaPolishService;
+import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
 import org.cn.liuwt.llmwiki.service.ingest.IngestService;
 import org.cn.liuwt.llmwiki.service.ingest.MergeService;
@@ -163,9 +164,7 @@ public class PipelineTaskConsumer implements RocketMQListener<PipelineTaskMessag
             case PipelineTaskMessage.TYPE_INGEST_RESUME:
                 ExecutionModel execution = executionTracker.getExecution(msg.getExecutionId());
                 if (execution != null) {
-                    boolean phase1Completed = execution.getSteps() != null && execution.getSteps().stream()
-                            .filter(s -> "UPLOAD".equals(normalizeStepName(s.getStepName())) || "ANALYZE".equals(normalizeStepName(s.getStepName())))
-                            .allMatch(s -> "completed".equals(s.getStatus()));
+                    boolean phase1Completed = IngestStep.isPhase1Completed(execution.getSteps());
                     if (phase1Completed) {
                         ingestService.resumeIngestExecution(msg.getExecutionId(), msg.getScopeId(), msg.getSourceId(), msg.getGuidance());
                     } else {
@@ -202,11 +201,5 @@ public class PipelineTaskConsumer implements RocketMQListener<PipelineTaskMessag
         } catch (Exception e) {
             log.warn("Failed to update node ownership for executionId={}", executionId, e);
         }
-    }
-
-    private String normalizeStepName(String stepName) {
-        if (stepName == null) return "";
-        int dotIndex = stepName.lastIndexOf('.');
-        return dotIndex >= 0 ? stepName.substring(dotIndex + 1) : stepName;
     }
 }

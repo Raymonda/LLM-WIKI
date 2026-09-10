@@ -5,9 +5,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import jakarta.annotation.PreDestroy;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageMapper;
 import org.cn.liuwt.llmwiki.domain.service.harness.DocumentStructureAnalyzer;
+import org.cn.liuwt.llmwiki.domain.service.harness.LlmConcurrencyBarrier;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.InformationCatalog.CrossChapterRelation;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.SchemaInjector;
 import org.cn.liuwt.llmwiki.domain.service.harness.prompt.PromptRegistry;
@@ -17,6 +19,7 @@ import org.cn.liuwt.llmwiki.integration.storage.StorageProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -48,8 +51,31 @@ public class AnalysisAgent {
     @Autowired
     private StorageProvider storageProvider;
 
+    @Autowired
+    private LlmConcurrencyBarrier llmBarrier;
+
+    @Value("${llmwiki.llm.barrier.acquire-timeout-ms:120000}")
+    private long barrierAcquireTimeoutMs;
+
     private final ObjectMapper mapper = new ObjectMapper();
     private final ExecutorService subDocExecutor = Executors.newFixedThreadPool(4);
+
+    @PreDestroy
+    public void shutdown() {
+        log.info("Shutting down subDocExecutor");
+        subDocExecutor.shutdown();
+        try {
+            if (!subDocExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                subDocExecutor.shutdownNow();
+                if (!subDocExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                    log.warn("subDocExecutor did not reach quiescence after shutdownNow");
+                }
+            }
+        } catch (InterruptedException e) {
+            subDocExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
 
     public int process(IngestContext context, Long executionId, Long stepId) {
         int totalTokens = analyzerAgent.analyze(context, executionId, stepId);
@@ -87,6 +113,10 @@ public class AnalysisAgent {
             IngestContext.SubDocument subDoc = subDocs.get(i);
             int idx = i;
             CompletableFuture<SubDocResult> future = CompletableFuture.supplyAsync(() -> {
+                if (!llmBarrier.tryAcquire(LlmConcurrencyBarrier.Bucket.ANALYZE, barrierAcquireTimeoutMs)) {
+                    log.warn("Sub-document analysis barrier timeout for '{}', skipping", subDoc.title());
+                    return new SubDocResult(idx, subDoc.title(), null);
+                }
                 try {
                     String prompt = schemaInjector.prependForAnalyzer(context.getScopeId(),
                         PromptRegistry.forIngest().subDocumentAnalyze(docTitle != null ? docTitle : "文档汇编"));
@@ -97,6 +127,8 @@ public class AnalysisAgent {
                 } catch (Exception e) {
                     log.warn("Sub-document analysis failed for '{}': {}", subDoc.title(), e.getMessage());
                     return new SubDocResult(idx, subDoc.title(), null);
+                } finally {
+                    llmBarrier.release(LlmConcurrencyBarrier.Bucket.ANALYZE);
                 }
             }, subDocExecutor);
             futures.add(future);
@@ -143,8 +175,6 @@ public class AnalysisAgent {
             context.setSubDocumentSourceMap(sourceMap);
             log.info("SubDocumentSourceMap built: {} entity→subDoc mappings, scopeId={}", sourceMap.size(), context.getScopeId());
         }
-
-        subDocExecutor.shutdown();
     }
 
     private record SubDocResult(int index, String title, String jsonResponse) {}

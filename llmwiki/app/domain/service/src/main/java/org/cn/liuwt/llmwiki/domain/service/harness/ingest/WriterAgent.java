@@ -151,6 +151,7 @@ public class WriterAgent {
         if (chatClient == null || !chatClient.isAvailable()) {
             return 0;
         }
+        checkInterrupted();
 
         context.setOriginalSourceContent(context.getSourceContent());
 
@@ -255,6 +256,7 @@ public class WriterAgent {
         try {
             List<CompletableFuture<Map.Entry<String, WikiPageDO>>> entityFutures = new ArrayList<>();
             for (Map<String, String> entity : classified.coreAndImportant()) {
+                checkInterrupted();
                 String entityName = entity.get("name");
                 String entityType = entity.getOrDefault("type", "concept");
                 if (entityName == null || entityName.isBlank()) continue;
@@ -407,6 +409,12 @@ public class WriterAgent {
         return false;
     }
 
+    private void checkInterrupted() {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new RuntimeException("Writer interrupted by cancellation");
+        }
+    }
+
     private int writeSerial(IngestContext context) {
         Long scopeId = context.getScopeId();
         Long sourceId = context.getSourceId();
@@ -429,6 +437,7 @@ public class WriterAgent {
         List<Map<String, String>> entities = parseEntities(metadataJson);
         ClassificationResult classified = classifyEntities(entities, context);
         for (Map<String, String> entity : classified.coreAndImportant()) {
+            checkInterrupted();
             String entityName = entity.get("name");
             String entityType = entity.getOrDefault("type", "concept");
             if (entityName == null || entityName.isBlank()) continue;
@@ -466,6 +475,7 @@ public class WriterAgent {
             findSourceRelatedPagePaths(scopeId, sourceId)
         );
         for (Map<String, String> affected : affectedPages) {
+            checkInterrupted();
             String affectedPath = affected.get("path");
             String action = affected.get("action");
             if (affectedPath == null || affectedPath.isBlank()) continue;

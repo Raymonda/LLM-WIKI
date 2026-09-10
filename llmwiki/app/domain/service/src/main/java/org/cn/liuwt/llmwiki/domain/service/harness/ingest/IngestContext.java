@@ -510,12 +510,14 @@ public class IngestContext {
                     if (node.has("metadata")) {
                         context.setMetadataJson(node.get("metadata").isObject() ? node.get("metadata").toString() : node.get("metadata").asText());
                     }
+                    restoreDocumentType(context, node);
+                    restoreStrategy(context, node);
                 } else if ("MERGE_RESULTS".equals(rawStepName) && context.getMergedAnalysis() == null) {
                     context.setMergedAnalysis(outputData);
                 } else if ("EXTRACT_METADATA".equals(rawStepName) && context.getMetadataJson() == null) {
                     context.setMetadataJson(outputData);
                 } else if ("WRITE".equals(stepName) || "WRITE_SUMMARY".equals(rawStepName)) {
-                    reconstructWriteStep(context, node);
+                    reconstructWriteStep(context, node, storageProvider, scopeIdStr);
                 }
             } catch (Exception e) {
                 log.warn("Failed to parse outputData for step {}: {}", rawStepName, e.getMessage());
@@ -530,6 +532,9 @@ public class IngestContext {
 
     private static void reconstructParseStep(IngestContext context, com.fasterxml.jackson.databind.JsonNode node,
                                               SourceDO sourceDO, StorageProvider storageProvider, String scopeIdStr) {
+        if (sourceDO != null && sourceDO.getName() != null) {
+            context.setSourceName(sourceDO.getName());
+        }
         String sourceFilePath = node.has("sourceFilePath") ? node.get("sourceFilePath").asText() : null;
         String sourceFormat = node.has("sourceFormat") ? node.get("sourceFormat").asText() : null;
 
@@ -538,7 +543,7 @@ public class IngestContext {
         if (parsedBytes != null) {
             context.setSourceContent(new String(parsedBytes, StandardCharsets.UTF_8));
             context.setParsedContent(context.getSourceContent());
-        } else if (sourceFilePath != null) {
+        } else if (sourceFilePath != null && !isBinaryFormat(sourceFormat)) {
             byte[] sourceBytes = storageProvider.read(scopeIdStr, sourceFilePath);
             if (sourceBytes != null) {
                 context.setSourceContent(new String(sourceBytes, StandardCharsets.UTF_8));
@@ -550,12 +555,123 @@ public class IngestContext {
             List<DocumentChunker.Chunk> chunks = chunker.chunk(context.getSourceContent());
             context.setChunks(chunks);
             context.setChunkCount(chunks.size());
+
+            DocumentStructureAnalyzer.StructureReport report =
+                new DocumentStructureAnalyzer().analyze(context.getSourceContent(), chunks, context.getSourceName());
+            context.setDocumentType(report.type());
+            context.setChapters(report.chapters());
+            context.setTotalChapterCount(report.chapters().size());
         }
     }
 
-    private static void reconstructWriteStep(IngestContext context, com.fasterxml.jackson.databind.JsonNode node) {
-        if (node.has("writingPlanJson")) {
+    private static void reconstructWriteStep(IngestContext context, com.fasterxml.jackson.databind.JsonNode node,
+                                              StorageProvider storageProvider, String scopeIdStr) {
+        if (node.hasNonNull("writingPlanJson")) {
             context.setWritingPlanJson(node.get("writingPlanJson").asText());
         }
+        restoreDocumentType(context, node);
+        restoreStrategy(context, node);
+
+        if (node.hasNonNull("summaryPagePath")) {
+            WikiPageDO summaryPage = new WikiPageDO();
+            if (node.hasNonNull("summaryPageId") && node.get("summaryPageId").isNumber()) {
+                summaryPage.setId(node.get("summaryPageId").asLong());
+            }
+            if (node.hasNonNull("summaryPageTitle")) {
+                summaryPage.setTitle(node.get("summaryPageTitle").asText());
+            }
+            summaryPage.setFilePath(node.get("summaryPagePath").asText());
+            context.setSummaryPage(summaryPage);
+            loadPageContent(context, storageProvider, scopeIdStr, summaryPage.getFilePath());
+        }
+
+        readPageInfos(context, node.get("entityPages"), "name", context.getEntityPages(), storageProvider, scopeIdStr);
+        readPageInfos(context, node.get("updatedPages"), "path", context.getUpdatedPages(), storageProvider, scopeIdStr);
+        readPageInfos(context, node.get("chapterPages"), "name", context.getChapterPages(), storageProvider, scopeIdStr);
+    }
+
+    private static void readPageInfos(IngestContext context, com.fasterxml.jackson.databind.JsonNode arrayNode,
+                                       String keyField, ConcurrentHashMap<String, WikiPageDO> target,
+                                       StorageProvider storageProvider, String scopeIdStr) {
+        if (arrayNode == null || !arrayNode.isArray()) return;
+        for (com.fasterxml.jackson.databind.JsonNode entry : arrayNode) {
+            String key = entry.hasNonNull(keyField) ? entry.get(keyField).asText() : null;
+            if (key == null || key.isBlank()) continue;
+            String filePath = entry.hasNonNull("filePath") ? entry.get("filePath").asText()
+                : (entry.hasNonNull("path") ? entry.get("path").asText() : null);
+            if (filePath == null || filePath.isBlank()) continue;
+            WikiPageDO page = new WikiPageDO();
+            if (entry.hasNonNull("id") && entry.get("id").isNumber()) {
+                page.setId(entry.get("id").asLong());
+            }
+            if (entry.hasNonNull("title")) {
+                page.setTitle(entry.get("title").asText());
+            }
+            if (entry.hasNonNull("category")) {
+                page.setCategory(entry.get("category").asText());
+            }
+            page.setFilePath(filePath);
+            target.put(key, page);
+            loadPageContent(context, storageProvider, scopeIdStr, filePath);
+        }
+    }
+
+    private static void loadPageContent(IngestContext context, StorageProvider storageProvider,
+                                         String scopeIdStr, String pagePath) {
+        if (pagePath == null || pagePath.isBlank() || context.getPageContents().containsKey(pagePath)) return;
+        try {
+            byte[] bytes = storageProvider.read(scopeIdStr, "wiki/" + pagePath);
+            if (bytes != null) {
+                context.getPageContents().put(pagePath, new String(bytes, StandardCharsets.UTF_8));
+            }
+        } catch (Exception e) {
+            log.warn("Failed to load page content for resume: path={}, error={}", pagePath, e.getMessage());
+        }
+    }
+
+    private static void restoreDocumentType(IngestContext context, com.fasterxml.jackson.databind.JsonNode node) {
+        if (node.hasNonNull("documentType")) {
+            String typeName = node.get("documentType").asText();
+            try {
+                context.setDocumentType(DocumentStructureAnalyzer.DocumentType.valueOf(typeName));
+            } catch (IllegalArgumentException e) {
+                log.warn("Unknown documentType in step output: {}", typeName);
+            }
+        }
+        if (node.hasNonNull("chapterCount")) {
+            context.setTotalChapterCount(node.get("chapterCount").asInt());
+        }
+        if (node.hasNonNull("totalChapterCount")) {
+            context.setTotalChapterCount(node.get("totalChapterCount").asInt());
+        }
+    }
+
+    private static void restoreStrategy(IngestContext context, com.fasterxml.jackson.databind.JsonNode node) {
+        if (!node.hasNonNull("strategyPreset")) return;
+        String presetName = node.get("strategyPreset").asText();
+        ExecutionStrategy strategy = switch (presetName) {
+            case "LARGE_POLICY" -> ExecutionStrategy.forLargePolicy();
+            case "CHAPTER_BASED" -> ExecutionStrategy.forChapterBased();
+            case "TECHNICAL_RICH" -> ExecutionStrategy.forTechnicalRich();
+            case "NARRATIVE" -> ExecutionStrategy.forNarrative();
+            case "COMPACT" -> ExecutionStrategy.forCompact();
+            default -> null;
+        };
+        if (strategy == null) {
+            log.warn("Unknown strategyPreset in step output: {}", presetName);
+            return;
+        }
+        if (node.hasNonNull("strategyReasoning")) {
+            strategy.setReasoning(node.get("strategyReasoning").asText());
+        }
+        context.setStrategy(strategy);
+    }
+
+    private static boolean isBinaryFormat(String format) {
+        if (format == null) return false;
+        String lower = format.toLowerCase();
+        return "pdf".equals(lower) || "docx".equals(lower) || "xlsx".equals(lower)
+            || "pptx".equals(lower) || "doc".equals(lower) || "xls".equals(lower)
+            || "ppt".equals(lower);
     }
 }

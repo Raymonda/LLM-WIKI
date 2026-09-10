@@ -41,6 +41,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 @RestController
 @RequestMapping("/api/ingest")
@@ -101,11 +102,6 @@ public class IngestController {
         }
     }
 
-    @jakarta.annotation.PostConstruct
-    public void init() {
-        log.warn("[DIAG] IngestController initialized: rocketMQTemplate={}", rocketMQTemplate != null ? "PRESENT" : "NULL (local mode)");
-    }
-
     @PostMapping("/start")
     public Result<ExecutionInfo> startIngest(@RequestBody IngestRequest request) {
         // API key 客户端不传 scopeId：回填认证上下文的 scope（JwtAuthenticationFilter
@@ -127,8 +123,6 @@ public class IngestController {
 
     @PostMapping("/analyze")
     public Result<ExecutionInfo> startAnalysis(@RequestBody IngestRequest request) {
-        log.warn("[DIAG] startAnalysis called: sourceId={}, scopeId={}, mqAvailable={}",
-                request.getSourceId(), request.getScopeId(), rocketMQTemplate != null);
         Long scopeId = request.getScopeId();
         SourceModel source = sourceService.getSource(request.getSourceId(), scopeId);
         if (source == null) {
@@ -147,7 +141,6 @@ public class IngestController {
         dispatchToMqOrLocal(execution.getId(), scopeId, request.getSourceId(), guidance,
                 PipelineTaskMessage.TYPE_INGEST_ANALYZE,
                 () -> {
-                    log.warn("[DIAG] Using LOCAL path for executionId={}", execution.getId());
                     submitLocalTask(execution.getId(), () -> {
                         try {
                             ingestService.runIngestAnalysis(execution.getId(), scopeId, request.getSourceId(), guidance);
@@ -194,7 +187,6 @@ public class IngestController {
 
     @GetMapping(value = "/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamProgress(@PathVariable Long id) {
-        log.warn("[DIAG] streamProgress called: executionId={}", id);
         ExecutionModel current = ingestService.getProgress(id);
         assertExecutionReadable(current);
         SseEmitter emitter = registry.createEmitter(id);
@@ -252,12 +244,12 @@ public class IngestController {
             try {
                 ExecutionModel exec = ingestService.getProgress(id);
                 if (exec == null) {
-                    log.info("[PeriodicSync] executionId={} not found in DB", id);
+                    log.debug("Periodic sync: executionId={} not found", id);
                     return;
                 }
 
                 if (exec.getSteps() != null && !exec.getSteps().isEmpty()) {
-                    log.info("[PeriodicSync] executionId={} status={} steps={}", id, exec.getStatus(),
+                    log.debug("Periodic sync: executionId={} status={} steps={}", id, exec.getStatus(),
                             exec.getSteps().stream().map(s -> s.getStepName() + ":" + s.getStatus()).collect(java.util.stream.Collectors.joining(",")));
                     for (ExecutionModel.ExecutionStepModel step : exec.getSteps()) {
                         Map<String, Object> stepData = new HashMap<>();
@@ -268,7 +260,7 @@ public class IngestController {
                         emitter.send(SseEmitter.event().name("step").data(stepData));
                     }
                 } else {
-                    log.info("[PeriodicSync] executionId={} status={} NO steps yet", id, exec.getStatus());
+                    log.debug("Periodic sync: executionId={} status={} no steps yet", id, exec.getStatus());
                 }
 
                 String status = exec.getStatus();
@@ -283,7 +275,7 @@ public class IngestController {
                     emitter.send(SseEmitter.event().name("pause").data(toExecutionInfo(exec)));
                 }
             } catch (Exception e) {
-                log.warn("[DIAG] Periodic SSE sync FAILED for executionId={}: {}", id, e.getMessage());
+                log.warn("Periodic SSE sync failed for executionId={}: {}", id, e.getMessage());
                 registry.cancelSyncTimer(id);
                 closed[0] = true;
             }
@@ -527,13 +519,7 @@ public class IngestController {
         String guidance = request != null ? request.getGuidance() : null;
         setNodeOwnership(id);
 
-        List<ExecutionModel.ExecutionStepModel> steps = execution.getSteps();
-        boolean phase1Completed = steps != null && steps.stream()
-            .filter(s -> {
-                String normalized = IngestStep.normalizeStepName(s.getStepName());
-                return "UPLOAD".equals(normalized) || "ANALYZE".equals(normalized);
-            })
-            .allMatch(s -> "completed".equals(s.getStatus()));
+        boolean phase1Completed = IngestStep.isPhase1Completed(execution.getSteps());
 
         dispatchToMqOrLocal(id, execution.getScopeId(), execution.getSourceId(), guidance,
                 PipelineTaskMessage.TYPE_INGEST_RESUME,
@@ -556,14 +542,22 @@ public class IngestController {
     }
 
     private void submitLocalTask(Long executionId, Runnable task) {
+        AtomicReference<Future<?>> futureRef = new AtomicReference<>();
         Future<?> future = registry.submitTask(() -> {
             try {
                 task.run();
             } finally {
-                registry.removeFuture(executionId);
+                Future<?> self = futureRef.get();
+                if (self != null) {
+                    registry.removeFutureIfSame(executionId, self);
+                }
             }
         });
+        futureRef.set(future);
         registry.putFuture(executionId, future);
+        if (future.isDone()) {
+            registry.removeFutureIfSame(executionId, future);
+        }
     }
 
     private void dispatchToMqOrLocal(Long executionId, Long scopeId, Long sourceId, String guidance,
