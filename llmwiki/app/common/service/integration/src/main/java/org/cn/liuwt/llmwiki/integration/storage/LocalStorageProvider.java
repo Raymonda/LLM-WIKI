@@ -208,4 +208,38 @@ public class LocalStorageProvider implements StorageProvider {
             throw new RuntimeException("Failed to move scope directory: " + oldScopeId + " -> " + newScopeId, e);
         }
     }
+
+    @Override
+    public void move(String scopeId, String fromPath, String toPath) {
+        Path source = resolvePath(scopeId, fromPath);
+        Path target = resolvePath(scopeId, toPath);
+        try {
+            Files.createDirectories(target.getParent());
+            try {
+                Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+            } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                Files.move(source, target);
+            }
+        } catch (IOException e) {
+            log.error("Failed to move file: scopeId={}, from={}, to={}", scopeId, fromPath, toPath, e);
+            throw new RuntimeException("Failed to move file: " + fromPath + " -> " + toPath, e);
+        }
+    }
+
+    @Override
+    public java.util.List<String> list(String scopeId, String dirPath) {
+        Path dir = resolvePath(scopeId, dirPath);
+        if (!Files.isDirectory(dir)) {
+            return java.util.Collections.emptyList();
+        }
+        try (java.util.stream.Stream<Path> stream = Files.list(dir)) {
+            return stream.filter(Files::isRegularFile)
+                    .map(p -> dirPath + "/" + p.getFileName())
+                    .sorted()
+                    .collect(java.util.stream.Collectors.toList());
+        } catch (IOException e) {
+            log.error("Failed to list directory: scopeId={}, path={}", scopeId, dirPath, e);
+            throw new RuntimeException("Failed to list directory: " + dirPath, e);
+        }
+    }
 }
