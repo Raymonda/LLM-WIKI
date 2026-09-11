@@ -77,6 +77,44 @@ public class ConflictDomainService {
     public record RulingOutcome(int generated, int deferred, int skipped, String summary) {}
     public record ExecutionOutcome(int executed, int reviewHeld, int skipped, String summary) {}
 
+    public enum RulingBriefOutcome {
+        GENERATED, DEFERRED, ALREADY_GENERATED, AI_UNAVAILABLE, JSON_EXTRACT_FAILED, BUSY, NOT_FOUND, GENERATION_FAILED
+    }
+
+    public record RulingResult(RulingBriefOutcome outcome, String reason, Long findingId) {
+        public static RulingResult generated(Long findingId) {
+            return new RulingResult(RulingBriefOutcome.GENERATED, null, findingId);
+        }
+
+        public static RulingResult deferred(Long findingId, String reason) {
+            return new RulingResult(RulingBriefOutcome.DEFERRED, reason, findingId);
+        }
+
+        public static RulingResult alreadyGenerated(Long findingId) {
+            return new RulingResult(RulingBriefOutcome.ALREADY_GENERATED, null, findingId);
+        }
+
+        public static RulingResult aiUnavailable(Long findingId) {
+            return new RulingResult(RulingBriefOutcome.AI_UNAVAILABLE, "AI 未配置", findingId);
+        }
+
+        public static RulingResult busy(Long findingId) {
+            return new RulingResult(RulingBriefOutcome.BUSY, "LINT 桶并发限流获取超时", findingId);
+        }
+
+        public static RulingResult jsonExtractFailed(Long findingId) {
+            return new RulingResult(RulingBriefOutcome.JSON_EXTRACT_FAILED, "裁决简报 JSON 提取失败", findingId);
+        }
+
+        public static RulingResult notFound(Long findingId) {
+            return new RulingResult(RulingBriefOutcome.NOT_FOUND, "finding 不存在或非 conflict 类型", findingId);
+        }
+
+        public static RulingResult generationFailed(Long findingId, String reason) {
+            return new RulingResult(RulingBriefOutcome.GENERATION_FAILED, reason, findingId);
+        }
+    }
+
     public RulingOutcome generatePendingRulings(Long scopeId, Long executionId, LintRulesConfig rulesConfig) {
         if (chatClient == null || !chatClient.isAvailable()) {
             return new RulingOutcome(0, 0, 0, "AI 未配置，跳过裁决简报生成");
@@ -101,66 +139,84 @@ public class ConflictDomainService {
                 continue;
             }
 
-            WikiPageDO pageDO = resolvePageByPath(scopeId, f.getPagePath());
-            String category = pageDO != null ? pageDO.getCategory() : null;
-            String aiHint = f.getHandlingMethod();
-            ConflictRoutingService.ConflictRoute route = conflictRoutingService.route(category, aiHint, rulesConfig);
-
-            if (route.autoLevel() == AutoLevel.DEFER) {
-                lintFindingService.annotateDeferred(f.getId());
-                deferred++;
-                briefReport.append("- 暂缓处理（DEFER）：findingId=").append(f.getId())
-                    .append("，reason=").append(route.reason()).append("\n");
-                continue;
+            RulingResult result = generateRulingBriefForFinding(scopeId, executionId, f.getId(), rulesConfig);
+            switch (result.outcome()) {
+                case GENERATED -> {
+                    generated++;
+                    briefReport.append("- 已生成裁决简报：findingId=").append(f.getId()).append("\n");
+                }
+                case DEFERRED -> {
+                    deferred++;
+                    briefReport.append("- 暂缓处理（DEFER）：findingId=").append(f.getId())
+                        .append("，reason=").append(result.reason()).append("\n");
+                }
+                case ALREADY_GENERATED, AI_UNAVAILABLE -> { }
+                default -> briefReport.append("- 裁决简报生成未完成[").append(result.outcome())
+                    .append("]：findingId=").append(f.getId()).append("\n");
             }
+        }
+        String summary = String.format("裁决简报生成：成功 %d 个，暂缓 %d 个，超限跳过 %d 个\n%s",
+            generated, deferred, skipped, briefReport);
+        return new RulingOutcome(generated, deferred, skipped, summary);
+    }
 
-            if (f.getRulingBriefJson() != null && !f.getRulingBriefJson().isBlank()) {
-                continue;
-            }
-
-            String pageContent = readPageContent(scopeId, f.getPagePath());
-            String relatedContent = readRelatedContent(scopeId, f.getExtra());
-            String sourceEvidence = traceSourceEvidence(scopeId, f);
+    public RulingResult generateRulingBriefForFinding(Long scopeId, Long executionId,
+                                                      Long findingId, LintRulesConfig rulesConfig) {
+        LintFindingDO finding = lintFindingService.getFinding(findingId);
+        if (finding == null || !"conflict".equalsIgnoreCase(finding.getFindingType())) {
+            return RulingResult.notFound(findingId);
+        }
+        if (finding.getRulingBriefJson() != null && !finding.getRulingBriefJson().isBlank()) {
+            return RulingResult.alreadyGenerated(findingId);
+        }
+        WikiPageDO pageDO = resolvePageByPath(scopeId, finding.getPagePath());
+        String category = pageDO != null ? pageDO.getCategory() : null;
+        ConflictRoutingService.ConflictRoute route =
+            conflictRoutingService.route(category, finding.getHandlingMethod(), rulesConfig);
+        if (route.autoLevel() == AutoLevel.DEFER) {
+            lintFindingService.annotateDeferred(findingId);
+            return RulingResult.deferred(findingId, route.reason());
+        }
+        if (chatClient == null || !chatClient.isAvailable()) {
+            return RulingResult.aiUnavailable(findingId);
+        }
+        boolean acquired = llmConcurrencyBarrier.tryAcquire(LlmConcurrencyBarrier.Bucket.LINT, 30_000);
+        if (!acquired) {
+            log.warn("LlmConcurrencyBarrier LINT bucket timeout, skipping ruling brief for findingId={}", findingId);
+            return RulingResult.busy(findingId);
+        }
+        try {
+            String pageContent = readPageContent(scopeId, finding.getPagePath());
+            String relatedContent = readRelatedContent(scopeId, finding.getExtra());
+            String sourceEvidence = traceSourceEvidence(scopeId, finding);
 
             String briefPrompt = schemaInjector.prependForLint(scopeId,
                 PromptRegistry.forLint().generateRulingBrief(
-                    f.getTitle(), f.getDetail(), pageContent, relatedContent));
+                    finding.getTitle(), finding.getDetail(), pageContent, relatedContent));
             if (sourceEvidence != null && !sourceEvidence.isBlank()) {
                 briefPrompt += "\n\n【来源追溯证据】\n" + sourceEvidence;
             }
             briefPrompt += "\n\n【冲突路由策略】\n" + route.reason()
                 + "\n请根据此策略方向生成裁决方案。";
 
-            boolean acquired = llmConcurrencyBarrier.tryAcquire(LlmConcurrencyBarrier.Bucket.LINT, 30_000);
-            if (!acquired) {
-                log.warn("LlmConcurrencyBarrier LINT bucket timeout, skipping ruling brief for findingId={}", f.getId());
-                continue;
+            String briefRaw = chatClient.chat(briefPrompt);
+            String briefJson = extractJsonObject(briefRaw);
+            if (briefJson == null || briefJson.isBlank()) {
+                log.warn("Failed to extract JSON from ruling brief for findingId={}", findingId);
+                return RulingResult.jsonExtractFailed(findingId);
             }
-            try {
-                String briefRaw = chatClient.chat(briefPrompt);
-                String briefJson = extractJsonObject(briefRaw);
-                if (briefJson != null && !briefJson.isBlank()) {
-                    lintFindingService.setRulingBrief(f.getId(), briefJson);
-                    lintFindingService.updateStatus(f.getId(), "awaiting_approval");
-                    if (route.autoLevel() == AutoLevel.REVIEW) {
-                        createConflictReviewFromLintFinding(scopeId, executionId, f, pageDO, route);
-                    }
-                    generated++;
-                    briefReport.append("- 已生成裁决简报[").append(route.autoLevel()).append("]：findingId=")
-                        .append(f.getId()).append("\n");
-                } else {
-                    log.warn("Failed to extract JSON from ruling brief for findingId={}", f.getId());
-                    briefReport.append("- 裁决简报 JSON 提取失败：findingId=").append(f.getId()).append("\n");
-                }
-            } catch (Exception e) {
-                log.warn("GENERATE_RULING_BRIEFS failed for findingId={}: {}", f.getId(), e.getMessage());
-            } finally {
-                llmConcurrencyBarrier.release(LlmConcurrencyBarrier.Bucket.LINT);
+            lintFindingService.setRulingBrief(findingId, briefJson);
+            lintFindingService.updateStatus(findingId, "awaiting_approval");
+            if (route.autoLevel() == AutoLevel.REVIEW) {
+                createConflictReviewFromLintFinding(scopeId, executionId, finding, pageDO, route);
             }
+            return RulingResult.generated(findingId);
+        } catch (Exception e) {
+            log.warn("GENERATE_RULING_BRIEF failed for findingId={}: {}", findingId, e.getMessage());
+            return RulingResult.generationFailed(findingId, e.getMessage());
+        } finally {
+            llmConcurrencyBarrier.release(LlmConcurrencyBarrier.Bucket.LINT);
         }
-        String summary = String.format("裁决简报生成：成功 %d 个，暂缓 %d 个，超限跳过 %d 个\n%s",
-            generated, deferred, skipped, briefReport);
-        return new RulingOutcome(generated, deferred, skipped, summary);
     }
 
     public ExecutionOutcome executePendingRulings(Long scopeId, Long executionId, LintRulesConfig rulesConfig) {
@@ -377,6 +433,9 @@ public class ConflictDomainService {
         try {
             var extra = objectMapper.readValue(extraJson, Map.class);
             Object relatedPath = extra.get("relatedPagePath");
+            if (!(relatedPath instanceof String) || ((String) relatedPath).isBlank()) {
+                relatedPath = extra.get("pagePathB");
+            }
             if (relatedPath instanceof String rp && !rp.isBlank()) {
                 byte[] bytes = storageProvider.read(String.valueOf(scopeId), "wiki/" + rp);
                 if (bytes != null) return new String(bytes, StandardCharsets.UTF_8);
@@ -447,6 +506,9 @@ public class ConflictDomainService {
                 if (page != null) return page;
             }
             Object relatedPath = extra.get("relatedPagePath");
+            if (!(relatedPath instanceof String) || ((String) relatedPath).isBlank()) {
+                relatedPath = extra.get("pagePathB");
+            }
             if (relatedPath instanceof String rp && !rp.isBlank()) {
                 return resolvePageByPath(scopeId, rp);
             }

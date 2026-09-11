@@ -240,4 +240,20 @@ export default {
   rulingTypeAction: 'Action Suggestion',
   rulingTypeSchemaCompliance: 'Compliance Fix',
   rulingTypeSchemaViolation: 'Violation Fix',
+  conflict: {
+    typeFact: 'Factual conflict',
+    typeValue: 'Value conflict',
+    typeDefinition: 'Definition conflict',
+    typeTemporal: 'Temporal conflict',
+    typeContentDuplication: 'Content duplication',
+    typeUnknown: 'Knowledge conflict',
+    columnFrom: 'Page A',
+    columnRelated: 'Page B',
+    analyzeBtn: 'AI analysis',
+    deferredHint: 'This conflict is deferred by policy and will be revisited in later checks',
+    focusBanner: 'Showing conflicts for "{0}"',
+    focusClear: 'Show all',
+    focusEmpty: 'No conflicts for this page',
+    legacyTooltip: 'Legacy record; content is normalized for readability'
+  },
 }

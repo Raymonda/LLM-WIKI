@@ -22,16 +22,4 @@ public interface LintFindingMapper extends BaseMapper<LintFindingDO> {
         GROUP BY asset_id, finding_type
         """)
     List<Map<String, Object>> selectOpenFindingAssetDistribution(@Param("scopeId") Long scopeId);
-
-    @Select("""
-        SELECT COUNT(*) FROM lint_finding
-        WHERE scope_id = #{scopeId}
-        AND finding_type = 'conflict'
-        AND status = 'open'
-        AND page_path = #{pagePath}
-        AND LEFT(detail, 256) = LEFT(#{detailPrefix}, 256)
-        """)
-    int countOpenConflictByPageAndDetailPrefix(@Param("scopeId") Long scopeId,
-                                               @Param("pagePath") String pagePath,
-                                               @Param("detailPrefix") String detailPrefix);
 }

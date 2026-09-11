@@ -1,5 +1,6 @@
 package org.cn.liuwt.llmwiki.domain.service.harness.ingest;
 
+import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
 import org.cn.liuwt.llmwiki.integration.storage.StorageProvider;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -32,7 +33,10 @@ public class WriterOrchestrator {
     private ConsistencyReconciler consistencyReconciler;
 
     @Autowired
-    private org.cn.liuwt.llmwiki.common.dal.mapper.LintFindingMapper lintFindingMapper;
+    private org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageMapper wikiPageMapper;
+
+    @Autowired
+    private org.cn.liuwt.llmwiki.domain.service.harness.LintFindingService lintFindingService;
 
     @Value("${llmwiki.ingest.reconciler.async:true}")
     private boolean reconcilerAsync;
@@ -148,47 +152,45 @@ public class WriterOrchestrator {
             return;
         }
         int persisted = 0;
-        int deduplicated = 0;
         for (ConsistencyReconciler.FactConflict fc : report.factConflicts()) {
             try {
+                WikiPageDO pageA = resolvePageByPath(context.getScopeId(), fc.pageA());
+                WikiPageDO pageB = resolvePageByPath(context.getScopeId(), fc.pageB());
                 String detail = "页面A: " + fc.pageA() + "\n声明A: " + fc.claimA()
                     + "\n页面B: " + fc.pageB() + "\n声明B: " + fc.claimB();
-                int existing = lintFindingMapper.countOpenConflictByPageAndDetailPrefix(
-                    context.getScopeId(), fc.pageA(), detail);
-                if (existing > 0) {
-                    deduplicated++;
-                    continue;
-                }
+                String title = fc.description() != null && fc.description().length() > 256
+                    ? fc.description().substring(0, 256) : fc.description();
 
-                org.cn.liuwt.llmwiki.common.dal.dataobject.LintFindingDO finding = new org.cn.liuwt.llmwiki.common.dal.dataobject.LintFindingDO();
-                finding.setScopeId(context.getScopeId());
-                finding.setPagePath(fc.pageA());
-                finding.setFindingType("conflict");
-                finding.setPriority("medium");
-                finding.setTitle(fc.description() != null && fc.description().length() > 256
-                    ? fc.description().substring(0, 256) : fc.description());
-                finding.setDetail(detail);
-                finding.setExtra("{\"pagePathB\":\"" + fc.pageB()
-                    + "\",\"claimA\":\"" + escapeJson(fc.claimA())
-                    + "\",\"claimB\":\"" + escapeJson(fc.claimB()) + "\"}");
-                finding.setStatus("open");
-                finding.setExecutionId(context.getExecutionId());
-                lintFindingMapper.insert(finding);
-                persisted++;
+                Long findingId = lintFindingService.upsertConflictFinding(context.getScopeId(),
+                    context.getExecutionId(),
+                    new org.cn.liuwt.llmwiki.domain.service.harness.LintFindingService.ConflictCard(
+                        title, detail, "medium",
+                        fc.pageA(), pageA != null ? pageA.getId() : null, pageA != null ? pageA.getTitle() : null,
+                        fc.pageB(), pageB != null ? pageB.getId() : null, pageB != null ? pageB.getTitle() : null,
+                        "fact_conflict", fc.claimA(), fc.claimB(), "ingest_fact_conflict"));
+                if (findingId != null) {
+                    persisted++;
+                }
             } catch (Exception e) {
                 log.warn("WriterOrchestrator: failed to persist fact conflict (non-blocking): pageA={}, error={}",
                     fc.pageA(), e.getMessage());
             }
         }
-        if (persisted > 0 || deduplicated > 0) {
-            log.info("WriterOrchestrator: persisted {} fact conflicts ({} deduplicated). scopeId={}, executionId={}",
-                persisted, deduplicated, context.getScopeId(), context.getExecutionId());
+        if (persisted > 0) {
+            log.info("WriterOrchestrator: persisted {} fact conflicts. scopeId={}, executionId={}",
+                persisted, context.getScopeId(), context.getExecutionId());
         }
     }
 
-    private String escapeJson(String text) {
-        if (text == null) return "";
-        return text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
+    private WikiPageDO resolvePageByPath(Long scopeId, String filePath) {
+        if (filePath == null || filePath.isBlank()) {
+            return null;
+        }
+        return wikiPageMapper.selectOne(
+            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<WikiPageDO>()
+                .eq(WikiPageDO::getScopeId, scopeId)
+                .eq(WikiPageDO::getFilePath, filePath)
+                .last("LIMIT 1"));
     }
 
     private void runQualityVerification(IngestContext context) {

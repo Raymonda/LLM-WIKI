@@ -240,4 +240,20 @@ export default {
   rulingTypeAction: '建议执行',
   rulingTypeSchemaCompliance: '合规修正',
   rulingTypeSchemaViolation: '违规修复',
+  conflict: {
+    typeFact: '事实矛盾',
+    typeValue: '数值矛盾',
+    typeDefinition: '定义矛盾',
+    typeTemporal: '时序矛盾',
+    typeContentDuplication: '内容重复',
+    typeUnknown: '知识矛盾',
+    columnFrom: '页面 A',
+    columnRelated: '页面 B',
+    analyzeBtn: 'AI 分析',
+    deferredHint: '该冲突按策略暂缓处理，可在后续体检中再审',
+    focusBanner: '正在显示《{0}》的冲突',
+    focusClear: '显示全部',
+    focusEmpty: '该页面暂无冲突',
+    legacyTooltip: '该记录为旧格式，展示内容已按兼容规则归一化'
+  },
 }

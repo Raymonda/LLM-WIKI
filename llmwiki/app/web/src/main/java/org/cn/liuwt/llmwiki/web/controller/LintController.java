@@ -325,6 +325,27 @@ public class LintController {
         return Result.success(result);
     }
 
+    @PostMapping("/findings/{id}/ruling-brief")
+    public Result<Map<String, Object>> generateRulingBrief(@PathVariable Long id, @RequestParam Long scopeId) {
+        Map<String, Object> result = lintService.generateRulingBrief(scopeId, id);
+        Object status = result.get("status");
+        if ("generated".equals(status) || "already_generated".equals(status)) {
+            LintFindingDO updated = lintFindingService.getFinding(id);
+            if (updated != null) {
+                result.put("finding", toFindingInfo(updated));
+            }
+        }
+        return Result.success(result);
+    }
+
+    @GetMapping("/page-conflicts")
+    public Result<List<LintFindingInfo>> listPageConflicts(@RequestParam Long scopeId, @RequestParam Long pageId) {
+        List<LintFindingInfo> infos = lintService.listPageConflicts(scopeId, pageId).stream()
+            .map(this::toFindingInfo)
+            .toList();
+        return Result.success(infos);
+    }
+
     @PostMapping("/findings/{id}/reject")
     public Result<Void> rejectFinding(@PathVariable Long id) {
         lintService.rejectFinding(id);

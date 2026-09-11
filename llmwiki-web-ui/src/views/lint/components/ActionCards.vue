@@ -9,6 +9,8 @@ import {
   Copy, FileText, X, Archive, Sparkles
 } from 'lucide-vue-next'
 import RulingBriefCard from '@/components/lint/RulingBriefCard.vue'
+import ConflictFindingBody from './ConflictFindingBody.vue'
+import { normalizeConflictExtra } from '@/utils/conflictPresentation'
 import CrossrefSuggestionCard from '@/components/lint/CrossrefSuggestionCard.vue'
 import InlineMarkdown from '@/components/common/InlineMarkdown.vue'
 import { type LintFindingInfo, type PageResult } from '@/api/lint'
@@ -73,6 +75,7 @@ const emit = defineEmits<{
   reassess: [id: number]
   resolveCompliance: [id: number]
   conflictAction: [id: number, action: string]
+  analyze: [id: number]
   showBatchPreview: [action: string]
   retryFailed: [id: number]
 }>()
@@ -193,14 +196,12 @@ function handleDuplicateOrphan(findingId: number) {
   emit('dismiss', findingId)
 }
 
-function extractConflictPageTitles(finding: LintFindingInfo): { fromTitle: string; toTitle: string } {
-  const extra = parseExtra(finding.extra)
-  const titleMatch = finding.title.match(/\u300c([^\u300d]+)\u300d.*\u300c([^\u300d]+)\u300d/)
-  const fromTitle = titleMatch ? titleMatch[1] : (finding.title || t('lint.pageFallbackA'))
-  const toTitle = titleMatch
-    ? titleMatch[2]
-    : (extra?.relatedPageTitle || extra?.relatedPagePath || t('lint.pageFallbackB'))
-  return { fromTitle, toTitle }
+function conflictFromTitle(finding: LintFindingInfo): string {
+  return normalizeConflictExtra(finding).fromTitle
+}
+
+function conflictToTitle(finding: LintFindingInfo): string {
+  return normalizeConflictExtra(finding).toTitle
 }
 
 function handleConflictAction(findingId: number, action: string) {
@@ -453,7 +454,15 @@ const visiblePages = computed(() => {
                 </span>
               </div>
 
-              <div v-if="finding.detail" class="action-card__detail">
+              <div v-if="finding.findingType === 'conflict'" class="action-card__detail">
+                <ConflictFindingBody
+                  :finding="finding"
+                  :processing="processingIds.has(finding.id)"
+                  @analyze="emit('analyze', finding.id)"
+                />
+              </div>
+
+              <div v-else-if="finding.detail" class="action-card__detail">
                 <InlineMarkdown :content="finding.detail" />
               </div>
 
@@ -488,8 +497,8 @@ const visiblePages = computed(() => {
                 :finding-type="finding.findingType"
                 :finding-title="finding.title"
                 :status="finding.status"
-                :from-page-title="finding.findingType === 'conflict' ? extractConflictPageTitles(finding).fromTitle : undefined"
-                :to-page-title="finding.findingType === 'conflict' ? extractConflictPageTitles(finding).toTitle : undefined"
+                :from-page-title="finding.findingType === 'conflict' ? conflictFromTitle(finding) : undefined"
+                :to-page-title="finding.findingType === 'conflict' ? conflictToTitle(finding) : undefined"
                 :readonly="mainTab === 'archived' || mainTab === 'ai_processed'"
                 @approve="emit('approve', finding.id)"
                 @modify="handleModifyFinding(finding.id)"
@@ -540,7 +549,7 @@ const visiblePages = computed(() => {
                   <Zap v-else :size="12" />{{ t('lint.aiDiagnoseFix') }}
                 </button>
                 <button
-                  v-if="finding.status === 'open' && finding.findingType !== 'orphan' && finding.findingType !== 'content_thin' && finding.findingType !== 'schema_compliance' && finding.findingType !== 'stale'"
+                  v-if="finding.status === 'open' && finding.findingType !== 'orphan' && finding.findingType !== 'content_thin' && finding.findingType !== 'schema_compliance' && finding.findingType !== 'stale' && finding.findingType !== 'conflict'"
                   class="action-card__btn action-card__btn--primary"
                   :disabled="processingIds.has(finding.id)"
                   @click="emit('autoResolve', finding.id)"
@@ -950,9 +959,10 @@ const visiblePages = computed(() => {
   cursor: pointer;
   flex: 1;
   min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .action-card__title:hover { color: var(--accent-primary); }

@@ -7,14 +7,19 @@ import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.LintFindingDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ScopeDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ScopeMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
+import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageMapper;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
+import org.cn.liuwt.llmwiki.domain.model.harness.LintRulesConfig;
 import org.cn.liuwt.llmwiki.domain.service.harness.HarnessEngine;
 import org.cn.liuwt.llmwiki.domain.service.harness.LintFindingService;
 import org.cn.liuwt.llmwiki.domain.service.harness.LintOrphanService;
 import org.cn.liuwt.llmwiki.domain.service.harness.StaleRefreshService;
+import org.cn.liuwt.llmwiki.domain.service.harness.conflict.ConflictDomainService;
 import org.cn.liuwt.llmwiki.domain.service.harness.conflict.ConflictReviewService;
+import org.cn.liuwt.llmwiki.domain.service.harness.governance.parser.SchemaSection6Parser;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionHistoryService;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ConflictReviewDO;
@@ -62,6 +67,12 @@ public class LintService {
     private LintFindingService lintFindingService;
 
     @Autowired
+    private ConflictDomainService conflictDomainService;
+
+    @Autowired
+    private SchemaSection6Parser schemaSection6Parser;
+
+    @Autowired
     private ScopeMapper scopeMapper;
 
     @Autowired
@@ -81,6 +92,9 @@ public class LintService {
 
     @Autowired
     private ConflictReviewService conflictReviewService;
+
+    @Autowired
+    private WikiPageMapper wikiPageMapper;
 
     @Autowired(required = false)
     private org.apache.rocketmq.spring.core.RocketMQTemplate rocketMQTemplate;
@@ -408,60 +422,25 @@ public class LintService {
     }
 
     private Map<String, Object> approveConflictFinding(Long scopeId, Long findingId, LintFindingDO finding) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("findingId", findingId);
+        String action = resolveBriefAction(finding);
+        Long reviewId = resolveOrCreateReviewId(scopeId, finding);
+        return executeReviewForFinding(findingId, reviewId, action, "用户从Lint体检页面批准执行");
+    }
 
-        String action = null;
-        if (finding.getRulingBriefJson() != null && !finding.getRulingBriefJson().isBlank()) {
-            try {
-                var brief = objectMapper.readValue(finding.getRulingBriefJson(), Map.class);
-                action = brief.get("action") != null ? brief.get("action").toString() : null;
-            } catch (Exception e) {
-                log.warn("Failed to parse rulingBriefJson for findingId={}", findingId, e);
-            }
+    private String resolveBriefAction(LintFindingDO finding) {
+        if (finding.getRulingBriefJson() == null || finding.getRulingBriefJson().isBlank()) {
+            return "coexist";
         }
-
-        ConflictReviewDO review = null;
-        if (finding.getAssetId() != null) {
-            Long relatedPageId = extractRelatedPageId(finding.getExtra());
-            if (relatedPageId != null) {
-                review = conflictReviewService.findPendingByPagePair(scopeId, finding.getAssetId(), relatedPageId);
+        try {
+            Map<String, Object> brief = objectMapper.readValue(finding.getRulingBriefJson(), Map.class);
+            Object briefAction = brief.get("action");
+            if (briefAction != null && isValidReviewAction(briefAction.toString())) {
+                return briefAction.toString();
             }
+        } catch (Exception e) {
+            log.warn("Failed to parse ruling brief for finding {}: {}", finding.getId(), e.getMessage());
         }
-
-        if (review != null) {
-            String reviewAction = action;
-            if (reviewAction == null || reviewAction.isBlank()) {
-                reviewAction = "coexist";
-            }
-            if (!isValidReviewAction(reviewAction)) {
-                reviewAction = "coexist";
-            }
-            try {
-                ConflictReviewDO executed = conflictReviewService.executeRuling(
-                    review.getId(), null, reviewAction, "用户从Lint体检页面批准执行");
-                String status = "failed".equals(executed.getStatus()) ? "failed" : "auto_resolved";
-                if ("failed".equals(status)) {
-                    lintFindingService.markAsFailed(findingId, executed.getExecutionError());
-                } else {
-                    lintFindingService.autoResolve(findingId, "ruling_brief");
-                }
-                result.put("status", status);
-                result.put("reviewId", review.getId());
-                log.info("Approved conflict finding id={} via ConflictReview id={}, action={}", findingId, review.getId(), reviewAction);
-            } catch (Exception e) {
-                log.error("Failed to execute ConflictReview for finding id={}", findingId, e);
-                lintFindingService.markAsFailed(findingId, e.getMessage());
-                result.put("status", "failed");
-                result.put("error", e.getMessage());
-            }
-        } else {
-            lintFindingService.autoResolve(findingId, "manual_approve");
-            result.put("status", "auto_resolved");
-            log.info("Approved conflict finding id={} (no ConflictReview found), marked resolved", findingId);
-        }
-
-        return result;
+        return "coexist";
     }
 
     private Long extractRelatedPageId(String extraJson) {
@@ -482,51 +461,173 @@ public class LintService {
         if (!isValidReviewAction(action)) {
             throw new RuntimeException("Invalid conflict ruling action: " + action);
         }
-
         LintFindingDO finding = lintFindingService.getFinding(findingId);
         if (finding == null) {
             throw new RuntimeException("Finding not found: id=" + findingId);
         }
+        Long reviewId = resolveOrCreateReviewId(scopeId, finding);
+        return executeReviewForFinding(findingId, reviewId, action, "用户从Lint体检页面裁决");
+    }
 
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("findingId", findingId);
+    private Long resolveOrCreateReviewId(Long scopeId, LintFindingDO finding) {
+        Map<String, Object> extra = parseExtraMap(finding.getExtra());
+        WikiPageDO fromPage = resolveConflictPage(scopeId,
+            asLong(extra.get("fromPageId")),
+            firstNonBlank(stringValue(extra.get("fromPagePath")), finding.getPagePath()),
+            finding.getAssetId());
+        WikiPageDO toPage = resolveConflictPage(scopeId,
+            asLong(extra.get("relatedPageId")),
+            firstNonBlank(stringValue(extra.get("relatedPagePath")), stringValue(extra.get("pagePathB"))),
+            null);
+        if (fromPage == null || toPage == null) {
+            throw new BusinessException(ErrorCode.CONFLICT_PAGE_NOT_FOUND,
+                "无法解析冲突页对: findingId=" + finding.getId());
+        }
+        repairConflictExtra(finding, extra, fromPage, toPage);
+        ConflictReviewDO pending = conflictReviewService.findPendingByPagePair(scopeId, fromPage.getId(), toPage.getId());
+        if (pending != null) {
+            return pending.getId();
+        }
+        String conflictType = firstNonBlank(stringValue(extra.get("conflictType")), "fact_conflict");
+        return conflictReviewService.createReview(scopeId, null, "LINT", fromPage, toPage,
+            conflictType, "manual", "手动裁决", "用户从Lint页直接执行裁决（无 AI 简报）");
+    }
 
-        if (finding.getAssetId() != null) {
-            Long relatedPageId = extractRelatedPageId(finding.getExtra());
-            if (relatedPageId != null) {
-                ConflictReviewDO review = conflictReviewService.findPendingByPagePair(scopeId, finding.getAssetId(), relatedPageId);
-                if (review == null) {
-                    review = conflictReviewService.findPendingByPagePair(scopeId, relatedPageId, finding.getAssetId());
-                }
-                if (review != null) {
-                    try {
-                        ConflictReviewDO executed = conflictReviewService.executeRuling(
-                            review.getId(), null, action, "用户从Lint体检页面裁决");
-                        String status = "failed".equals(executed.getStatus()) ? "failed" : "auto_resolved";
-                        if ("failed".equals(status)) {
-                            lintFindingService.markAsFailed(findingId, executed.getExecutionError());
-                        } else {
-                            lintFindingService.autoResolve(findingId, "ruling_brief");
-                        }
-                        result.put("status", status);
-                        result.put("reviewId", review.getId());
-                        log.info("Executed conflict ruling: findingId={}, reviewId={}, action={}", findingId, review.getId(), action);
-                        return result;
-                    } catch (Exception e) {
-                        log.error("Failed to execute ConflictReview for finding id={}", findingId, e);
-                        lintFindingService.markAsFailed(findingId, e.getMessage());
-                        result.put("status", "failed");
-                        result.put("error", e.getMessage());
-                        return result;
-                    }
-                }
+    private WikiPageDO resolveConflictPage(Long scopeId, Long pageId, String filePath, Long fallbackId) {
+        Long effectiveId = pageId != null ? pageId : fallbackId;
+        if (effectiveId != null) {
+            WikiPageDO page = wikiPageMapper.selectById(effectiveId);
+            if (page != null) {
+                return page;
             }
         }
+        if (filePath != null && !filePath.isBlank()) {
+            return wikiPageMapper.selectOne(
+                new LambdaQueryWrapper<WikiPageDO>()
+                    .eq(WikiPageDO::getScopeId, scopeId)
+                    .eq(WikiPageDO::getFilePath, filePath)
+                    .last("LIMIT 1"));
+        }
+        return null;
+    }
 
-        lintFindingService.autoResolve(findingId, "manual_approve");
-        result.put("status", "auto_resolved");
-        log.info("Executed conflict ruling: findingId={} (no ConflictReview found), action={}, marked resolved", findingId, action);
+    private void repairConflictExtra(LintFindingDO finding, Map<String, Object> extra,
+                                     WikiPageDO fromPage, WikiPageDO toPage) {
+        boolean needsRepair = !extra.containsKey("fromPagePath") || extra.containsKey("pagePathB");
+        if (!needsRepair) {
+            return;
+        }
+        Map<String, Object> repaired = new LinkedHashMap<>();
+        repaired.put("fromPageId", fromPage.getId());
+        repaired.put("fromPagePath", fromPage.getFilePath());
+        repaired.put("fromPageTitle", fromPage.getTitle());
+        repaired.put("relatedPageId", toPage.getId());
+        repaired.put("relatedPagePath", toPage.getFilePath());
+        repaired.put("relatedPageTitle", toPage.getTitle());
+        repaired.put("conflictType", firstNonBlank(stringValue(extra.get("conflictType")), "fact_conflict"));
+        repaired.put("claimA", firstNonBlank(stringValue(extra.get("claimA")), ""));
+        repaired.put("claimB", firstNonBlank(stringValue(extra.get("claimB")), ""));
+        repaired.put("source", firstNonBlank(stringValue(extra.get("source")), "legacy_repair"));
+        try {
+            lintFindingService.updateExtraAndAsset(finding.getId(),
+                objectMapper.writeValueAsString(repaired), fromPage.getId());
+        } catch (Exception e) {
+            log.warn("Failed to repair conflict extra for finding {}: {}", finding.getId(), e.getMessage());
+        }
+    }
+
+    private Map<String, Object> executeReviewForFinding(Long findingId, Long reviewId,
+                                                        String action, String rulingDetail) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("findingId", findingId);
+        result.put("reviewId", reviewId);
+        try {
+            ConflictReviewDO review = conflictReviewService.executeRuling(reviewId, null, action, rulingDetail);
+            if ("failed".equals(review.getStatus())) {
+                lintFindingService.markAsFailed(findingId, review.getExecutionError());
+                result.put("status", "failed");
+                result.put("error", review.getExecutionError());
+            } else {
+                lintFindingService.autoResolve(findingId, "ruling_brief");
+                result.put("status", "auto_resolved");
+            }
+        } catch (Exception e) {
+            lintFindingService.markAsFailed(findingId, e.getMessage());
+            result.put("status", "failed");
+            result.put("error", e.getMessage());
+        }
         return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseExtraMap(String extraJson) {
+        if (extraJson == null || extraJson.isBlank()) return java.util.Collections.emptyMap();
+        try {
+            return objectMapper.readValue(extraJson, Map.class);
+        } catch (Exception e) {
+            return java.util.Collections.emptyMap();
+        }
+    }
+
+    private Long asLong(Object value) {
+        if (value instanceof Number n) return n.longValue();
+        if (value instanceof String s && !s.isBlank()) {
+            try { return Long.parseLong(s.trim()); } catch (NumberFormatException ignored) { }
+        }
+        return null;
+    }
+
+    private String stringValue(Object value) {
+        return value != null ? value.toString() : null;
+    }
+
+    private String firstNonBlank(String first, String second) {
+        return (first != null && !first.isBlank()) ? first : second;
+    }
+
+    public Map<String, Object> generateRulingBrief(Long scopeId, Long findingId) {
+        LintRulesConfig rulesConfig = schemaSection6Parser.parse(scopeId);
+        ConflictDomainService.RulingResult result =
+            conflictDomainService.generateRulingBriefForFinding(scopeId, null, findingId, rulesConfig);
+        Map<String, Object> response = new LinkedHashMap<>();
+        switch (result.outcome()) {
+            case NOT_FOUND -> throw new BusinessException(ErrorCode.LINT_FINDING_NOT_FOUND, findingId);
+            case AI_UNAVAILABLE -> throw new BusinessException(ErrorCode.CONFLICT_AI_UNAVAILABLE);
+            case BUSY -> throw new BusinessException(ErrorCode.CONFLICT_AI_CONCURRENCY);
+            case JSON_EXTRACT_FAILED, GENERATION_FAILED -> throw new BusinessException(ErrorCode.INTERNAL_ERROR);
+            case DEFERRED -> {
+                response.put("status", "deferred");
+                response.put("reason", result.reason());
+            }
+            case ALREADY_GENERATED -> response.put("status", "already_generated");
+            case GENERATED -> response.put("status", "generated");
+        }
+        return response;
+    }
+
+    public List<LintFindingDO> listPageConflicts(Long scopeId, Long pageId) {
+        WikiPageDO page = wikiPageMapper.selectById(pageId);
+        String filePath = page != null ? page.getFilePath() : null;
+        return lintFindingService.listFindings(scopeId, "conflict", null, null).stream()
+            .filter(finding -> isConflictPageInvolved(finding, pageId, filePath))
+            .toList();
+    }
+
+    private boolean isConflictPageInvolved(LintFindingDO finding, Long pageId, String filePath) {
+        if (pageId.equals(finding.getAssetId())) {
+            return true;
+        }
+        Map<String, Object> extra = parseExtraMap(finding.getExtra());
+        if (pageId.equals(asLong(extra.get("relatedPageId"))) || pageId.equals(asLong(extra.get("fromPageId")))) {
+            return true;
+        }
+        if (filePath != null) {
+            return filePath.equals(finding.getPagePath())
+                || filePath.equals(stringValue(extra.get("fromPagePath")))
+                || filePath.equals(stringValue(extra.get("relatedPagePath")))
+                || filePath.equals(stringValue(extra.get("pagePathB")));
+        }
+        return false;
     }
 
     public void rejectFinding(Long findingId) {

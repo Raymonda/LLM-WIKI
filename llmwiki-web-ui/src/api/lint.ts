@@ -144,6 +144,21 @@ export function executeConflictRuling(id: number, scopeId: number, action: strin
   return api.post(`/lint/findings/${id}/execute-ruling?${params.toString()}`, { action })
 }
 
+export interface RulingBriefResponse {
+  status: 'generated' | 'already_generated' | 'deferred'
+  reason?: string
+  finding?: LintFindingInfo
+}
+
+export function generateRulingBrief(id: number, scopeId: number): Promise<RulingBriefResponse> {
+  const params = new URLSearchParams({ scopeId: scopeId.toString() })
+  return api.post(`/lint/findings/${id}/ruling-brief?${params.toString()}`)
+}
+
+export function getPageConflicts(scopeId: number, pageId: number): Promise<LintFindingInfo[]> {
+  return api.get('/lint/page-conflicts', { params: { scopeId, pageId } })
+}
+
 export function rejectFinding(id: number): Promise<void> {
   return api.post(`/lint/findings/${id}/reject`)
 }
