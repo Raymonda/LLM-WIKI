@@ -1850,8 +1850,9 @@ public class WriterAgent {
             }
             if (existing == null) return null;
 
-            if ("reference".equals(existing.getPageType())) {
-                log.warn("Skipping updateRelatedPage for reference page '{}' - reference pages are read-only", affectedPath);
+            String existingPageType = existing.getPageType();
+            if ("reference".equals(existingPageType) || "summary".equals(existingPageType)) {
+                log.warn("Skipping updateRelatedPage for source-compilation page '{}' (pageType={}) - locked against cross-source updates", affectedPath, existingPageType);
                 return null;
             }
 
