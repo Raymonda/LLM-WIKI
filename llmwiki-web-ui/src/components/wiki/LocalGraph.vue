@@ -191,6 +191,11 @@ onMounted(loadData)
           <div class="local-graph__source-info">
             <span class="local-graph__source-name" :title="s.name">{{ s.name }}</span>
             <span class="local-graph__source-meta">{{ s.format }} · {{ s.createdAt }}</span>
+            <span
+              v-if="s.lifecycleStatus === 'DEPRECATED'"
+              class="local-graph__source-badge"
+              :title="s.deprecatedReason || ''"
+            >{{ t('wiki.sourceDeprecated') }}</span>
           </div>
           <div class="local-graph__source-actions">
             <button class="local-graph__source-btn" :title="t('wiki.preview')" @click="emit('preview-source', s.id, s.format)">
@@ -316,6 +321,15 @@ onMounted(loadData)
 .local-graph__source-meta {
   font-size: 11px;
   color: var(--text-tertiary);
+}
+
+.local-graph__source-badge {
+  padding: 1px var(--space-1);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
 }
 
 .local-graph__source-actions {

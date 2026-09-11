@@ -38,6 +38,8 @@ const actionOptions = [
   { labelKey: 'scope.auditPageSensitivity', value: 'PAGE_SENSITIVITY' },
   { labelKey: 'scope.auditSourceUpload', value: 'SOURCE_UPLOAD' },
   { labelKey: 'scope.auditSourceDelete', value: 'SOURCE_DELETE' },
+  { labelKey: 'scope.auditSourceDeprecate', value: 'SOURCE_DEPRECATE' },
+  { labelKey: 'scope.auditSourceUndeprecate', value: 'SOURCE_UNDEPRECATE' },
   { labelKey: 'scope.auditSubCreate', value: 'SUBSCRIPTION_CREATE' },
   { labelKey: 'scope.auditSubCancel', value: 'SUBSCRIPTION_CANCEL' },
   { labelKey: 'scope.auditMemberAdd', value: 'MEMBER_ADD' },

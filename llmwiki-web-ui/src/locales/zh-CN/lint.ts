@@ -97,6 +97,7 @@ export default {
   typeLabelSchemaViolation: '违规',
   typeLabelDuplicateOrphan: '重复',
   typeLabelContentThin: '过薄',
+  typeLabelDeprecatedSource: '废弃源',
   // LintView impact descriptions
   impactAutoResolveConflict: 'AI 将基于裁决方案应用合并/共存策略，修改 2 个页面的内容',
   impactAutoResolveDuplicate: 'AI 将尝试与重复页面合并',

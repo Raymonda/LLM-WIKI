@@ -153,7 +153,8 @@ const TYPE_LABEL_KEY_MAP: Record<string, string> = {
   schema_compliance: 'lint.typeLabelSchemaCompliance',
   schema_violation: 'lint.typeLabelSchemaViolation',
   duplicate_orphan: 'lint.typeLabelDuplicateOrphan',
-  content_thin: 'lint.typeLabelContentThin'
+  content_thin: 'lint.typeLabelContentThin',
+  deprecated_source: 'lint.typeLabelDeprecatedSource'
 }
 
 function getTypeLabel(type: string): string {
@@ -171,7 +172,8 @@ const TYPE_ICON_MAP: Record<string, any> = {
   schema_compliance: FileWarning,
   schema_violation: FileWarning,
   duplicate_orphan: AlertTriangle,
-  content_thin: FileWarning
+  content_thin: FileWarning,
+  deprecated_source: Archive
 }
 
 function getTypeIcon(type: string) {

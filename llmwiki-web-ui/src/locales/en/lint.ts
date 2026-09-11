@@ -97,6 +97,7 @@ export default {
   typeLabelSchemaViolation: 'Violation',
   typeLabelDuplicateOrphan: 'Duplicate',
   typeLabelContentThin: 'Thin',
+  typeLabelDeprecatedSource: 'Deprecated Source',
   // LintView impact descriptions
   impactAutoResolveConflict: 'AI will apply merge/coexist strategy based on ruling, modifying 2 pages',
   impactAutoResolveDuplicate: 'AI will attempt to merge with duplicate page',
