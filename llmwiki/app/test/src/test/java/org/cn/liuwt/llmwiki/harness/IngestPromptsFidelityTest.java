@@ -35,4 +35,74 @@ class IngestPromptsFidelityTest {
                 c[0] + " must embed the faithful compilation constraint");
         }
     }
+
+    @Test
+    void shouldDescribeSourceCompilationStructureForSummaryPages() {
+        String single = prompts.writeSummary("{}");
+        assertTrue(single.contains("文档结构地图"), "summary must start with a structure map");
+        assertTrue(single.contains("来源未提供的信息"), "summary must allow a missing-info list");
+        assertFalse(single.contains("5-8句话"), "self-repeating overview instruction must be gone");
+        assertFalse(single.contains("一级标题"), "H1 instruction must be gone");
+        assertFalse(single.contains("标注来源文件信息"), "trailing reference-source section must be gone");
+
+        String planned = prompts.writeSummaryWithPlan("{}", "{}");
+        assertTrue(planned.contains("文档结构地图"));
+        assertFalse(planned.contains("必须用表格呈现"), "metadata table instruction must be gone");
+    }
+
+    @Test
+    void shouldDescribeEntryAndSourceAnnotationForEntityPages() {
+        String serial = prompts.writeEntityPage("实体", "组织", "分析", "{}");
+        assertTrue(serial.contains("（来源："), "entity page must require per-entry source annotation");
+        assertFalse(serial.contains("一级标题"), "H1 instruction must be gone");
+        assertFalse(serial.contains("5. 参考来源"), "trailing reference-source section must be gone");
+
+        String planned = prompts.writeEntityPageWithPlan("实体", "组织", "{}", "{}");
+        assertTrue(planned.contains("（来源："));
+        assertFalse(planned.contains("必须用表格呈现"));
+        assertFalse(planned.contains("5. 参考来源"));
+    }
+
+    @Test
+    void shouldKeepEntityAspectDimensionsWithAggregationSemantics() {
+        String page = prompts.writeEntityPage("实体", "组织", "分析", "{}");
+        assertTrue(page.contains("汇集"), "entity page must use aggregation semantics");
+        assertTrue(page.contains("组织/公司类"), "entity aspect dimensions must stay");
+    }
+
+    @Test
+    void shouldForbidAdjudicationStrategyInWritingPlan() {
+        String plan = prompts.writingPlan("{}", "上下文");
+        assertFalse(plan.contains("termMap"), "term unification table must be gone");
+        assertFalse(plan.contains("不使用变体"), "term unification instruction must be gone");
+        assertFalse(plan.contains("source_priority"), "source-priority adjudication must be gone");
+        assertFalse(plan.contains("newer_wins"), "newer-wins adjudication must be gone");
+        assertTrue(plan.contains("annotate_both"), "side-by-side annotation must stay");
+    }
+
+    @Test
+    void shouldForbidAdjudicationInMergePrompts() {
+        String merge = prompts.mergeIntoExistingPage("现有", "源", "分析", "{}", "更新");
+        assertFalse(merge.contains("[已更新]"), "auto-adjudication marker must be gone");
+        assertTrue(merge.contains("严禁裁决"), "merge must require side-by-side presentation");
+
+        String mergePlan = prompts.mergeIntoExistingPageWithPlan("现有", "源", "分析", "{}", "更新", "{}");
+        assertFalse(mergePlan.contains("source_priority"));
+        assertFalse(mergePlan.contains("newer_wins"));
+        assertFalse(mergePlan.contains("已更新，原版本"));
+        assertFalse(mergePlan.contains("annotate_and_patch"));
+    }
+
+    @Test
+    void shouldStrengthenReferenceSummaryFidelity() {
+        String single = prompts.referenceSummary();
+        assertTrue(single.contains("保留原文结构"), "chapter summary must preserve source structure");
+        assertTrue(single.contains("blockquote"), "chapter summary must quote original clauses");
+        assertTrue(single.contains("最小改写"), "chapter summary must minimize rewriting");
+
+        String batch = prompts.batchReferenceSummaries();
+        assertTrue(batch.contains("保留原文结构"), "batch summaries must preserve source structure");
+        assertTrue(batch.contains("引用原文"), "batch summaries must reference original clauses");
+        assertTrue(batch.contains("最小改写"), "batch summaries must minimize rewriting");
+    }
 }
