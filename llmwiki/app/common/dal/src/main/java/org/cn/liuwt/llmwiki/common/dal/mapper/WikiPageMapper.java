@@ -198,4 +198,17 @@ public interface WikiPageMapper extends BaseMapper<WikiPageDO> {
         LIMIT #{limit}
         """)
     List<WikiPageDO> selectPagesWithoutKeywords(@Param("scopeId") Long scopeId, @Param("limit") int limit);
+
+    @Select("""
+        SELECT wp.id AS page_id, wp.file_path, wp.title, wp.page_type,
+               s.id AS source_id, s.name AS source_name,
+               s.deprecated_category, s.deprecated_reason
+        FROM wiki_page wp
+        INNER JOIN wiki_page_source wps ON wps.page_id = wp.id AND wps.scope_id = #{scopeId}
+        INNER JOIN source s ON s.id = wps.source_id AND s.scope_id = #{scopeId}
+        WHERE wp.scope_id = #{scopeId}
+        AND wp.lifecycle_status = 'ACTIVE'
+        AND s.lifecycle_status = 'DEPRECATED'
+        """)
+    List<Map<String, Object>> selectDeprecatedSourcePageRows(@Param("scopeId") Long scopeId);
 }
