@@ -79,4 +79,20 @@ class WriterAgentCompilationGuardTest {
         verify(storageProvider).write(eq("1"), eq("wiki/pages/s.md"), any());
         verifyNoInteractions(executionEventLog);
     }
+
+    @Test
+    void shouldStripMatchingH1WhenTitleProvided() {
+        WriterAgent agent = new WriterAgent();
+        inject(agent, "storageProvider", storageProvider);
+        inject(agent, "executionEventLog", executionEventLog);
+        Map<String, String> collector = new HashMap<>();
+        IngestContext context = new IngestContext(1L, 2L, 101L, null);
+
+        String result = invokeFlush(agent, "1", "pages/t.md",
+            "# 华源证券产品信息\n\n正文", "华源证券产品信息", collector, context);
+
+        assertEquals("正文", result);
+        assertEquals("正文", collector.get("pages/t.md"));
+        verify(executionEventLog).append(eq("101"), eq("quality/guard"), anyMap());
+    }
 }

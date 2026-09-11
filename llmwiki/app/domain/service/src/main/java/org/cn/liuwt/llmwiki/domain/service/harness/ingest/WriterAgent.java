@@ -907,7 +907,6 @@ public class WriterAgent {
             sanitizedContent = linkWritingService.sanitizeWikiLinks(sanitizedContent, scopeId);
 
             StringBuilder navContent = new StringBuilder();
-            navContent.append("# ").append(chapterTitle).append("\n\n");
             navContent.append("> 参考页 | 来源：").append(docTitle).append(" — ").append(chapterTitle).append("\n\n");
             navContent.append("## 参考摘要\n\n");
             navContent.append(summary).append("\n\n");
@@ -916,7 +915,7 @@ public class WriterAgent {
 
             String pagePath = precomputedPagePath != null ? precomputedPagePath : generateChapterPagePath(null, chapterTitle, chapterIndex);
             String finalContent = navContent.toString();
-            flushCompiledPage(scopeIdStr, pagePath, finalContent, null, contentCollector, context);
+            flushCompiledPage(scopeIdStr, pagePath, finalContent, chapterTitle, contentCollector, context);
 
             WikiPageDO pageDO = wikiPageMapper.selectOne(
                 new LambdaQueryWrapper<WikiPageDO>()
@@ -1568,12 +1567,9 @@ public class WriterAgent {
             summary = linkWritingService.sanitizeWikiLinks(summary, scopeId);
 
             String resolvedTitle = resolveDocTitle(extractJsonField(metadataJson, "title"), context);
-            if (!summary.startsWith("# ")) {
-                summary = "# " + resolvedTitle + "\n\n" + summary;
-            }
 
             String pagePath = precomputedPagePath != null ? precomputedPagePath : generatePagePath(metadataJson);
-            summary = flushCompiledPage(scopeIdStr, pagePath, summary, null, contentCollector, context);
+            summary = flushCompiledPage(scopeIdStr, pagePath, summary, resolvedTitle, contentCollector, context);
 
             WikiPageDO pageDO = wikiPageMapper.selectOne(
                 new LambdaQueryWrapper<WikiPageDO>()
@@ -1622,7 +1618,7 @@ public class WriterAgent {
                         log.info("writeSummaryPage: redirected MERGED page '{}' to merge target '{}' (id={})", pageDO.getTitle(), mergeTarget.getTitle(), mergeTarget.getId());
                         pageDO = mergeTarget;
                         pagePath = mergeTarget.getFilePath();
-                        summary = flushCompiledPage(scopeIdStr, pagePath, summary, null, contentCollector, context);
+                        summary = flushCompiledPage(scopeIdStr, pagePath, summary, resolvedTitle, contentCollector, context);
                     }
                 } else if (PageLifecycle.MERGING.name().equals(summaryLifecycle)) {
                     log.info("writeSummaryPage: reactivating MERGING page '{}' (id={}) — merge target detected", pageDO.getTitle(), pageDO.getId());
@@ -1757,7 +1753,7 @@ public class WriterAgent {
                         merged = PromptTemplate.stripConversationalFiller(stripMarkdownFences(merged));
                         merged = linkWritingService.sanitizeSourceLinks(merged);
                         merged = linkWritingService.sanitizeWikiLinks(merged, scopeId);
-                        flushCompiledPage(scopeIdStr, entityPagePath, merged, null, contentCollector, context);
+                        flushCompiledPage(scopeIdStr, entityPagePath, merged, entityName, contentCollector, context);
                     } finally {
                         llmBarrier.release(LlmConcurrencyBarrier.Bucket.ENTITY);
                     }
@@ -1789,7 +1785,7 @@ public class WriterAgent {
                     entityContent = PromptTemplate.stripConversationalFiller(stripMarkdownFences(entityContent));
                     entityContent = linkWritingService.sanitizeSourceLinks(entityContent);
                     entityContent = linkWritingService.sanitizeWikiLinks(entityContent, scopeId);
-                    entityContent = flushCompiledPage(scopeIdStr, entityPagePath, entityContent, null, contentCollector, context);
+                    entityContent = flushCompiledPage(scopeIdStr, entityPagePath, entityContent, entityName, contentCollector, context);
                 } finally {
                     llmBarrier.release(LlmConcurrencyBarrier.Bucket.ENTITY);
                 }
@@ -1911,7 +1907,7 @@ public class WriterAgent {
                 merged = PromptTemplate.stripConversationalFiller(stripMarkdownFences(merged));
                 merged = linkWritingService.sanitizeSourceLinks(merged);
                 merged = linkWritingService.sanitizeWikiLinks(merged, scopeId);
-                flushCompiledPage(scopeIdStr, affectedPath, merged, null, contentCollector, context);
+                flushCompiledPage(scopeIdStr, affectedPath, merged, existing.getTitle(), contentCollector, context);
             } finally {
                 llmBarrier.release(LlmConcurrencyBarrier.Bucket.ENTITY);
             }
@@ -1963,7 +1959,7 @@ public class WriterAgent {
                 merged = PromptTemplate.stripConversationalFiller(stripMarkdownFences(merged));
                 merged = linkWritingService.sanitizeSourceLinks(merged);
                 merged = linkWritingService.sanitizeWikiLinks(merged, scopeId);
-                flushCompiledPage(scopeIdStr, pagePath, merged, null, null, null);
+                flushCompiledPage(scopeIdStr, pagePath, merged, existing.getTitle(), null, null);
             } finally {
                 llmBarrier.release(LlmConcurrencyBarrier.Bucket.ENTITY);
             }
