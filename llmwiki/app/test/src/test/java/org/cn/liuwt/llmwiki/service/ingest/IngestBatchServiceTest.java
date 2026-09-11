@@ -82,4 +82,29 @@ class IngestBatchServiceTest {
         assertEquals(1, response.getExecutionIds().size());
         assertEquals(1, response.getWarnings().size());
     }
+
+    @Test
+    void shouldSkipDeprecatedSourceWithWarningWhenCreatingBatch() {
+        ReflectionTestUtils.setField(service, "maxBatchSize", 50);
+        SourceDO active = new SourceDO();
+        active.setId(1L);
+        active.setScopeId(10L);
+        active.setName("a.md");
+        active.setLifecycleStatus("ACTIVE");
+        SourceDO deprecated = new SourceDO();
+        deprecated.setId(2L);
+        deprecated.setScopeId(10L);
+        deprecated.setName("old.pdf");
+        deprecated.setLifecycleStatus("DEPRECATED");
+        when(sourceMapper.selectBatchIds(any())).thenReturn(List.of(active, deprecated));
+        when(executionMapper.selectList(any())).thenReturn(List.of());
+        ExecutionModel created = new ExecutionModel();
+        created.setId(500L);
+        when(executionTracker.createExecution(eq("ingest"), eq(10L), eq(1L), isNull())).thenReturn(created);
+
+        IngestBatchCreateResponse response = service.createBatch(10L, 7L, List.of(1L, 2L), null);
+
+        assertEquals(1, response.getExecutionIds().size());
+        assertEquals(1, response.getWarnings().size());
+    }
 }

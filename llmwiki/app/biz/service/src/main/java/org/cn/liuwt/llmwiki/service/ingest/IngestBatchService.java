@@ -90,6 +90,10 @@ public class IngestBatchService {
                 warnings.add("来源不存在或不属于当前知识库: " + sourceId);
                 continue;
             }
+            if ("DEPRECATED".equals(source.getLifecycleStatus())) {
+                warnings.add("来源已废弃，请先恢复: " + source.getName());
+                continue;
+            }
             if (busySourceIds.contains(sourceId)) {
                 warnings.add("已有进行中的处理任务，已跳过: " + source.getName());
                 continue;

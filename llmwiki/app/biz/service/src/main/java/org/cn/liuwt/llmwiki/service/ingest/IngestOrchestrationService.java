@@ -2,6 +2,8 @@ package org.cn.liuwt.llmwiki.service.ingest;
 
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
+import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
+import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel;
 import org.cn.liuwt.llmwiki.domain.service.wiki.SourceService;
@@ -50,6 +52,9 @@ public class IngestOrchestrationService {
         SourceModel source = sourceService.getSource(sourceId, scopeId);
         if (source == null) {
             throw new IllegalArgumentException("ingest source not found: " + sourceId);
+        }
+        if ("DEPRECATED".equals(source.getLifecycleStatus())) {
+            throw new BusinessException(ErrorCode.SOURCE_DEPRECATED_CANNOT_INGEST);
         }
         ExecutionModel execution = ingestService.createExecution(scopeId, sourceId);
         setNodeOwnership(execution.getId());

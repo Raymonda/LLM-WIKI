@@ -2,6 +2,8 @@ package org.cn.liuwt.llmwiki.service.ingest;
 
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
+import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
+import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel;
 import org.cn.liuwt.llmwiki.domain.service.wiki.SourceService;
@@ -88,5 +90,19 @@ class IngestOrchestrationServiceTest {
         orchestration.startIngest(5L, 55L, null);
 
         verify(ingestService).failExecution(99L);
+    }
+
+    @Test
+    void shouldRejectDeprecatedSourceWhenStartingIngest() {
+        SourceModel source = new SourceModel();
+        source.setId(55L);
+        source.setName("old.md");
+        source.setLifecycleStatus("DEPRECATED");
+        when(sourceService.getSource(55L, 5L)).thenReturn(source);
+
+        assertThatThrownBy(() -> orchestration.startIngest(5L, 55L, null))
+            .isInstanceOf(BusinessException.class)
+            .satisfies(e -> assertThat(((BusinessException) e).getCode())
+                .isEqualTo(ErrorCode.SOURCE_DEPRECATED_CANNOT_INGEST.getCode()));
     }
 }
