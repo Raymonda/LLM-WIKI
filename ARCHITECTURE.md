@@ -77,9 +77,11 @@ LLM Wiki 对知识的处理，本质上是让 AI 对知识进行一次"编译"�
 
 ### raw/ — 原始来源（不可变）
 
-- 用户上传的源文档，系统绝不修改。文件名格式 `{uuid}-{originalName}` 避免冲突
-- 元数据真相来源：MySQL `source` 表
-- **不可变性约束**：任何写操作（WriteFileTool / StorageProvider）命中 `raw/` 直接拒绝；来源删除是逻辑删除，文件保留供溯源
+- 用户上传的源文档，系统绝不修改。存储布局为 CAS 内容寻址：`raw/{hash[0:2]}/{hash[2:4]}/{sha256}`（两级 256 分桶 + 物理去重，同内容多来源共享同一物理文件）
+- 上传采用两阶段原子写：`raw/.tmp/{uuid}` 流式暂存（边写边算 SHA-256）→ move 落位 CAS 路径；超过 24h 的 tmp 残留由上传入口惰性清理
+- 元数据真相来源：MySQL `source` 表；`content_hash` 为运维对账锚点，`(file_path, content_hash)` 可导出供存储侧校验
+- **不可变性约束**：任何写操作（WriteFileTool / StorageProvider）命中 `raw/` 直接拒绝；已入库来源**禁止物理删除**（DELETE 接口一律拒绝），仅可废弃（`lifecycle_status=DEPRECATED`，文件与 `wiki_page_source` 关系永久保留）
+- **数据保真边界**：完整性由存储/运维侧保障（NAS scrub / 快照 / 恢复演练），应用层不做巡检
 
 ### parsed/ — 结构化源层（编译中间产物）
 
