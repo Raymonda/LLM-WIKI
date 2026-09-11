@@ -1937,6 +1937,23 @@ public class WriterAgent {
 
             flushCompiledPage(scopeIdStr, pagePath, applied.content(), pageTitle, contentCollector, context);
 
+            for (EntityPageIncrementalApplier.ConflictEvent conflict : applied.conflicts()) {
+                try {
+                    String detail = "页面: " + pagePath + "\n既有条目: " + conflict.existingClaim()
+                        + "\n新增条目（" + conflict.source() + "）: " + conflict.newClaim();
+                    lintFindingService.upsertConflictFinding(scopeId,
+                        context != null ? context.getExecutionId() : null,
+                        new org.cn.liuwt.llmwiki.domain.service.harness.LintFindingService.ConflictCard(
+                            "同页条目冲突 — " + pageTitle, detail, "medium",
+                            pagePath, existing.getId(), pageTitle,
+                            pagePath, existing.getId(), pageTitle,
+                            "fact_conflict", conflict.existingClaim(), conflict.newClaim(),
+                            "ingest_fact_conflict"));
+                } catch (Exception e) {
+                    log.warn("Failed to raise same-page conflict card for '{}': {}", pageTitle, e.getMessage());
+                }
+            }
+
             existing.setSourceCount(existing.getSourceCount() == null ? 1 : existing.getSourceCount() + 1);
             existing.setHealthStatus(healthStatus);
             existing.setSchemaVersion(schemaManager.getCurrentVersionId(scopeId, SchemaSkeletonValidator.WIKI_SCHEMA_KEY));

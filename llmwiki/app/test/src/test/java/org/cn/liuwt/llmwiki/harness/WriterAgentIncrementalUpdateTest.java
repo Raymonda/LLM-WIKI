@@ -174,4 +174,32 @@ class WriterAgentIncrementalUpdateTest {
         assertNull(result);
         verify(notificationService, never()).createNotification(any(), any(), any(), any(), any(), any(), any());
     }
+
+    @Test
+    void shouldRaiseSamePageConflictCardWhenEntriesConflict() {
+        when(schemaInjector.prependForWriter(anyLong(), anyString())).thenReturn("PROMPT");
+        when(llmBarrier.tryAcquire(any(), anyLong())).thenReturn(true);
+        when(chatClient.chat(anyString())).thenReturn(
+            "[{\"section\":\"基本信息\",\"claim\":\"注册资本变更为 12 亿元\",\"source\":\"2024 公告\","
+                + "\"relation\":\"conflict_with:1\"}]");
+        when(lintFindingService.upsertConflictFinding(any(), any(), any())).thenReturn(7L);
+        WriterAgent agent = agentWithMocks();
+        WikiPageDO existing = entityPage();
+
+        invokeApply(agent, existing, new IngestContext(1L, 2L, 100L, null));
+
+        ArgumentCaptor<LintFindingService.ConflictCard> captor =
+            ArgumentCaptor.forClass(LintFindingService.ConflictCard.class);
+        verify(lintFindingService).upsertConflictFinding(eq(1L), eq(100L), captor.capture());
+        LintFindingService.ConflictCard card = captor.getValue();
+        assertEquals("fact_conflict", card.conflictType());
+        assertEquals("ingest_fact_conflict", card.source());
+        assertEquals(77L, card.fromPageId());
+        assertEquals(77L, card.relatedPageId());
+        assertEquals("pages/test-entity.md", card.fromPagePath());
+        assertEquals("注册资本 10 亿元", card.claimA());
+        assertEquals("注册资本变更为 12 亿元", card.claimB());
+        assertTrue(card.detail().contains("注册资本 10 亿元"), "detail must carry the existing claim");
+        assertTrue(card.detail().contains("2024 公告"), "detail must carry the new claim source");
+    }
 }
