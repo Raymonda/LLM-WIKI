@@ -145,6 +145,18 @@ public class PromptTemplate {
                 .replace("{LAST_YEAR}", lastYear);
     }
 
+    public static final String FAITHFUL_COMPILATION_CONSTRAINT = """
+            【忠实编译约束 —— 所有写作必须遵守，违反任何一条即视为编译失败】
+            本知识库只回答"来源说了什么"，不回答"这意味着什么"。你的角色是编辑而非作者：
+            1. 只写来源明确陈述的内容：严禁补充来源之外的世界知识、常识推演或合理推测
+            2. 每个事实性陈述必须能在来源原文中直接找到依据：宁可少写，不可多写；不确定的内容不写
+            3. 每条事实性陈述必须紧随来源标注「（来源：<来源名称>）」：没有来源标注的陈述不得写入
+            4. 来源之间存在矛盾时，并列呈现双方陈述与各自来源：严禁裁决、严禁选择"更可信"的一方
+            5. 严禁推断与构造：不推导来源未给出的数字、日期、因果、排名、评价或结论
+            6. 保持来源的原始表述粒度：不缩写数字、不模糊化条件、不合并来源中的独立条目
+            允许的加工仅限：代词消解、结构重建、同源内可自证的称谓合并。
+            """;
+
     private static final int MAX_PAGE_LIST_TOKENS = 12000;
 
     public static final int MAX_SOURCE_CHARS_SUMMARY = 60000;

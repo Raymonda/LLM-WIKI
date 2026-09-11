@@ -247,7 +247,7 @@ public class IngestPrompts {
                 + "6. 参考来源（标注来源文件信息）";
         }
 
-        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n---\n\n" + """
+        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT + "\n\n---\n\n" + """
             根据下方用户消息中的原始文件内容和结构化导航索引，生成一个完整深入的 Wiki 页面（Markdown 格式）。
             用户消息包含【原始文件内容】（事实来源）和【结构化导航索引】（写作方向指引）两个部分。
 
@@ -308,7 +308,7 @@ public class IngestPrompts {
         if (sourceContent != null && !sourceContent.isBlank()) {
             sourceSection = "\n\n【原始文件内容】（事实来源 —— 最高优先级，融合新内容时所有新增的事实性内容必须源自此处）\n" + sourceContent;
         }
-        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + """
+        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT + "\n\n" + """
 
             你是知识库的增量编译器。请将下面的新内容融合到现有 Wiki 页面中，生成更新后的完整页面（Markdown 格式）。
 
@@ -350,7 +350,7 @@ public class IngestPrompts {
                 + "5. 参考来源";
         }
 
-        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n---\n\n"
+        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT + "\n\n---\n\n"
             + "根据下方用户消息中的原始文件内容和结构化导航索引，为实体「" + entityName + "」生成一个独立的 Wiki 页面（Markdown 格式）。\n"
             + "用户消息包含【原始文件内容】（事实来源）和【结构化导航索引】（写作方向指引）两个部分。\n\n"
             + "实体类型：" + entityType + "\n\n"
@@ -457,7 +457,7 @@ public class IngestPrompts {
                 + "4. 关系与关联（以叙述性段落描述与其他知识页面的关系，在叙述中自然嵌入 [[页面标题]] 链接。禁止生成纯链接平铺列表）\n"
                 + "5. 参考来源";
         }
-        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + """
+        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT + "\n\n" + """
 
             根据下方用户消息中的原始文件内容、结构化导航索引、元数据和全局写作计划，生成摘要页。
             用户消息包含【原始文件内容】（事实来源）和【结构化导航索引】（写作方向指引）两个部分。
@@ -503,7 +503,7 @@ public class IngestPrompts {
                 + "4. 关联关系（以叙述性段落描述与其他实体/概念的关系，在叙述中自然嵌入 [[页面标题]] 链接。禁止生成纯链接平铺列表）\n"
                 + "5. 参考来源";
         }
-        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n"
+        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT + "\n\n"
             + "根据下方用户消息中的原始文件内容和结构化导航索引，为实体「" + entityName + "」（类型：" + entityType + "）生成 Wiki 页面。"
             + "用户消息包含【原始文件内容】（事实来源）和【结构化导航索引】（写作方向指引）两个部分。"
             + "严格遵循写作计划中该实体的定位（positioning）、重点方向（focus）和交叉引用约定（crossReferences）。\n\n"
@@ -529,7 +529,7 @@ public class IngestPrompts {
         if (sourceContent != null && !sourceContent.isBlank()) {
             sourceSection = "\n\n【原始文件内容】（事实来源 —— 最高优先级，融合新内容时所有新增的事实性内容必须源自此处）\n" + sourceContent;
         }
-        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + """
+        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT + "\n\n" + """
 
             你是知识库的增量编译器。根据全局写作计划，将新内容融合到现有 Wiki 页面中，生成更新后的完整页面。
 
