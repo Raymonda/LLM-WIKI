@@ -52,6 +52,9 @@ public class SourceService {
     private static final Set<String> VALID_DEPRECATE_CATEGORIES =
         Set.of("OUTDATED", "SUPERSEDED", "ERRONEOUS", "OTHER");
 
+    private static final String TEMP_DIR = "raw/.tmp";
+    private static final long TEMP_FILE_TTL_HOURS = 24;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Autowired
@@ -67,32 +70,30 @@ public class SourceService {
         String originalName = file.getOriginalFilename();
         String format = extractFormat(originalName);
         String scopeIdStr = String.valueOf(scopeId);
-        String uniqueName = buildUniqueFileName(originalName);
-        String storagePath = "raw/" + uniqueName;
-
         try {
             storageProvider.ensureBucket(scopeIdStr);
+            cleanupStaleTempFiles(scopeIdStr);
 
+            String tempPath = TEMP_DIR + "/" + UUID.randomUUID().toString().replace("-", "");
             MessageDigest messageDigest = MessageDigest.getInstance("SHA-256");
-            DigestInputStream digestInputStream = new DigestInputStream(file.getInputStream(), messageDigest);
-            storageProvider.write(scopeIdStr, storagePath, digestInputStream, file.getSize());
-
-            byte[] hashBytes = messageDigest.digest();
-            String contentHash = bytesToHex(hashBytes);
+            try (InputStream in = new DigestInputStream(file.getInputStream(), messageDigest)) {
+                storageProvider.write(scopeIdStr, tempPath, in, file.getSize());
+            }
+            String contentHash = bytesToHex(messageDigest.digest());
+            String casPath = casPathOf(contentHash);
+            finalizeCasUpload(scopeIdStr, tempPath, casPath);
 
             SourceDO sourceDO = new SourceDO();
             sourceDO.setName(originalName);
-            sourceDO.setFilePath(storagePath);
+            sourceDO.setFilePath(casPath);
             sourceDO.setFormat(format);
             sourceDO.setSize(file.getSize());
             sourceDO.setStatus("uploaded");
             sourceDO.setScopeId(scopeId);
             sourceDO.setUploadUserId(userId);
             sourceDO.setContentHash(contentHash);
-
-            java.time.LocalDateTime fileModifiedTime = storageProvider.getLastModifiedTime(scopeIdStr, storagePath);
-            sourceDO.setFileModifiedAt(fileModifiedTime);
-
+            sourceDO.setLifecycleStatus("ACTIVE");
+            sourceDO.setFileModifiedAt(storageProvider.getLastModifiedTime(scopeIdStr, casPath));
             sourceMapper.insert(sourceDO);
 
             SourceModel model = toModel(sourceDO);
@@ -144,27 +145,31 @@ public class SourceService {
         byte[] bytes = markdown.getBytes(StandardCharsets.UTF_8);
         String originalName = (title != null && title.toLowerCase().endsWith(".md")) ? title : title + ".md";
         String scopeIdStr = String.valueOf(scopeId);
-        String uniqueName = buildUniqueFileName(originalName);
-        String storagePath = "raw/" + uniqueName;
         try {
             storageProvider.ensureBucket(scopeIdStr);
+            cleanupStaleTempFiles(scopeIdStr);
+
+            String tempPath = TEMP_DIR + "/" + UUID.randomUUID().toString().replace("-", "");
             MessageDigest messageDigest = MessageDigest.getInstance("SHA-256");
             try (InputStream in = new ByteArrayInputStream(bytes)) {
                 DigestInputStream digestInputStream = new DigestInputStream(in, messageDigest);
-                storageProvider.write(scopeIdStr, storagePath, digestInputStream, (long) bytes.length);
+                storageProvider.write(scopeIdStr, tempPath, digestInputStream, (long) bytes.length);
             }
             String contentHash = bytesToHex(messageDigest.digest());
+            String casPath = casPathOf(contentHash);
+            finalizeCasUpload(scopeIdStr, tempPath, casPath);
 
             SourceDO sourceDO = new SourceDO();
             sourceDO.setName(originalName);
-            sourceDO.setFilePath(storagePath);
+            sourceDO.setFilePath(casPath);
             sourceDO.setFormat("md");
             sourceDO.setSize((long) bytes.length);
             sourceDO.setStatus("uploaded");
             sourceDO.setScopeId(scopeId);
             sourceDO.setUploadUserId(userId);
             sourceDO.setContentHash(contentHash);
-            sourceDO.setFileModifiedAt(storageProvider.getLastModifiedTime(scopeIdStr, storagePath));
+            sourceDO.setLifecycleStatus("ACTIVE");
+            sourceDO.setFileModifiedAt(storageProvider.getLastModifiedTime(scopeIdStr, casPath));
             sourceMapper.insert(sourceDO);
 
             SourceModel model = toModel(sourceDO);
@@ -206,6 +211,47 @@ public class SourceService {
         return sb.toString();
     }
 
+    private String casPathOf(String contentHash) {
+        return "raw/" + contentHash.substring(0, 2) + "/" + contentHash.substring(2, 4) + "/" + contentHash;
+    }
+
+    private void finalizeCasUpload(String scopeIdStr, String tempPath, String casPath) {
+        if (storageProvider.exists(scopeIdStr, casPath)) {
+            storageProvider.delete(scopeIdStr, tempPath);
+            log.info("CAS dedup hit, reusing existing raw object: {}", casPath);
+            return;
+        }
+        try {
+            storageProvider.move(scopeIdStr, tempPath, casPath);
+        } catch (Exception e) {
+            storageProvider.delete(scopeIdStr, tempPath);
+            if (storageProvider.exists(scopeIdStr, casPath)) {
+                log.info("CAS concurrent dedup hit, reusing existing raw object: {}", casPath);
+                return;
+            }
+            throw e;
+        }
+    }
+
+    private void cleanupStaleTempFiles(String scopeIdStr) {
+        try {
+            List<String> tempFiles = storageProvider.list(scopeIdStr, TEMP_DIR);
+            if (tempFiles.isEmpty()) {
+                return;
+            }
+            LocalDateTime cutoff = LocalDateTime.now().minusHours(TEMP_FILE_TTL_HOURS);
+            for (String tempFile : tempFiles) {
+                LocalDateTime modified = storageProvider.getLastModifiedTime(scopeIdStr, tempFile);
+                if (modified != null && modified.isBefore(cutoff)) {
+                    storageProvider.delete(scopeIdStr, tempFile);
+                    log.info("Cleaned stale temp upload file: {}", tempFile);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to clean stale temp upload files: {}", e.getMessage());
+        }
+    }
+
     public SourceModel findDuplicateSource(Long scopeId, String contentHash) {
         if (contentHash == null) return null;
         SourceDO duplicate = sourceMapper.selectOne(
@@ -228,19 +274,6 @@ public class SourceService {
                 .last("LIMIT 1")
         );
         return processing != null ? toModel(processing) : null;
-    }
-
-    private String buildUniqueFileName(String originalName) {
-        String uuid = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
-        if (originalName == null || originalName.isBlank()) {
-            return uuid;
-        }
-        String safeName = originalName.replace('\\', '/');
-        int slashIdx = safeName.lastIndexOf('/');
-        if (slashIdx >= 0) {
-            safeName = safeName.substring(slashIdx + 1);
-        }
-        return uuid + "-" + safeName;
     }
 
     public List<SourceModel> listSources(Long scopeId) {
