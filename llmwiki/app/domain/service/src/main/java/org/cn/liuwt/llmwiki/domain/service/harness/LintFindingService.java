@@ -162,6 +162,163 @@ public class LintFindingService {
         return contentUpdatedAt != null && contentUpdatedAt.isAfter(dismissedAt);
     }
 
+    public enum ConflictMatchType { SAME, REVERSED, NONE }
+
+    public record ConflictCard(String title, String detail, String priority,
+                               String fromPagePath, Long fromPageId, String fromPageTitle,
+                               String relatedPagePath, Long relatedPageId, String relatedPageTitle,
+                               String conflictType, String claimA, String claimB, String source) {}
+
+    public Long upsertConflictFinding(Long scopeId, Long executionId, ConflictCard card) {
+        List<LintFindingDO> candidates = lintFindingMapper.selectList(
+            new LambdaQueryWrapper<LintFindingDO>()
+                .eq(LintFindingDO::getScopeId, scopeId)
+                .eq(LintFindingDO::getFindingType, "conflict")
+                .in(LintFindingDO::getStatus, "open", "repairing", "awaiting_approval"));
+
+        for (LintFindingDO candidate : candidates) {
+            if (matchConflictCandidate(candidate, card) == ConflictMatchType.NONE) {
+                continue;
+            }
+            candidate.setTitle(card.title());
+            candidate.setDetail(card.detail());
+            candidate.setPriority(card.priority());
+            candidate.setExecutionId(executionId);
+            candidate.setPagePath(card.fromPagePath());
+            candidate.setAssetId(card.fromPageId());
+            candidate.setExtra(writeConflictExtra(card));
+            lintFindingMapper.updateById(candidate);
+            log.debug("Updated conflict finding id={} for {} ↔ {}", candidate.getId(),
+                card.fromPagePath(), card.relatedPagePath());
+            return candidate.getId();
+        }
+
+        LambdaQueryWrapper<LintFindingDO> dismissedWrapper = new LambdaQueryWrapper<LintFindingDO>()
+            .eq(LintFindingDO::getScopeId, scopeId)
+            .eq(LintFindingDO::getFindingType, "conflict")
+            .eq(LintFindingDO::getStatus, "dismissed");
+        if (card.fromPageId() != null) {
+            dismissedWrapper.eq(LintFindingDO::getAssetId, card.fromPageId());
+        } else if (card.fromPagePath() != null) {
+            dismissedWrapper.eq(LintFindingDO::getPagePath, card.fromPagePath());
+        } else {
+            dismissedWrapper.isNull(LintFindingDO::getAssetId);
+        }
+        dismissedWrapper.orderByDesc(LintFindingDO::getId).last("LIMIT 1");
+        LintFindingDO dismissed = lintFindingMapper.selectOne(dismissedWrapper);
+        if (dismissed != null && !isRevivalAllowed(dismissed, card.fromPageId())) {
+            log.debug("Skip conflict card {} ↔ {}: dismissed and page unchanged",
+                card.fromPagePath(), card.relatedPagePath());
+            return null;
+        }
+
+        LintFindingDO finding = new LintFindingDO();
+        finding.setScopeId(scopeId);
+        finding.setExecutionId(executionId);
+        finding.setFindingType("conflict");
+        finding.setPriority(card.priority());
+        finding.setTitle(card.title());
+        finding.setDetail(card.detail());
+        finding.setPagePath(card.fromPagePath());
+        finding.setAssetId(card.fromPageId());
+        finding.setStatus("open");
+        finding.setHandlingMethod("ruling_brief");
+        finding.setExtra(writeConflictExtra(card));
+        lintFindingMapper.insert(finding);
+        log.debug("Created conflict finding id={} for {} ↔ {}", finding.getId(),
+            card.fromPagePath(), card.relatedPagePath());
+        return finding.getId();
+    }
+
+    private ConflictMatchType matchConflictCandidate(LintFindingDO candidate, ConflictCard card) {
+        Map<String, Object> extra = parseExtraMap(candidate.getExtra());
+        Long candidateRelatedId = asLong(extra.get("relatedPageId"));
+        String candidateRelatedPath = firstNonBlank(stringValue(extra.get("relatedPagePath")),
+            stringValue(extra.get("pagePathB")));
+        String candidateFromPath = firstNonBlank(stringValue(extra.get("fromPagePath")),
+            candidate.getPagePath());
+
+        if (candidate.getAssetId() != null && card.fromPageId() != null
+                && candidateRelatedId != null && card.relatedPageId() != null) {
+            if (candidate.getAssetId().equals(card.fromPageId())
+                    && candidateRelatedId.equals(card.relatedPageId())) {
+                return ConflictMatchType.SAME;
+            }
+            if (candidate.getAssetId().equals(card.relatedPageId())
+                    && candidateRelatedId.equals(card.fromPageId())) {
+                return ConflictMatchType.REVERSED;
+            }
+        }
+
+        if (sameText(candidateFromPath, card.fromPagePath())) {
+            if (candidateRelatedId == null && candidateRelatedPath == null) {
+                return ConflictMatchType.SAME;
+            }
+            if (sameText(candidateRelatedPath, card.relatedPagePath())) {
+                return ConflictMatchType.SAME;
+            }
+        }
+        return ConflictMatchType.NONE;
+    }
+
+    private String writeConflictExtra(ConflictCard card) {
+        Map<String, Object> extra = new java.util.LinkedHashMap<>();
+        extra.put("fromPageId", card.fromPageId());
+        extra.put("fromPagePath", card.fromPagePath());
+        extra.put("fromPageTitle", card.fromPageTitle());
+        extra.put("relatedPageId", card.relatedPageId());
+        extra.put("relatedPagePath", card.relatedPagePath());
+        extra.put("relatedPageTitle", card.relatedPageTitle());
+        extra.put("conflictType", card.conflictType());
+        extra.put("claimA", card.claimA() != null ? card.claimA() : "");
+        extra.put("claimB", card.claimB() != null ? card.claimB() : "");
+        extra.put("source", card.source());
+        try {
+            return objectMapper.writeValueAsString(extra);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to serialize conflict extra", e);
+            return "{}";
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseExtraMap(String extraJson) {
+        if (extraJson == null || extraJson.isBlank()) return java.util.Collections.emptyMap();
+        try {
+            return objectMapper.readValue(extraJson, Map.class);
+        } catch (Exception e) {
+            return java.util.Collections.emptyMap();
+        }
+    }
+
+    private Long asLong(Object value) {
+        if (value instanceof Number n) return n.longValue();
+        if (value instanceof String s && !s.isBlank()) {
+            try { return Long.parseLong(s.trim()); } catch (NumberFormatException ignored) { }
+        }
+        return null;
+    }
+
+    private String stringValue(Object value) {
+        return value != null ? value.toString() : null;
+    }
+
+    private String firstNonBlank(String first, String second) {
+        return (first != null && !first.isBlank()) ? first : second;
+    }
+
+    private boolean sameText(String a, String b) {
+        return a != null && !a.isBlank() && a.equals(b);
+    }
+
+    public void updateExtraAndAsset(Long findingId, String extraJson, Long assetId) {
+        lintFindingMapper.update(null,
+            new LambdaUpdateWrapper<LintFindingDO>()
+                .eq(LintFindingDO::getId, findingId)
+                .set(LintFindingDO::getExtra, extraJson)
+                .set(assetId != null, LintFindingDO::getAssetId, assetId));
+    }
+
     @Transactional
     public int autoArchiveSupersededFindings(Long scopeId, Long currentExecutionId, Set<Long> touchedFindingIds) {
         LambdaQueryWrapper<LintFindingDO> queryWrapper = new LambdaQueryWrapper<LintFindingDO>()
@@ -425,7 +582,7 @@ public class LintFindingService {
     @Transactional
     public void autoResolve(Long findingId, String handlingMethod) {
         LintFindingDO finding = lintFindingMapper.selectById(findingId);
-        if (finding == null || !Set.of("open", "awaiting_approval").contains(finding.getStatus())) return;
+        if (finding == null || !Set.of("open", "awaiting_approval", "deferred").contains(finding.getStatus())) return;
         LocalDateTime now = LocalDateTime.now();
         lintFindingMapper.update(null,
             new LambdaUpdateWrapper<LintFindingDO>()
