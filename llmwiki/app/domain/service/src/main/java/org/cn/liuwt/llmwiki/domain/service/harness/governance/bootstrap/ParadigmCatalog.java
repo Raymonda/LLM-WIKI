@@ -14,6 +14,12 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class ParadigmCatalog {
 
+    private static final String FAITHFUL_PAGE_CONTRACT =
+        "本知识库采用忠实编译模式：摘要页与参考页是来源编译页（每份来源恰好编译一次，被其他来源摄入锁定），"
+            + "只忠实呈现来源内容，关键陈述带「（来源：<来源名称>）」标注，原文引用优先；"
+            + "实体页是零断言汇集台——每条记录 = 来源明确陈述的事实 + 来源标注，不做无来源支撑的断言；"
+            + "来源之间存在矛盾时并列呈现双方主张与各自来源，不做裁决。页面内容不使用 H1 标题（由系统渲染）。";
+
     private final Map<String, Paradigm> paradigms = new ConcurrentHashMap<>();
 
     public ParadigmCatalog() {
@@ -504,6 +510,7 @@ public class ParadigmCatalog {
     private Templates buildTemplates(PageTemplate... pts) {
         Templates t = new Templates();
         t.setPageTemplates(List.of(pts));
+        t.setNarrative(FAITHFUL_PAGE_CONTRACT);
         return t;
     }
 
