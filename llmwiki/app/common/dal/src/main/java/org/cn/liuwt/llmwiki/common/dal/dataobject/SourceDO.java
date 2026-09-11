@@ -20,4 +20,9 @@ public class SourceDO {
     private LocalDateTime updatedAt;
     private LocalDateTime fileModifiedAt;
     private String contentHash;
+    private String lifecycleStatus;
+    private LocalDateTime deprecatedAt;
+    private String deprecatedCategory;
+    private String deprecatedReason;
+    private Long deprecatedBy;
 }
