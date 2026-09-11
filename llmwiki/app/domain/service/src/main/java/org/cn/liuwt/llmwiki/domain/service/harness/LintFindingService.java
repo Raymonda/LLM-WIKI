@@ -1030,6 +1030,48 @@ public class LintFindingService {
         wikiFileService.recalcPageHealthStatus(scopeId, pageId);
     }
 
+    @Transactional
+    public void resolveSourceFindingsOnUndeprecate(Long scopeId, Long sourceId) {
+        List<WikiPageSourceDO> links = wikiPageSourceMapper.selectList(
+            new LambdaQueryWrapper<WikiPageSourceDO>()
+                .eq(WikiPageSourceDO::getScopeId, scopeId)
+                .eq(WikiPageSourceDO::getSourceId, sourceId)
+        );
+        if (links.isEmpty()) {
+            return;
+        }
+        Set<Long> pageIds = links.stream()
+            .map(WikiPageSourceDO::getPageId)
+            .collect(Collectors.toSet());
+        List<LintFindingDO> findings = lintFindingMapper.selectList(
+            new LambdaQueryWrapper<LintFindingDO>()
+                .eq(LintFindingDO::getScopeId, scopeId)
+                .eq(LintFindingDO::getFindingType, "deprecated_source")
+                .in(LintFindingDO::getAssetId, pageIds)
+                .in(LintFindingDO::getStatus, "open", "repairing")
+        );
+        if (findings.isEmpty()) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        for (LintFindingDO f : findings) {
+            lintFindingMapper.update(null,
+                new LambdaUpdateWrapper<LintFindingDO>()
+                    .eq(LintFindingDO::getId, f.getId())
+                    .set(LintFindingDO::getStatus, "auto_resolved")
+                    .set(LintFindingDO::getAutoResolvedAt, now)
+                    .set(LintFindingDO::getHandlingMethod, "source_restored")
+                    .set(LintFindingDO::getRepairExecutionId, null)
+                    .set(LintFindingDO::getArchivedAt, now)
+            );
+            log.info("Undeprecate auto-resolved deprecated_source finding id={}, pageId={}, sourceId={}",
+                f.getId(), f.getAssetId(), sourceId);
+        }
+        for (Long pageId : pageIds) {
+            wikiFileService.recalcPageHealthStatus(scopeId, pageId);
+        }
+    }
+
     public IPage<LintFindingDO> listFindingsPaged(Long scopeId, String findingType, String status,
                                                     String priority, boolean archived, int page, int size) {
         LambdaQueryWrapper<LintFindingDO> wrapper = new LambdaQueryWrapper<>();
