@@ -9,6 +9,7 @@ import org.cn.liuwt.llmwiki.common.util.result.Result;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.HarnessEngine;
 import org.cn.liuwt.llmwiki.domain.service.harness.LintFindingService;
+import org.cn.liuwt.llmwiki.domain.service.harness.quality.CompilationQualityScanner;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionStatusEvent;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.StepStatusEvent;
@@ -51,6 +52,9 @@ public class LintController {
 
     @Autowired
     private LintFindingService lintFindingService;
+
+    @Autowired
+    private org.cn.liuwt.llmwiki.domain.service.harness.quality.CompilationQualityScanner compilationQualityScanner;
 
     @Autowired
     private ExecutionNodeRegistry registry;
@@ -271,6 +275,11 @@ public class LintController {
         overview.setLastLintTime(lintFindingService.getLastLintTime(scopeId));
         overview.setTopFindings(lintFindingService.getTopFindings(scopeId, 5).stream().map(this::toFindingInfo).toList());
         return Result.success(overview);
+    }
+
+    @PostMapping("/scope/compilation-quality-scan")
+    public Result<CompilationQualityScanner.ScanReport> compilationQualityScan(@RequestParam Long scopeId) {
+        return Result.success(compilationQualityScanner.scan(scopeId));
     }
 
     @PatchMapping("/findings/{id}")
