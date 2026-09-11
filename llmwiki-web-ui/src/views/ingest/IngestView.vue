@@ -2,11 +2,11 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter, useRoute } from 'vue-router'
-import { uploadSource, listSources, deleteSource, type SourceInfo, type DuplicateInfo } from '@/api/source'
+import { uploadSource, listSources, deprecateSource, undeprecateSource, type SourceInfo, type DuplicateInfo } from '@/api/source'
 import { useAuthStore } from '@/stores/auth'
 import {
   Upload, FileText, CheckCircle, ChevronRight,
-  Loader2, AlertTriangle, Trash2, ArrowRight, Sparkles,
+  Loader2, AlertTriangle, Archive, ArchiveRestore, ArrowRight, Sparkles,
   Search, FilePlus, FileEdit, XCircle, RotateCcw, AlertCircle, X,
   PauseCircle, PlayCircle, ChevronDown, GitBranch, ClipboardCheck,
   Layers
@@ -267,12 +267,64 @@ async function loadExistingSources() {
   }
 }
 
-async function handleDeleteSource(id: number) {
+const DEPRECATE_CATEGORIES = ['OUTDATED', 'SUPERSEDED', 'ERRONEOUS', 'OTHER']
+
+const DEPRECATE_CATEGORY_KEY_MAP: Record<string, string> = {
+  OUTDATED: 'ingest.deprecateCategoryOutdated',
+  SUPERSEDED: 'ingest.deprecateCategorySuperseded',
+  ERRONEOUS: 'ingest.deprecateCategoryErroneous',
+  OTHER: 'ingest.deprecateCategoryOther',
+}
+
+const deprecateDialog = ref(false)
+const deprecateTarget = ref<SourceInfo | null>(null)
+const deprecateCategory = ref('OUTDATED')
+const deprecateReason = ref('')
+const deprecateSubmitting = ref(false)
+const deprecateError = ref('')
+
+function deprecateCategoryLabel(category: string | null | undefined): string {
+  const key = DEPRECATE_CATEGORY_KEY_MAP[category || '']
+  return key ? t(key) : ''
+}
+
+function openDeprecateDialog(source: SourceInfo) {
+  deprecateTarget.value = source
+  deprecateCategory.value = 'OUTDATED'
+  deprecateReason.value = ''
+  deprecateError.value = ''
+  deprecateDialog.value = true
+}
+
+async function submitDeprecate() {
+  if (!deprecateTarget.value) return
+  if (deprecateCategory.value === 'OTHER' && !deprecateReason.value.trim()) {
+    deprecateError.value = t('ingest.deprecateReasonRequired')
+    return
+  }
+  deprecateSubmitting.value = true
+  deprecateError.value = ''
   try {
-    await deleteSource(id)
-    existingSources.value = existingSources.value.filter(s => s.id !== id)
+    await deprecateSource(deprecateTarget.value.id, {
+      category: deprecateCategory.value,
+      reason: deprecateReason.value.trim() || undefined,
+    })
+    deprecateDialog.value = false
+    await loadExistingSources()
   } catch (e) {
-    console.error('Failed to delete source:', e)
+    console.error('Failed to deprecate source:', e)
+    deprecateError.value = t('ingest.deprecateFailed')
+  } finally {
+    deprecateSubmitting.value = false
+  }
+}
+
+async function handleUndeprecateSource(id: number) {
+  try {
+    await undeprecateSource(id)
+    await loadExistingSources()
+  } catch (e) {
+    console.error('Failed to undeprecate source:', e)
   }
 }
 
@@ -658,10 +710,58 @@ onMounted(async () => {
               <FileText :size="14" class="ingest-view__existing-icon" />
               <span class="ingest-view__existing-name">{{ source.name }}</span>
               <span class="ingest-view__existing-meta">{{ formatSize(source.size) }} · {{ source.format }}</span>
-              <button class="ingest-view__existing-delete" @click="handleDeleteSource(source.id)" :title="t('ingest.deleteSource')">
-                <Trash2 :size="14" />
+              <span
+                v-if="source.lifecycleStatus === 'DEPRECATED'"
+                class="ingest-view__existing-badge"
+                :title="[deprecateCategoryLabel(source.deprecatedCategory), source.deprecatedReason].filter(Boolean).join(' · ')"
+              >
+                {{ t('ingest.deprecatedBadge') }}
+              </span>
+              <button
+                v-if="source.lifecycleStatus !== 'DEPRECATED'"
+                class="ingest-view__existing-action"
+                @click="openDeprecateDialog(source)"
+                :title="t('ingest.deprecateSource')"
+              >
+                <Archive :size="14" />
+              </button>
+              <button
+                v-else
+                class="ingest-view__existing-action"
+                @click="handleUndeprecateSource(source.id)"
+                :title="t('ingest.undeprecateSource')"
+              >
+                <ArchiveRestore :size="14" />
               </button>
             </div>
+          </div>
+        </div>
+
+        <div v-if="deprecateDialog" class="ingest-view__deprecate-dialog">
+          <h3 class="ingest-view__deprecate-title">{{ t('ingest.deprecateDialogTitle') }}</h3>
+          <p class="ingest-view__deprecate-target">{{ deprecateTarget?.name }}</p>
+          <p class="ingest-view__deprecate-hint">{{ t('ingest.deprecateDialogHint') }}</p>
+          <div class="ingest-view__deprecate-categories">
+            <label v-for="cat in DEPRECATE_CATEGORIES" :key="cat" class="ingest-view__deprecate-category">
+              <input type="radio" :value="cat" v-model="deprecateCategory" :disabled="deprecateSubmitting" />
+              <span>{{ deprecateCategoryLabel(cat) }}</span>
+            </label>
+          </div>
+          <textarea
+            v-model="deprecateReason"
+            class="ingest-view__deprecate-input"
+            :placeholder="deprecateCategory === 'OTHER' ? t('ingest.deprecateReasonPlaceholderRequired') : t('ingest.deprecateReasonPlaceholder')"
+            rows="3"
+            :disabled="deprecateSubmitting"
+          ></textarea>
+          <div v-if="deprecateError" class="ingest-view__deprecate-error">{{ deprecateError }}</div>
+          <div class="ingest-view__deprecate-actions">
+            <button class="ingest-view__btn-secondary" @click="deprecateDialog = false" :disabled="deprecateSubmitting">
+              {{ t('ingest.cancel') }}
+            </button>
+            <button class="ingest-view__btn-primary" :disabled="deprecateSubmitting" @click="submitDeprecate">
+              {{ deprecateSubmitting ? t('ingest.submitting') : t('ingest.deprecateConfirm') }}
+            </button>
           </div>
         </div>
       </div>
@@ -1628,7 +1728,17 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 
-.ingest-view__existing-delete {
+.ingest-view__existing-badge {
+  padding: 1px var(--space-1);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.ingest-view__existing-action {
   display: flex;
   align-items: center;
   padding: var(--space-1);
@@ -1640,9 +1750,75 @@ onMounted(async () => {
   transition: color 150ms ease, background-color 150ms ease;
 }
 
-.ingest-view__existing-delete:hover {
+.ingest-view__existing-action:hover {
+  color: var(--accent-primary);
+  background: var(--bg-tertiary);
+}
+
+.ingest-view__deprecate-dialog {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+}
+
+.ingest-view__deprecate-title {
+  margin: 0 0 var(--space-2);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ingest-view__deprecate-target {
+  margin: 0 0 var(--space-1);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.ingest-view__deprecate-hint {
+  margin: 0 0 var(--space-3);
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.ingest-view__deprecate-categories {
+  display: flex;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.ingest-view__deprecate-category {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.ingest-view__deprecate-input {
+  width: 100%;
+  padding: var(--space-2);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--input-bg);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+}
+
+.ingest-view__deprecate-error {
+  margin-top: var(--space-2);
+  font-size: 12px;
   color: var(--error);
-  background: var(--error-light);
+}
+
+.ingest-view__deprecate-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
 /* Executing hint */
