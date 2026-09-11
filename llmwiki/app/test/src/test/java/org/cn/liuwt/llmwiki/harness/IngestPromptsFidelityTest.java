@@ -105,4 +105,18 @@ class IngestPromptsFidelityTest {
         assertTrue(batch.contains("引用原文"), "batch summaries must reference original clauses");
         assertTrue(batch.contains("最小改写"), "batch summaries must minimize rewriting");
     }
+
+    @Test
+    void shouldDefineEntityClaimMergePrompt() {
+        String prompt = prompts.mergeEntityClaims(
+            "- [0] 总部位于上海（来源：2023 年报）\n- [1] 注册资本 10 亿元（来源：2023 年报）",
+            "某公司 2024 年公告：注册资本变更为 12 亿元。");
+
+        assertTrue(prompt.contains(PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT),
+            "merge prompt must embed the faithful compilation constraint");
+        assertTrue(prompt.contains("duplicate_of:<n>"), "must define duplicate relation format");
+        assertTrue(prompt.contains("conflict_with:<n>"), "must define conflict relation format");
+        assertTrue(prompt.contains("- [0] 总部位于上海（来源：2023 年报）"), "must embed existing entries listing");
+        assertTrue(prompt.contains("某公司 2024 年公告：注册资本变更为 12 亿元。"), "must embed new source material");
+    }
 }
