@@ -101,6 +101,13 @@ public enum ErrorCode {
     INGEST_BATCH_NOT_FOUND("INGEST_013", "Batch not found"),
     INGEST_BATCH_INVALID_STATUS("INGEST_014", "Batch is not in the required state for this operation"),
 
+    // Source lifecycle
+    SOURCE_DELETE_FORBIDDEN("SOURCE_001", "Source deletion is not allowed, use deprecation instead"),
+    SOURCE_DEPRECATE_WHILE_PROCESSING("SOURCE_002", "Source is being processed, cancel the running ingest execution first"),
+    SOURCE_ALREADY_DEPRECATED("SOURCE_003", "Source is already deprecated"),
+    SOURCE_NOT_DEPRECATED("SOURCE_004", "Source is not deprecated"),
+    SOURCE_DEPRECATED_CANNOT_INGEST("SOURCE_005", "Source is deprecated, restore it before starting ingest"),
+
     // Scope additional
     SCOPE_REQUEST_NOT_FOUND("SCOPE_120", "Join request not found"),
     SCOPE_REQUEST_ALREADY_REVIEWED("SCOPE_121", "This request has already been processed"),

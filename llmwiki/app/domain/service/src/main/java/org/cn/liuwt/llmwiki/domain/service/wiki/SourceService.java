@@ -338,6 +338,11 @@ public class SourceService {
         model.setCreatedAt(sourceDO.getCreatedAt());
         model.setFileModifiedAt(sourceDO.getFileModifiedAt());
         model.setContentHash(sourceDO.getContentHash());
+        model.setLifecycleStatus(sourceDO.getLifecycleStatus());
+        model.setDeprecatedAt(sourceDO.getDeprecatedAt());
+        model.setDeprecatedCategory(sourceDO.getDeprecatedCategory());
+        model.setDeprecatedReason(sourceDO.getDeprecatedReason());
+        model.setDeprecatedBy(sourceDO.getDeprecatedBy());
         return model;
     }
 }

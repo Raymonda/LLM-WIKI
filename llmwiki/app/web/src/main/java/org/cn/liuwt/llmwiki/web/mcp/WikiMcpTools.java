@@ -127,6 +127,12 @@ public class WikiMcpTools {
             if (s.getStatus() != null) {
                 item.put("status", s.getStatus());
             }
+            if (s.getLifecycleStatus() != null) {
+                item.put("lifecycleStatus", s.getLifecycleStatus());
+            }
+            if (s.getDeprecatedReason() != null) {
+                item.put("deprecatedReason", s.getDeprecatedReason());
+            }
             sources.add(item);
         }
         result.put("sources", sources);

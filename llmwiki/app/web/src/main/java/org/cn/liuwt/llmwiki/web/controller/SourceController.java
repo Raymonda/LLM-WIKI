@@ -208,6 +208,11 @@ public class SourceController {
         info.setCreatedAt(model.getCreatedAt());
         info.setFileModifiedAt(model.getFileModifiedAt());
         info.setContentHash(model.getContentHash());
+        info.setLifecycleStatus(model.getLifecycleStatus());
+        info.setDeprecatedAt(model.getDeprecatedAt());
+        info.setDeprecatedCategory(model.getDeprecatedCategory());
+        info.setDeprecatedReason(model.getDeprecatedReason());
+        info.setDeprecatedBy(model.getDeprecatedBy());
         info.setDuplicateInfo(model.getDuplicateInfo());
         return info;
     }
