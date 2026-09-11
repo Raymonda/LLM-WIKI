@@ -4,6 +4,8 @@ export interface DuplicateInfo {
   existingSourceId: number
   existingSourceName: string
   existingSourceStatus: string
+  existingSourceLifecycleStatus?: string
+  existingSourceDeprecatedReason?: string
   message: string
 }
 
@@ -16,6 +18,11 @@ export interface SourceInfo {
   status: string
   createdAt: string
   contentHash?: string
+  lifecycleStatus?: string
+  deprecatedAt?: string
+  deprecatedCategory?: string
+  deprecatedReason?: string
+  deprecatedBy?: number
   duplicateInfo?: DuplicateInfo | null
 }
 
@@ -39,8 +46,17 @@ export function getSource(id: number): Promise<SourceInfo> {
   return api.get(`/source/${id}`)
 }
 
-export function deleteSource(id: number): Promise<void> {
-  return api.delete(`/source/${id}`)
+export interface DeprecateSourcePayload {
+  category: string
+  reason?: string
+}
+
+export function deprecateSource(id: number, payload: DeprecateSourcePayload): Promise<SourceInfo> {
+  return api.post(`/source/${id}/deprecate`, payload)
+}
+
+export function undeprecateSource(id: number): Promise<SourceInfo> {
+  return api.post(`/source/${id}/undeprecate`)
 }
 
 export interface SourceContentInfo {

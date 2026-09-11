@@ -44,6 +44,11 @@ export interface SourceInfo {
   size: number
   status: string
   createdAt: string
+  lifecycleStatus?: string
+  deprecatedAt?: string
+  deprecatedCategory?: string
+  deprecatedReason?: string
+  deprecatedBy?: number
 }
 
 export interface RelatedPageInfo {
