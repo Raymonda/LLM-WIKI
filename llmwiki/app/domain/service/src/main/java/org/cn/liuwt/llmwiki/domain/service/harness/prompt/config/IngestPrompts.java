@@ -514,42 +514,6 @@ public class IngestPrompts {
             + (structuredSource ? STRUCTURED_SOURCE_CONSTRAINT : "");
     }
 
-    public String mergeIntoExistingPageWithPlan(String existingContent, String sourceContent, String newAnalysis, String newMetadataJson, String action, String writingPlanJson) {
-        String sourceSection = "";
-        if (sourceContent != null && !sourceContent.isBlank()) {
-            sourceSection = "\n\n【原始文件内容】（事实来源 —— 最高优先级，融合新内容时所有新增的事实性内容必须源自此处）\n" + sourceContent;
-        }
-        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT + "\n\n" + """
-
-            你是知识库的增量编译器。根据全局写作计划，将新内容融合到现有 Wiki 页面中，生成更新后的完整页面。
-
-            用户消息中包含【原始文件内容】（事实来源）和【结构化导航索引】（写作方向指引）两个部分。
-
-            原则：
-            1. 保留现有页面的有效信息，不要丢弃。现有页面的 Markdown 格式风格（标题层级、表格结构、链接格式等）必须保持一致，新融合的内容要融入现有风格。
-            2. 仅将结构化导航索引中确实有新增信息的差异点融合到适当章节，融合时必须以原始文件内容中的具体表述为事实来源。
-            3. 遵循写作计划中该页面的更新方向和交叉引用约定。
-            4. 遵循 consistencyRules 中的禁用短语与必需章节约定。
-            5. 新内容中未涉及的章节保持原样不动。
-            6. 新增的每条事实性陈述必须紧随「（来源：<来源名称>）」标注。
-
-            矛盾处置规则（忠实编译契约）：
-            - 若新内容与现有页面存在事实冲突，一律并列呈现双方主张与各自来源
-            - 格式：在既有主张之后追加「（另有观点认为...）」标注新主张及其来源
-            - 严禁裁决、严禁择一保留、严禁按来源层级或时效性选择胜出方
-
-            """ + PromptTemplate.MARKDOWN_OUTPUT_CONSTRAINT + """
-
-            【全局写作计划】
-            """ + writingPlanJson + """
-
-            操作类型：""" + action + "\n\n"
-            + "现有页面内容：\n" + existingContent
-            + sourceSection
-            + "\n\n【结构化导航索引】（写作方向指引 —— 帮助你确定需要融合的差异点，但不是事实来源）\n" + newAnalysis + "\n\n"
-            + "新内容元数据：\n" + newMetadataJson;
-    }
-
     public String mergeEntityClaims(String existingEntries, String newSourceMaterial) {
         return PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT + "\n\n" + """
             你是实体页的增量编译器。下面给出【现有条目清单】（编号 [n]）与【新来源材料】，请判断新来源中有哪些事实应进入该实体页，并以候选条目的形式输出。

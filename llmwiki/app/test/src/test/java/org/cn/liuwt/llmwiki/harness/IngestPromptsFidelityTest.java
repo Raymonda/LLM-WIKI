@@ -28,7 +28,6 @@ class IngestPromptsFidelityTest {
             {"writeSummaryWithPlan", prompts.writeSummaryWithPlan("{}", "{}")},
             {"writeEntityPageWithPlan", prompts.writeEntityPageWithPlan("实体", "组织", "{}", "{}")},
             {"mergeIntoExistingPage", prompts.mergeIntoExistingPage("现有", "源", "分析", "{}", "更新")},
-            {"mergeIntoExistingPageWithPlan", prompts.mergeIntoExistingPageWithPlan("现有", "源", "分析", "{}", "更新", "{}")},
         };
         for (String[] c : cases) {
             assertTrue(c[1].contains(PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT),
@@ -85,12 +84,6 @@ class IngestPromptsFidelityTest {
         String merge = prompts.mergeIntoExistingPage("现有", "源", "分析", "{}", "更新");
         assertFalse(merge.contains("[已更新]"), "auto-adjudication marker must be gone");
         assertTrue(merge.contains("严禁裁决"), "merge must require side-by-side presentation");
-
-        String mergePlan = prompts.mergeIntoExistingPageWithPlan("现有", "源", "分析", "{}", "更新", "{}");
-        assertFalse(mergePlan.contains("source_priority"));
-        assertFalse(mergePlan.contains("newer_wins"));
-        assertFalse(mergePlan.contains("已更新，原版本"));
-        assertFalse(mergePlan.contains("annotate_and_patch"));
     }
 
     @Test
