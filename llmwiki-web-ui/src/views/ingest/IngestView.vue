@@ -19,6 +19,7 @@ import AnalysisSummaryPanel from './components/AnalysisSummaryPanel.vue'
 import BatchOverviewPanel from './components/BatchOverviewPanel.vue'
 import ReviewInbox from './components/ReviewInbox.vue'
 import { useIngestProgressStore } from '@/stores/ingestProgress'
+import { isSourceDeprecated, validateDeprecateForm } from '@/utils/sourceLifecycle'
 import { useIngestBatchStore } from '@/stores/ingestBatch'
 import { useConfirmDialog } from '@/composables/useConfirmDialog'
 
@@ -298,7 +299,7 @@ function openDeprecateDialog(source: SourceInfo) {
 
 async function submitDeprecate() {
   if (!deprecateTarget.value) return
-  if (deprecateCategory.value === 'OTHER' && !deprecateReason.value.trim()) {
+  if (!validateDeprecateForm(deprecateCategory.value, deprecateReason.value)) {
     deprecateError.value = t('ingest.deprecateReasonRequired')
     return
   }
@@ -711,14 +712,14 @@ onMounted(async () => {
               <span class="ingest-view__existing-name">{{ source.name }}</span>
               <span class="ingest-view__existing-meta">{{ formatSize(source.size) }} · {{ source.format }}</span>
               <span
-                v-if="source.lifecycleStatus === 'DEPRECATED'"
+                v-if="isSourceDeprecated(source)"
                 class="ingest-view__existing-badge"
                 :title="[deprecateCategoryLabel(source.deprecatedCategory), source.deprecatedReason].filter(Boolean).join(' · ')"
               >
                 {{ t('ingest.deprecatedBadge') }}
               </span>
               <button
-                v-if="source.lifecycleStatus !== 'DEPRECATED'"
+                v-if="!isSourceDeprecated(source)"
                 class="ingest-view__existing-action"
                 @click="openDeprecateDialog(source)"
                 :title="t('ingest.deprecateSource')"

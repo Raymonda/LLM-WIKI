@@ -212,6 +212,11 @@
   opacity: 1;
 }
 
+.wiki-content--enhanced .wiki-source-ref--deprecated,
+.wiki-content--enhanced .wiki-source-ref--deprecated:hover {
+  color: var(--text-tertiary);
+}
+
 .wiki-content--enhanced ul,
 .wiki-content--enhanced ol {
   margin-bottom: var(--space-4);

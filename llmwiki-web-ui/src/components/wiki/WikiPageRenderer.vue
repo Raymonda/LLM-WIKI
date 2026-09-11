@@ -20,6 +20,7 @@ import {
 import 'katex/dist/katex.min.css'
 import { useAuthStore } from '@/stores/auth'
 import { injectFactBadges, type FactBlockView } from '@/composables/queryStreamLogic'
+import { isSourceDeprecated } from '@/utils/sourceLifecycle'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -29,7 +30,7 @@ const props = withDefaults(defineProps<{
   content: string
   streaming?: boolean
   linkResolution?: Record<string, number>
-  sources?: Array<{ id: number; name: string; format: string }>
+  sources?: Array<{ id: number; name: string; format: string; lifecycleStatus?: string | null; deprecatedReason?: string | null }>
   factRefs?: FactBlockView[] | null
 }>(), {
   streaming: false,
@@ -129,8 +130,23 @@ function escapeAttr(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-const SOURCE_REF_PREFIX = '<span class="wiki-source-ref" role="button" tabindex="0" data-source-name="'
 const sourceRefCounter = new Map<string, number>()
+
+function findSourceByName(name: string) {
+  return props.sources.find(s =>
+    s.name.toLowerCase() === name.toLowerCase() ||
+    s.name.toLowerCase().endsWith('/' + name.toLowerCase()) ||
+    s.name.toLowerCase().endsWith('\\' + name.toLowerCase())
+  )
+}
+
+function buildSourceRefHtml(sourceName: string, num: number): string {
+  const source = findSourceByName(sourceName)
+  const deprecated = isSourceDeprecated(source)
+  const cls = deprecated ? 'wiki-source-ref wiki-source-ref--deprecated' : 'wiki-source-ref'
+  const title = deprecated ? `${sourceName} · ${t('wiki.sourceDeprecated')}` : sourceName
+  return `<span class="${cls}" role="button" tabindex="0" data-source-name="${escapeAttr(sourceName)}" title="${escapeAttr(title)}"><span class="wiki-source-ref__bracket">[</span><span class="wiki-source-ref__num">${num}</span><span class="wiki-source-ref__bracket">]</span></span>`
+}
 
 function sourceRefTextPlugin(md: MarkdownIt) {
   md.inline.ruler.before('linkify', 'source_ref_text', (state, silent) => {
@@ -166,7 +182,7 @@ function sourceRefTextPlugin(md: MarkdownIt) {
     if (!existing) sourceRefCounter.set(filename, num)
 
     const openTag = state.push('html_inline', '', 0)
-    openTag.content = `${SOURCE_REF_PREFIX}${escapeAttr(filename)}" title="${escapeAttr(filename)}"><span class="wiki-source-ref__bracket">[</span><span class="wiki-source-ref__num">${num}</span><span class="wiki-source-ref__bracket">]</span></span>`
+    openTag.content = buildSourceRefHtml(filename, num)
 
     state.pos = fullEnd
     return true
@@ -262,7 +278,7 @@ mdInstance.renderer.rules.link_open = (tokens, idx, options, env, self) => {
       const existing = sourceRefCounter.get(sourceName)
       const num = existing ?? (sourceRefCounter.size + 1)
       if (!existing) sourceRefCounter.set(sourceName, num)
-      return `${SOURCE_REF_PREFIX}${escapeAttr(sourceName)}" title="${escapeAttr(sourceName)}"><span class="wiki-source-ref__bracket">[</span><span class="wiki-source-ref__num">${num}</span><span class="wiki-source-ref__bracket">]</span></span>`
+      return buildSourceRefHtml(sourceName, num)
     }
     if (isWikiPageHref(href)) {
       token.attrSet('href', rewriteWikiPageHref(href))
@@ -701,11 +717,7 @@ function handleContentClick(e: MouseEvent) {
   const sourceRef = target.closest('.wiki-source-ref') as HTMLElement
   if (sourceRef) {
     const name = sourceRef.getAttribute('data-source-name') || ''
-    const source = props.sources.find(s =>
-      s.name.toLowerCase() === name.toLowerCase() ||
-      s.name.toLowerCase().endsWith('/' + name.toLowerCase()) ||
-      s.name.toLowerCase().endsWith('\\' + name.toLowerCase())
-    )
+    const source = findSourceByName(name)
     if (source) emit('preview-source', source.id, source.format)
     return
   }
@@ -759,11 +771,7 @@ function handleContentKeydown(e: KeyboardEvent) {
   if (!sourceRef) return
   e.preventDefault()
   const name = sourceRef.getAttribute('data-source-name') || ''
-  const source = props.sources.find(s =>
-    s.name.toLowerCase() === name.toLowerCase() ||
-    s.name.toLowerCase().endsWith('/' + name.toLowerCase()) ||
-    s.name.toLowerCase().endsWith('\\' + name.toLowerCase())
-  )
+  const source = findSourceByName(name)
   if (source) emit('preview-source', source.id, source.format)
 }
 

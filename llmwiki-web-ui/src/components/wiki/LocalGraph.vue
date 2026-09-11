@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { getLocalGraph, type GraphData, type SourceInfo } from '@/api/wiki'
 import { Network, ExternalLink, ArrowRight, ArrowLeft, FileText, FileSearch, Download } from 'lucide-vue-next'
+import { isSourceDeprecated } from '@/utils/sourceLifecycle'
 
 const props = defineProps<{
   pageId: number
@@ -192,7 +193,7 @@ onMounted(loadData)
             <span class="local-graph__source-name" :title="s.name">{{ s.name }}</span>
             <span class="local-graph__source-meta">{{ s.format }} · {{ s.createdAt }}</span>
             <span
-              v-if="s.lifecycleStatus === 'DEPRECATED'"
+              v-if="isSourceDeprecated(s)"
               class="local-graph__source-badge"
               :title="s.deprecatedReason || ''"
             >{{ t('wiki.sourceDeprecated') }}</span>
