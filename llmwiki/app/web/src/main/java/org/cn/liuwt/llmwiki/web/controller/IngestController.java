@@ -207,7 +207,7 @@ public class IngestController {
                     emitter.complete();
                     registry.removeEmitter(id);
                     return emitter;
-                } else if ("awaiting_confirmation".equals(status)) {
+                } else if ("awaiting_confirmation".equals(status) || "awaiting_review".equals(status)) {
                     emitter.send(SseEmitter.event()
                         .name("phase1_done")
                         .data(toExecutionInfo(current)));
@@ -358,7 +358,8 @@ public class IngestController {
         String currentStatus = execution.getStatus();
         if ("completed".equals(currentStatus) || "failed".equals(currentStatus)
                 || "cancelled".equals(currentStatus) || "budget_exhausted".equals(currentStatus)
-                || "paused".equals(currentStatus) || "awaiting_confirmation".equals(currentStatus)) {
+                || "paused".equals(currentStatus) || "awaiting_confirmation".equals(currentStatus)
+                || "awaiting_review".equals(currentStatus)) {
             return Result.failed(ErrorCode.INGEST_ALREADY_FINISHED_PAUSE);
         }
 
@@ -387,7 +388,8 @@ public class IngestController {
             .filter(e -> {
                 String status = e.getStatus();
                 if ("running".equals(status) || "pending".equals(status) || "paused".equals(status)
-                        || "awaiting_confirmation".equals(status) || "confirmed".equals(status)) return true;
+                        || "awaiting_confirmation".equals(status) || "awaiting_review".equals(status)
+                        || "confirmed".equals(status)) return true;
                 if ("completed".equals(status) || "budget_exhausted".equals(status)) {
                     if (e.getCompletedAt() != null) {
                         java.time.LocalDateTime cutoff = java.time.LocalDateTime.now().minusMinutes(30);
@@ -429,7 +431,8 @@ public class IngestController {
                     .data(toExecutionInfo(execution)));
                 emitter.complete();
                 registry.removeEmitter(event.getExecutionId());
-            } else if ("awaiting_confirmation".equals(event.getNewStatus())) {
+            } else if ("awaiting_confirmation".equals(event.getNewStatus())
+                    || "awaiting_review".equals(event.getNewStatus())) {
                 emitter.send(SseEmitter.event()
                     .name("phase1_done")
                     .data(toExecutionInfo(execution)));

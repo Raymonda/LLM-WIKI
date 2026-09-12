@@ -13,6 +13,8 @@ import org.cn.liuwt.llmwiki.domain.service.harness.baseline.ExecutionBaselineSer
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.ApprovalService;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.ApprovalService.ApprovalLevel;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.RateLimitService;
+import org.cn.liuwt.llmwiki.domain.service.harness.governance.validation.SchemaComplianceChecker;
+import org.cn.liuwt.llmwiki.domain.service.harness.governance.validation.SchemaComplianceChecker.ComplianceResult;
 import org.cn.liuwt.llmwiki.domain.service.system.NotificationService;
 import org.cn.liuwt.llmwiki.integration.ai.LlmClient;
 import org.cn.liuwt.llmwiki.integration.ai.TokenUsageContext;
@@ -73,6 +75,9 @@ public class IngestOrchestrator {
     @Autowired
     private ExecutionEventLogService executionEventLog;
 
+    @Autowired
+    private SchemaComplianceChecker schemaComplianceChecker;
+
     public static boolean isBatchContext(ExecutionModel execution) {
         return execution != null && execution.getBatchId() != null;
     }
@@ -96,7 +101,7 @@ public class IngestOrchestrator {
         }
 
         try {
-            if (!rateLimitService.checkCallRate(scopeId)) {
+            if (!rateLimitService.awaitCallRate(scopeId)) {
                 throw new RuntimeException("AI 调用频率过高，请稍后再试。scopeId=" + scopeId);
             }
 
@@ -144,7 +149,7 @@ public class IngestOrchestrator {
 
                 checkStopped(executionId);
                 if (stopAfterPhase1) {
-                    return awaitReview(executionId, scopeId, sourceName, totalTokens, suppressAll);
+                    return awaitReview(executionId, scopeId, sourceName, totalTokens, suppressAll, context);
                 }
                 ExecutionStepModel writeStep = createAndRunStep(executionId, IngestStep.WRITE, scopeId);
                 long writeStart = System.currentTimeMillis();
@@ -209,17 +214,57 @@ public class IngestOrchestrator {
         }
     }
 
-    private ExecutionModel awaitReview(Long executionId, Long scopeId, String sourceName, int totalTokens, boolean suppressNotifications) {
-        executionTracker.updateExecutionStatus(executionId, "awaiting_confirmation");
+    /**
+     * Phase1 分析完成后的用户决策点。先做 Schema 合规预检（宪法规则 3：违规即阻断）：
+     * 分类/元数据/写作计划存在 HIGH/MEDIUM 违规 → 进入 awaiting_review 待评审，
+     * 否则维持 awaiting_confirmation 常规确认。预检自身异常按 fail-open 处理（不因
+     * 检查器故障阻断正常流程），但不吞掉违规结论。
+     */
+    private ExecutionModel awaitReview(Long executionId, Long scopeId, String sourceName, int totalTokens,
+                                       boolean suppressNotifications, IngestContext context) {
+        boolean schemaReview = schemaPrecheckRequiresReview(scopeId, context);
+        String reviewStatus = schemaReview ? "awaiting_review" : "awaiting_confirmation";
+        executionTracker.updateExecutionStatus(executionId, reviewStatus);
         executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_END,
-            java.util.Map.of("pipeline", "ingest", "status", "awaiting_confirmation", "totalTokens", totalTokens));
+            java.util.Map.of("pipeline", "ingest", "status", reviewStatus, "totalTokens", totalTokens));
         if (!suppressNotifications) {
-            notificationService.createNotification(scopeId, "ingest_awaiting_confirmation",
-                "分析完成 — " + sourceName,
-                "请审阅分析结果，确认后写入知识库",
-                scopeId, null, executionId);
+            if (schemaReview) {
+                notificationService.createNotification(scopeId, "ingest_awaiting_review",
+                    "需要评审 — " + sourceName,
+                    "分析结果存在 Schema 合规违规，请审阅后确认是否继续写入知识库",
+                    scopeId, null, executionId);
+            } else {
+                notificationService.createNotification(scopeId, "ingest_awaiting_confirmation",
+                    "分析完成 — " + sourceName,
+                    "请审阅分析结果，确认后写入知识库",
+                    scopeId, null, executionId);
+            }
         }
         return executionTracker.getExecution(executionId);
+    }
+
+    private boolean schemaPrecheckRequiresReview(Long scopeId, IngestContext context) {
+        if (context == null) return false;
+        try {
+            ComplianceResult planResult = schemaComplianceChecker.checkPlan(
+                scopeId, context.getWritingPlanJson(), context.getMetadataJson());
+            if (planResult.requiresReview()) {
+                log.warn("Schema 预检发现写作计划违规 scope={} violations={}",
+                    scopeId, planResult.violations().size());
+                return true;
+            }
+            ComplianceResult metaResult = schemaComplianceChecker.check(
+                scopeId, context.getMetadataJson(), java.util.Map.of());
+            if (metaResult.requiresReview()) {
+                log.warn("Schema 预检发现元数据违规 scope={} violations={}",
+                    scopeId, metaResult.violations().size());
+                return true;
+            }
+            return false;
+        } catch (Exception e) {
+            log.warn("Schema 预检执行失败，按无违规继续 scope={}: {}", scopeId, e.getMessage());
+            return false;
+        }
     }
 
     public ExecutionModel runIngestAnalysisWithExecution(Long executionId, Long scopeId, Long sourceId, String guidance) {
@@ -283,13 +328,14 @@ public class IngestOrchestrator {
         }
 
         try {
-            if (!rateLimitService.checkCallRate(scopeId)) {
+            if (!rateLimitService.awaitCallRate(scopeId)) {
                 throw new RuntimeException("AI 调用频率过高");
             }
 
             ExecutionModel execution = executionTracker.getExecution(executionId);
             if (execution == null || (!"failed".equals(execution.getStatus()) && !"paused".equals(execution.getStatus())
-                    && !"awaiting_confirmation".equals(execution.getStatus()) && !"running".equals(execution.getStatus()))) {
+                    && !"awaiting_confirmation".equals(execution.getStatus()) && !"awaiting_review".equals(execution.getStatus())
+                    && !"running".equals(execution.getStatus()))) {
                 throw new RuntimeException("该执行当前状态无法继续分析阶段");
             }
 
@@ -371,7 +417,7 @@ public class IngestOrchestrator {
 
                 checkStopped(executionId);
                 boolean suppressAll = isBatchContext(executionTracker.getExecution(executionId));
-                return awaitReview(executionId, scopeId, sourceDO.getName() != null ? sourceDO.getName() : "未知文件", totalTokens, suppressAll);
+                return awaitReview(executionId, scopeId, sourceDO.getName() != null ? sourceDO.getName() : "未知文件", totalTokens, suppressAll, context);
 
             } catch (Exception e) {
                 boolean isStopped = isStoppedOrPaused(executionId) || Thread.currentThread().isInterrupted();
@@ -408,7 +454,8 @@ public class IngestOrchestrator {
         try {
             ExecutionModel execution = executionTracker.getExecution(executionId);
             if (execution == null || (!"failed".equals(execution.getStatus()) && !"paused".equals(execution.getStatus())
-                    && !"awaiting_confirmation".equals(execution.getStatus()) && !"running".equals(execution.getStatus()))) {
+                    && !"awaiting_confirmation".equals(execution.getStatus()) && !"awaiting_review".equals(execution.getStatus())
+                    && !"running".equals(execution.getStatus()))) {
                 throw new RuntimeException("该执行当前状态无法继续执行阶段");
             }
 

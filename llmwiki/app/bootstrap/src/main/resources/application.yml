@@ -104,6 +104,7 @@ llmwiki:
   ingest:
     batch:
       max-size: ${INGEST_BATCH_MAX_SIZE:50}
+      analyze-concurrency: ${INGEST_BATCH_ANALYZE_CONCURRENCY:2}
 
 rocketmq:
   name-server: ${ROCKETMQ_NAME_SERVER:}
