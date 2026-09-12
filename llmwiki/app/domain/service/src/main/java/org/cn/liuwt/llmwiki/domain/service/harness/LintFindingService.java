@@ -582,7 +582,7 @@ public class LintFindingService {
     @Transactional
     public void autoResolve(Long findingId, String handlingMethod) {
         LintFindingDO finding = lintFindingMapper.selectById(findingId);
-        if (finding == null || !Set.of("open", "awaiting_approval", "deferred").contains(finding.getStatus())) return;
+        if (finding == null || !Set.of("open", "awaiting_approval", "deferred", "failed").contains(finding.getStatus())) return;
         LocalDateTime now = LocalDateTime.now();
         lintFindingMapper.update(null,
             new LambdaUpdateWrapper<LintFindingDO>()

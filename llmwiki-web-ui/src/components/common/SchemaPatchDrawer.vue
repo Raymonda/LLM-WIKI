@@ -43,6 +43,7 @@ const expandedDiff = ref<Set<number>>(new Set())
 const showObserving = ref(false)
 const conflictRulings = ref<ConflictReviewInfo[]>([])
 const busyRulingId = ref<number | null>(null)
+const submittedRulings = ref<Map<number, number>>(new Map())
 const selectedIds = ref<Set<number>>(new Set())
 const batchBusy = ref(false)
 
@@ -289,21 +290,16 @@ async function onPromote(p: SchemaPatchInfo) {
   }
 }
 
+function isRulingSubmitted(id: number): boolean {
+  return submittedRulings.value.has(id)
+}
+
 async function onExecuteRuling(ruling: ConflictReviewInfo, action: string) {
   busyRulingId.value = ruling.id
   try {
-    const result = await executeRuling(ruling.id, action)
-    if (result.status === 'failed') {
-      throw new Error(result.executionError || t('schemaPatch.toastRulingExecFail'))
-    }
-    const actionLabels: Record<string, string> = {
-      merge: t('schemaPatch.rulingMerge'),
-      coexist: t('schemaPatch.rulingCoexist'),
-      choose_a: t('schemaPatch.rulingKeepA', [ruling.fromPageTitle]),
-      choose_b: t('schemaPatch.rulingKeepB', [ruling.toPageTitle]),
-    }
-    toast.success(t('schemaPatch.toastRulingExec', [actionLabels[action] || action]))
-    conflictRulings.value = conflictRulings.value.filter(r => r.id !== ruling.id)
+    const receipt = await executeRuling(ruling.id, action)
+    submittedRulings.value = new Map(submittedRulings.value).set(ruling.id, receipt.executionId)
+    toast.success(t('schemaPatch.rulingSubmitted'))
   } catch (e: any) {
     toast.error(e?.message || t('schemaPatch.toastRulingExecFail'))
   } finally {
@@ -905,20 +901,28 @@ function gatekeeperText(d: string | null): string {
                       {{ r.sourceType === 'INGEST' ? t('schemaPatch.srcIngest') : t('schemaPatch.conflictSourceOther') + r.sourceType }}
                     </div>
 
+                    <div v-if="isRulingSubmitted(r.id)" class="patch-card__submitted">
+                      <Check :size="14" />
+                      <span>{{ t('schemaPatch.rulingSubmitted') }}</span>
+                      <router-link class="patch-card__task-link" :to="`/harness/${submittedRulings.get(r.id)}`">
+                        {{ t('schemaPatch.viewTask') }}
+                      </router-link>
+                    </div>
+
                     <div class="patch-card__actions patch-card__actions--conflict">
-                      <button class="patch-btn patch-btn--ghost" :disabled="busyRulingId === r.id" @click="onCancelRuling(r)">
+                      <button class="patch-btn patch-btn--ghost" :disabled="busyRulingId === r.id || isRulingSubmitted(r.id)" @click="onCancelRuling(r)">
                         <Ban :size="14" /> {{ t('schemaPatch.btnDismiss') }}
                       </button>
-                      <button class="patch-btn" :disabled="busyRulingId === r.id" @click="onExecuteRuling(r, 'choose_a')">
+                      <button class="patch-btn" :disabled="busyRulingId === r.id || isRulingSubmitted(r.id)" @click="onExecuteRuling(r, 'choose_a')">
                         {{ t('schemaPatch.btnKeepA') }}
                       </button>
-                      <button class="patch-btn" :disabled="busyRulingId === r.id" @click="onExecuteRuling(r, 'coexist')">
+                      <button class="patch-btn" :disabled="busyRulingId === r.id || isRulingSubmitted(r.id)" @click="onExecuteRuling(r, 'coexist')">
                         {{ t('schemaPatch.btnCoexist') }}
                       </button>
-                      <button class="patch-btn" :disabled="busyRulingId === r.id" @click="onExecuteRuling(r, 'choose_b')">
+                      <button class="patch-btn" :disabled="busyRulingId === r.id || isRulingSubmitted(r.id)" @click="onExecuteRuling(r, 'choose_b')">
                         {{ t('schemaPatch.btnKeepB') }}
                       </button>
-                      <button class="patch-btn patch-btn--primary" :disabled="busyRulingId === r.id" @click="onExecuteRuling(r, 'merge')">
+                      <button class="patch-btn patch-btn--primary" :disabled="busyRulingId === r.id || isRulingSubmitted(r.id)" @click="onExecuteRuling(r, 'merge')">
                         <Check :size="14" /> {{ t('schemaPatch.btnMerge') }}
                       </button>
                     </div>
@@ -1576,6 +1580,28 @@ function gatekeeperText(d: string | null): string {
 .patch-card__select:hover { color: var(--accent-primary); }
 .patch-card--selected .patch-card__select { color: var(--accent-primary); }
 .patch-card { position: relative; padding-right: calc(var(--space-3) + 20px); }
+
+.patch-card__submitted {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--success-light);
+  border-radius: var(--radius-md);
+  font-size: var(--font-caption);
+  font-weight: var(--weight-medium);
+  color: var(--success);
+}
+.patch-card__task-link {
+  margin-left: auto;
+  color: var(--accent-primary);
+  text-decoration: none;
+  font-weight: var(--weight-semibold);
+}
+.patch-card__task-link:hover {
+  text-decoration: underline;
+}
 
 /* 一键采纳安全按钮（绿色） */
 .rpt-action-btn--safe {

@@ -174,14 +174,7 @@ public class LintProbeService {
         merged = appendContentDuplicateFindings(merged, contentDuplicates);
         merged = applyDowngradeFilter(merged, downgradedTypes, rulesConfig);
 
-        Set<Long> touchedFindingIds = new HashSet<>();
-        for (MergedFinding mf : merged) {
-            Long findingId = lintFindingService.createFinding(scopeId, executionId, mf.type,
-                mf.priority, mf.title, mf.detail, mf.pagePath, mf.assetId, mf.extra, rulesConfig);
-            if (findingId != null) {
-                touchedFindingIds.add(findingId);
-            }
-        }
+        Set<Long> touchedFindingIds = persistMergedFindings(scopeId, executionId, merged, rulesConfig);
 
         return new ProbeOutcome(merged, aiResult, touchedFindingIds);
     }
@@ -203,6 +196,43 @@ public class LintProbeService {
             }
         }
         return map;
+    }
+
+    private Set<Long> persistMergedFindings(Long scopeId, Long executionId,
+                                             List<MergedFinding> merged, LintRulesConfig rulesConfig) {
+        Set<Long> touchedFindingIds = new HashSet<>();
+        for (MergedFinding mf : merged) {
+            Long findingId;
+            if ("conflict".equalsIgnoreCase(mf.type)) {
+                findingId = lintFindingService.upsertConflictFinding(scopeId, executionId, toConflictCard(mf));
+            } else {
+                findingId = lintFindingService.createFinding(scopeId, executionId, mf.type,
+                    mf.priority, mf.title, mf.detail, mf.pagePath, mf.assetId, mf.extra, rulesConfig);
+            }
+            if (findingId != null) {
+                touchedFindingIds.add(findingId);
+            }
+        }
+        return touchedFindingIds;
+    }
+
+    private LintFindingService.ConflictCard toConflictCard(MergedFinding mf) {
+        return new LintFindingService.ConflictCard(
+            mf.title, mf.detail, mf.priority,
+            mf.pagePath, mf.assetId, stringOr(mf.extra.get("fromPageTitle"), null),
+            stringOr(mf.extra.get("relatedPagePath"), null),
+            toLong(mf.extra.get("relatedPageId")),
+            stringOr(mf.extra.get("relatedPageTitle"), null),
+            stringOr(mf.extra.get("conflictType"), "fact_conflict"),
+            stringOr(mf.extra.get("claimA"), ""),
+            stringOr(mf.extra.get("claimB"), ""),
+            stringOr(mf.extra.get("source"), "lint_probe"));
+    }
+
+    private String stringOr(Object value, String fallback) {
+        if (value == null) return fallback;
+        String s = value.toString();
+        return s.isBlank() ? fallback : s;
     }
 
     private List<SafetyNetFinding> detectOrphansBySql(Long scopeId, LintRulesConfig rulesConfig) {
@@ -419,11 +449,6 @@ public class LintProbeService {
                     extra.put("expectedStructure", f.getOrDefault("expectedStructure", ""));
                     extra.put("actualStructure", f.getOrDefault("actualStructure", ""));
                 }
-                if ("conflict".equalsIgnoreCase(type)) {
-                    extra.put("conflictType", f.getOrDefault("conflictType", "value_conflict"));
-                    extra.put("existingClaim", f.getOrDefault("existingClaim", ""));
-                    extra.put("newClaim", f.getOrDefault("newClaim", ""));
-                }
 
                 merged.add(new MergedFinding(type, priority, title, detail, pagePath, assetId, extra, true));
             }
@@ -582,6 +607,9 @@ public class LintProbeService {
             extra.put("conflictType", "content_duplication");
             extra.put("similarity", dup.similarity());
             extra.put("source", "content_duplicate_detector");
+            extra.put("fromPagePath", pathA);
+            extra.put("claimA", "");
+            extra.put("claimB", "");
 
             merged.add(new MergedFinding("conflict", "high", title, detail,
                 pathA, dup.pageA().getId(), extra, false));
@@ -610,6 +638,13 @@ public class LintProbeService {
         if (f.containsKey("relatedPageId")) extra.put("relatedPageId", f.get("relatedPageId"));
         if (f.containsKey("relatedPageTitle")) extra.put("relatedPageTitle", f.get("relatedPageTitle"));
         if (f.containsKey("suggestedCategory")) extra.put("suggestedCategory", f.get("suggestedCategory"));
+        if ("conflict".equalsIgnoreCase(String.valueOf(f.getOrDefault("type", "")))) {
+            extra.put("conflictType", f.getOrDefault("conflictType", "value_conflict"));
+            extra.put("claimA", f.getOrDefault("newClaim", ""));
+            extra.put("claimB", f.getOrDefault("existingClaim", ""));
+            extra.put("fromPagePath", f.getOrDefault("pagePath", ""));
+            extra.put("source", "lint_probe");
+        }
         return extra;
     }
 

@@ -17,6 +17,7 @@ import org.cn.liuwt.llmwiki.facade.model.ModifySubmitRequest;
 import org.cn.liuwt.llmwiki.facade.model.SourceInfo;
 import org.cn.liuwt.llmwiki.facade.model.PromotionStats;
 import org.cn.liuwt.llmwiki.facade.model.SearchResultInfo;
+import org.cn.liuwt.llmwiki.facade.model.TaskReceiptInfo;
 import org.cn.liuwt.llmwiki.facade.model.DeprecateRequest;
 import org.cn.liuwt.llmwiki.facade.model.MergePagesRequest;
 import org.cn.liuwt.llmwiki.domain.model.wiki.WikiPageModel;
@@ -29,6 +30,8 @@ import org.cn.liuwt.llmwiki.domain.service.wiki.WikiFileServiceImpl;
 import org.cn.liuwt.llmwiki.domain.service.wiki.PromotionService;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.validation.SchemaComplianceChecker;
 import org.cn.liuwt.llmwiki.service.ingest.PageModifyService;
+import org.cn.liuwt.llmwiki.service.harness.task.BackgroundTaskService;
+import org.cn.liuwt.llmwiki.service.harness.task.TaskReceipt;
 import org.cn.liuwt.llmwiki.web.security.JwtTokenProvider;
 import org.cn.liuwt.llmwiki.integration.storage.StorageProvider;
 import jakarta.servlet.http.HttpServletRequest;
@@ -77,6 +80,9 @@ public class WikiController {
     private ScopeService scopeService;
     @Autowired
     private org.cn.liuwt.llmwiki.service.ingest.MergeService mergeService;
+
+    @Autowired
+    private BackgroundTaskService backgroundTaskService;
 
     @GetMapping("/pages")
     public Result<List<WikiPageInfo>> listPages(@RequestParam(defaultValue = "1") int page,
@@ -168,10 +174,17 @@ public class WikiController {
     }
 
     @PostMapping("/search/rebuild-index")
-    public Result<String> rebuildIndex() {
+    public Result<TaskReceiptInfo> rebuildIndex() {
         Long scopeId = jwtTokenProvider.getCurrentScopeId();
-        searchService.rebuildIndex(scopeId);
-        return Result.success("索引重建完成");
+        Long userId = jwtTokenProvider.getCurrentUserId();
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("title", "重建检索索引");
+        TaskReceipt receipt = backgroundTaskService.submit(scopeId, userId, "index_rebuild", payload);
+        TaskReceiptInfo info = new TaskReceiptInfo();
+        info.setExecutionId(receipt.executionId());
+        info.setTaskType(receipt.taskType());
+        info.setStatus(receipt.status());
+        return Result.success(info);
     }
 
     @GetMapping("/categories")

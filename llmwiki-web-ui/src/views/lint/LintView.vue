@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, computed } from 'vue'
+import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { ShieldCheck, XCircle, Zap, RotateCcw, ThumbsUp, ThumbsDown, Link2, EyeOff, RefreshCw, AlertTriangle, X, ListChecks, Sparkles, Archive, FileWarning, Swords, Unlink } from 'lucide-vue-next'
 import { useLintStore, isAutoResolvable, type MainTabKey } from '@/stores/lint'
-import { type LintFindingInfo } from '@/api/lint'
+import { type LintFindingInfo, type PageResult } from '@/api/lint'
+import { normalizeConflictExtra } from '@/utils/conflictPresentation'
 import HealthDashboard from './components/HealthDashboard.vue'
 import LintTrigger from './components/LintTrigger.vue'
 import ActionCards from './components/ActionCards.vue'
@@ -19,6 +21,101 @@ const batchPreviewAction = ref('')
 const batchPreviewItems = ref<LintFindingInfo[]>([])
 const batchPreviewSkippedCount = ref(0)
 
+const route = useRoute()
+
+const focusPageId = ref<number | null>(null)
+const focusFindings = ref<LintFindingInfo[]>([])
+const focusLoading = ref(false)
+
+const focusActive = computed(() => focusPageId.value !== null)
+
+const focusListResult = computed<PageResult<LintFindingInfo> | null>(() => {
+  if (!focusActive.value) return null
+  return {
+    items: focusFindings.value,
+    total: focusFindings.value.length,
+    page: 1,
+    size: Math.max(focusFindings.value.length, 1),
+    totalPages: 1
+  }
+})
+
+const focusPageTitle = computed(() => {
+  const pid = focusPageId.value
+  if (pid === null) return ''
+  for (const finding of focusFindings.value) {
+    const normalized = normalizeConflictExtra(finding)
+    if (normalized.fromPageId === pid) return normalized.fromTitle
+    if (normalized.toPageId === pid) return normalized.toTitle
+  }
+  return ''
+})
+
+const focusBannerText = computed(() => {
+  const label = focusPageTitle.value || `#${focusPageId.value ?? ''}`
+  return t('lint.conflict.focusBanner', [label])
+})
+
+async function loadFocus(pageId: number) {
+  focusLoading.value = true
+  try {
+    focusFindings.value = await store.loadPageConflictsAction(pageId)
+  } finally {
+    focusLoading.value = false
+  }
+}
+
+function applyRouteQuery() {
+  const raw = route.query.pageId
+  const parsed = raw != null && String(raw).trim() !== '' ? Number(raw) : NaN
+  if (!Number.isNaN(parsed) && parsed > 0) {
+    focusPageId.value = parsed
+    loadFocus(parsed)
+  } else {
+    focusPageId.value = null
+    focusFindings.value = []
+  }
+}
+
+function clearFocus() {
+  router.replace({ path: '/lint' })
+}
+
+watch(() => route.query.pageId, () => applyRouteQuery())
+
+const activeFindingsPaged = computed(() => focusActive.value ? focusListResult.value : store.findingsPaged)
+const activeFindingsLoading = computed(() => focusActive.value ? focusLoading.value : store.findingsLoading)
+
+function wrapFocusRefresh<T extends (...args: any[]) => any>(handler: T) {
+  return async (...args: Parameters<T>) => {
+    await handler(...args)
+    if (focusActive.value && focusPageId.value !== null) {
+      await loadFocus(focusPageId.value)
+    }
+  }
+}
+
+const dismissAction = wrapFocusRefresh(store.dismissFinding)
+const reassessAction = wrapFocusRefresh(store.reassessFinding)
+const autoResolveAction = wrapFocusRefresh(store.autoResolveAction)
+const resolveComplianceAction = wrapFocusRefresh(store.resolveComplianceAction)
+const triggerRepairAction = wrapFocusRefresh(store.triggerRepairAction)
+const approveAction = wrapFocusRefresh(store.approveFindingAction)
+const rejectAction = wrapFocusRefresh(store.rejectFindingAction)
+const rollbackAction = wrapFocusRefresh(store.rollbackFindingAction)
+const retryFailedAction = wrapFocusRefresh(store.retryFailedFindingAction)
+const conflictAction = wrapFocusRefresh(store.executeConflictRulingAction)
+
+async function handleAnalyze(findingId: number) {
+  const status = await store.analyzeRulingBriefAction(findingId)
+  if (status === 'deferred') {
+    ElMessage.info(t('lint.conflict.deferredHint'))
+  }
+  if (focusActive.value && focusPageId.value !== null) {
+    await loadFocus(focusPageId.value)
+  }
+}
+
 const mainTabs: { key: MainTabKey; icon: any; labelKey: string }[] = [
   { key: 'manual', icon: ListChecks, labelKey: 'lint.tabManual' },
   { key: 'ai_processed', icon: Sparkles, labelKey: 'lint.tabAiProcessed' },
@@ -27,6 +124,7 @@ const mainTabs: { key: MainTabKey; icon: any; labelKey: string }[] = [
 
 onMounted(async () => {
   store.startVisibilityWatcher()
+  applyRouteQuery()
   const hasActive = await store.checkActiveLint()
   if (!hasActive) {
     store.loadOverview()
@@ -321,6 +419,7 @@ function getRiskHint(action: string): { icon: any; tone: 'error' | 'warning' | '
         :error="store.error"
         :execution="store.execution"
         :start-time="store.lintStartTime"
+        :execution-id="store.execution?.executionId ?? store.latestExecutionId"
         @trigger="store.triggerLint()"
       />
     </div>
@@ -347,7 +446,13 @@ function getRiskHint(action: string): { icon: any; tone: 'error' | 'warning' | '
       @filter-by-type="(t) => { store.setManualTypeFilter(t); store.switchMainTab('manual') }"
     />
 
-    <div class="lint-view__main-tabs" :class="{ 'lint-view__main-tabs--disabled': store.running }">
+    <div v-if="focusActive" class="lint-view__focus-banner">
+      <Swords :size="14" />
+      <span class="lint-view__focus-text">{{ focusBannerText }}</span>
+      <button class="lint-view__focus-clear" @click="clearFocus">{{ t('lint.conflict.focusClear') }}</button>
+    </div>
+
+    <div v-if="!focusActive" class="lint-view__main-tabs" :class="{ 'lint-view__main-tabs--disabled': store.running }">
       <button
         v-for="tab in mainTabs"
         :key="tab.key"
@@ -363,12 +468,14 @@ function getRiskHint(action: string): { icon: any; tone: 'error' | 'warning' | '
     </div>
 
     <ActionCards
+      v-if="!focusActive || focusLoading || focusFindings.length > 0"
       :running="store.running"
-      :findings-paged="store.findingsPaged"
-      :findings-loading="store.findingsLoading"
+      :findings-paged="activeFindingsPaged"
+      :findings-loading="activeFindingsLoading"
       :main-tab="store.mainTab"
       :manual-type-filter="store.manualTypeFilter"
       :processing-ids="store.processingIds"
+      :ruling-task-ids="store.rulingTasks"
       :selected-ids="store.selectedIds"
       :selected-count="store.selectedCount"
       :all-current-selected="store.allCurrentSelected"
@@ -393,21 +500,22 @@ function getRiskHint(action: string): { icon: any; tone: 'error' | 'warning' | '
       @toggle-select="store.toggleSelect"
       @toggle-select-all="store.toggleSelectAll"
       @clear-selection="store.clearSelection"
-      @dismiss="store.dismissFinding"
-      @reassess="store.reassessFinding"
-      @auto-resolve="store.autoResolveAction"
-      @resolve-compliance="store.resolveComplianceAction"
-      @trigger-repair="store.triggerRepairAction"
-      @approve="store.approveFindingAction"
-      @reject="store.rejectFindingAction"
-      @rollback="store.rollbackFindingAction"
+      @dismiss="dismissAction"
+      @reassess="reassessAction"
+      @auto-resolve="autoResolveAction"
+      @resolve-compliance="resolveComplianceAction"
+      @trigger-repair="triggerRepairAction"
+      @approve="approveAction"
+      @reject="rejectAction"
+      @rollback="rollbackAction"
       @retry-orphan="store.retryOrphanFixAction"
-      @retry-failed="store.retryFailedFindingAction"
+      @retry-failed="retryFailedAction"
       @enrich-page="store.enrichPageAction"
       @approve-link="store.approveLinkAction"
       @reject-link="store.rejectLinkAction"
       @ignore-link="store.ignoreLinkAction"
-      @conflict-action="store.executeConflictRulingAction"
+      @conflict-action="conflictAction"
+      @analyze="handleAnalyze"
       @batch-approve-links="store.batchApproveLinksAction"
       @batch-reject-links="store.batchRejectLinksAction"
       @batch-auto-resolve="store.batchAutoResolveSelected"
@@ -419,6 +527,14 @@ function getRiskHint(action: string): { icon: any; tone: 'error' | 'warning' | '
       @show-batch-preview="showBatchPreviewDialog"
       @navigate-to-page="navigateToPage"
     />
+
+    <div
+      v-if="focusActive && !focusLoading && focusFindings.length === 0"
+      class="lint-view__focus-empty"
+    >
+      <ShieldCheck :size="24" />
+      <span>{{ t('lint.conflict.focusEmpty') }}</span>
+    </div>
 
     <div
       v-if="!store.overviewLoading && !store.findingsLoading && store.totalActiveFindings === 0 && !store.running"
@@ -1360,5 +1476,37 @@ function getRiskHint(action: string): { icon: any; tone: 'error' | 'warning' | '
 
 .batch-preview-dialog__btn--danger {
   background: var(--error);
+}
+
+.lint-view__focus-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  background: rgba(239, 68, 68, 0.08);
+  font-size: var(--font-body-sm);
+  color: var(--text-primary);
+}
+
+.lint-view__focus-text {
+  flex: 1;
+}
+
+.lint-view__focus-clear {
+  border: none;
+  background: none;
+  color: var(--accent-primary);
+  font-size: var(--font-body-sm);
+  cursor: pointer;
+}
+
+.lint-view__focus-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  color: var(--text-tertiary);
 }
 </style>

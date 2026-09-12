@@ -20,6 +20,7 @@ public class ExecutionInfo {
     private LocalDateTime createdAt;
     private Integer totalTokens;
     private String errorMessage;
+    private String payloadTitle;
     private String sourceName;
     private Integer totalSteps;
     private Integer completedSteps;

@@ -8,6 +8,9 @@ import java.util.List;
 
 public interface ExecutionTracker {
     ExecutionModel createExecution(String type, Long scopeId, Long sourceId, Long schemaConfigId);
+    ExecutionModel createTaskExecution(String type, Long scopeId, String payloadJson, Long submittedBy);
+    List<ExecutionModel> listActiveExecutions(Long scopeId, String type);
+    void deleteSteps(Long executionId);
     ExecutionStepModel createStep(Long executionId, String stepName, Integer stepOrder, String approvalLevel);
     void updateExecutionStatus(Long executionId, String status);
     void updateExecutionStatus(Long executionId, String status, String complianceViolations);
@@ -22,7 +25,7 @@ public interface ExecutionTracker {
     void completeExecution(Long executionId, Integer totalTokens);
     ExecutionModel getExecution(Long executionId);
     List<ExecutionModel> listExecutions(Long scopeId, String type);
-    IPage<ExecutionModel> listExecutionsPaged(Long scopeId, String type, int page, int size);
+    IPage<ExecutionModel> listExecutionsPaged(Long scopeId, String type, List<String> statuses, int page, int size);
     ExecutionStepModel getStep(Long stepId);
     List<ExecutionStepModel> listSteps(Long executionId);
     void resetStepForRetry(Long stepId);

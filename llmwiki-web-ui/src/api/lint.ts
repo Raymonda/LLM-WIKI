@@ -1,5 +1,6 @@
 import api from './index'
 import { useAuthStore } from '@/stores/auth'
+import type { TaskReceiptInfo } from '@/api/harness'
 
 export interface LintExecutionInfo {
   executionId: number
@@ -139,9 +140,23 @@ export function approveFinding(id: number, scopeId: number): Promise<Record<stri
   return api.post(`/lint/findings/${id}/approve?${params.toString()}`)
 }
 
-export function executeConflictRuling(id: number, scopeId: number, action: string): Promise<Record<string, unknown>> {
+export function executeConflictRuling(id: number, action: string): Promise<TaskReceiptInfo> {
+  return api.post(`/lint/findings/${id}/execute-ruling`, { action })
+}
+
+export interface RulingBriefResponse {
+  status: 'generated' | 'already_generated' | 'deferred'
+  reason?: string
+  finding?: LintFindingInfo
+}
+
+export function generateRulingBrief(id: number, scopeId: number): Promise<RulingBriefResponse> {
   const params = new URLSearchParams({ scopeId: scopeId.toString() })
-  return api.post(`/lint/findings/${id}/execute-ruling?${params.toString()}`, { action })
+  return api.post(`/lint/findings/${id}/ruling-brief?${params.toString()}`)
+}
+
+export function getPageConflicts(scopeId: number, pageId: number): Promise<LintFindingInfo[]> {
+  return api.get('/lint/page-conflicts', { params: { scopeId, pageId } })
 }
 
 export function rejectFinding(id: number): Promise<void> {

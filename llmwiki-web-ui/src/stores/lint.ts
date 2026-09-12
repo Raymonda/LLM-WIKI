@@ -5,7 +5,7 @@ import {
   getHealthOverview, listScopeFindingsPaged, startLint, getLintProgress, createLintSSE,
   getActiveLintExecution, getFindings,
   updateFindingStatus, autoResolveFinding, triggerRepair, approveFinding,
-  executeConflictRuling,
+  executeConflictRuling, generateRulingBrief, getPageConflicts,
   rejectFinding, rollbackFinding, recordFindingFeedback, retryFailedFinding,
   batchApproveFindings, batchRejectFindings, batchRollbackFindings, retryOrphanFix, enrichPage,
   approveLink, rejectLink, batchApproveLinks, batchRejectLinks,
@@ -75,6 +75,7 @@ export const useLintStore = defineStore('lint', () => {
   const selectedIds = ref<Set<number>>(new Set())
   const processingIds = ref<Set<number>>(new Set())
   const batchProcessing = ref(false)
+  const rulingTasks = ref<Map<number, number>>(new Map())
 
   const mainTabCounts = ref<Record<MainTabKey, number>>({ manual: 0, ai_processed: 0, archived: 0 })
 
@@ -609,15 +610,44 @@ export const useLintStore = defineStore('lint', () => {
     if (!scopeId.value) return
     await withProcessing(id, async () => {
       try {
-        const result = await executeConflictRuling(id, scopeId.value!, action)
-        if (result.status === 'failed') {
-          throw new Error((result.error as string) || '裁决执行失败')
+        const receipt = await executeConflictRuling(id, action)
+        rulingTasks.value = new Map(rulingTasks.value).set(id, receipt.executionId)
+        await refreshAfterAction()
+      } catch (e: any) {
+        setActionError(e.message || '裁决提交失败')
+      }
+    })
+  }
+
+  async function analyzeRulingBriefAction(id: number): Promise<'generated' | 'already_generated' | 'deferred' | 'error'> {
+    if (!scopeId.value) return 'error'
+    let outcome: 'generated' | 'already_generated' | 'deferred' | 'error' = 'error'
+    await withProcessing(id, async () => {
+      try {
+        const response = await generateRulingBrief(id, scopeId.value!)
+        if (response.status === 'deferred') {
+          outcome = 'deferred'
+        } else if (response.status === 'already_generated') {
+          outcome = 'already_generated'
+        } else {
+          outcome = 'generated'
         }
         await refreshAfterAction()
       } catch (e: any) {
-        setActionError(e.message || '裁决执行失败')
+        setActionError(e.message || 'AI 分析失败')
       }
     })
+    return outcome
+  }
+
+  async function loadPageConflictsAction(pageId: number): Promise<LintFindingInfo[]> {
+    if (!scopeId.value) return []
+    try {
+      return await getPageConflicts(scopeId.value, pageId)
+    } catch (e: any) {
+      setActionError(e.message || '加载页面冲突失败')
+      return []
+    }
   }
 
   async function rejectFindingAction(id: number) {
@@ -894,7 +924,7 @@ export const useLintStore = defineStore('lint', () => {
     overview, overviewLoading, findingsPaged, findingsLoading,
     execution, running, error, actionError, lintStartTime, latestExecutionId,
     mainTab, manualTypeFilter, currentPage, pageSize, pageSizeOptions,
-    selectedIds, processingIds, batchProcessing,
+    selectedIds, processingIds, batchProcessing, rulingTasks,
     mainTabCounts,
     completionSummary, dismissCompletionSummary,
     healthDistribution, healthyCount, needsUpdateCount,
@@ -907,11 +937,11 @@ export const useLintStore = defineStore('lint', () => {
     selectedAwaitingCount, selectedStaleCount, selectedAutoResolvedCount, selectedCrossrefOpenCount,
     selectedAutoResolvableCount, selectedFailedCount,
     currentTabTotal,
-    loadOverview, loadTabCounts, loadFindings,
+    loadOverview, loadTabCounts, loadFindings, loadPageConflictsAction,
     switchMainTab, setManualTypeFilter, goToPage, setPageSize,
     triggerLint, startPolling, stopPolling, disconnectSSE, checkActiveLint, startVisibilityWatcher, cleanup,
     dismissFinding, reassessFinding, autoResolveAction, resolveComplianceAction, triggerRepairAction,
-    approveFindingAction, executeConflictRulingAction, rejectFindingAction, rollbackFindingAction, retryFailedFindingAction, retryOrphanFixAction, enrichPageAction,
+    approveFindingAction, executeConflictRulingAction, analyzeRulingBriefAction, rejectFindingAction, rollbackFindingAction, retryFailedFindingAction, retryOrphanFixAction, enrichPageAction,
     approveLinkAction, rejectLinkAction, ignoreLinkAction,
     batchApproveLinksAction, batchRejectLinksAction,
     toggleSelect, toggleSelectAll, clearSelection,

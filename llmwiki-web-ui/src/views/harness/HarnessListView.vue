@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
-import { listExecutionsPaged, type ExecutionRecord, type PageResult } from '@/api/harness'
+import {
+  listExecutionsPaged, cancelExecution, retryExecution, createExecutionSSE,
+  type ExecutionRecord, type ExecutionStepInfo, type PageResult,
+} from '@/api/harness'
 import {
   Activity, Clock, CheckCircle, AlertTriangle, Loader2,
-  FileText, Search, ShieldCheck, Settings, ChevronLeft, ChevronRight, GitMerge
+  FileText, Search, ShieldCheck, Settings, ChevronLeft, ChevronRight, GitMerge,
+  Scale, Bookmark, RefreshCw, RotateCw, XCircle,
 } from 'lucide-vue-next'
-import { statusLabel as statusLabelUtil } from '@/utils/executionLabels'
+import { statusLabel as statusLabelUtil, stepLabel as stepLabelUtil } from '@/utils/executionLabels'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -20,6 +25,20 @@ const currentPage = ref(1)
 const pageSize = 20
 const typeFilter = ref('')
 
+const activeTasks = ref<ExecutionRecord[]>([])
+const expandedId = ref<number | null>(null)
+const expandedSteps = ref<ExecutionStepInfo[]>([])
+const cancellingId = ref<number | null>(null)
+const retryingId = ref<number | null>(null)
+
+const ACTIVE_PAGE_SIZE = 50
+const ACTIVE_POLL_MS = 10_000
+
+const nowTs = ref(Date.now())
+let elapsedTimer: number | null = null
+let activeTimer: number | null = null
+let expandedEs: EventSource | null = null
+
 const typeOptions = [
   { value: '', labelKey: 'harness.typeAll' },
   { value: 'ingest', labelKey: 'harness.typeIngestFull' },
@@ -27,6 +46,9 @@ const typeOptions = [
   { value: 'page_merge', labelKey: 'harness.typePageMerge' },
   { value: 'schema_change', labelKey: 'harness.typeSchemaChange' },
   { value: 'config_change', labelKey: 'harness.typeConfigChange' },
+  { value: 'conflict_ruling', labelKey: 'harness.typeConflictRuling' },
+  { value: 'query_save', labelKey: 'harness.typeQuerySave' },
+  { value: 'index_rebuild', labelKey: 'harness.typeIndexRebuild' },
 ]
 
 const typeOptionsLocalized = computed(() =>
@@ -39,6 +61,9 @@ const typeConfig: Record<string, { icon: any; color: string; bgColor: string; la
   schema_change: { icon: ShieldCheck, color: 'var(--accent-primary)', bgColor: 'var(--accent-light)', labelKey: 'harness.typeSchemaChange' },
   config_change: { icon: Settings, color: 'var(--text-secondary)', bgColor: 'var(--bg-tertiary)', labelKey: 'harness.typeConfigChange' },
   page_merge: { icon: GitMerge, color: 'var(--accent-primary)', bgColor: 'var(--accent-light)', labelKey: 'harness.typePageMerge' },
+  conflict_ruling: { icon: Scale, color: 'var(--warning)', bgColor: 'var(--warning-light)', labelKey: 'harness.typeConflictRuling' },
+  query_save: { icon: Bookmark, color: 'var(--accent-primary)', bgColor: 'var(--accent-light)', labelKey: 'harness.typeQuerySave' },
+  index_rebuild: { icon: RefreshCw, color: 'var(--success)', bgColor: 'var(--success-light)', labelKey: 'harness.typeIndexRebuild' },
 }
 
 const statusIcon = (status: string) => {
@@ -82,6 +107,108 @@ async function loadExecutions() {
   }
 }
 
+async function loadActiveTasks() {
+  try {
+    const params: { scopeId: number; status: string; type?: string; page: number; size: number } = {
+      scopeId: authStore.scopeId,
+      status: 'active',
+      page: 1,
+      size: ACTIVE_PAGE_SIZE,
+    }
+    if (typeFilter.value) {
+      params.type = typeFilter.value
+    }
+    const result = await listExecutionsPaged(params)
+    activeTasks.value = result.items
+  } catch (e) {
+    console.error('Failed to load active tasks:', e)
+  }
+}
+
+function closeExpanded() {
+  if (expandedEs) {
+    expandedEs.close()
+    expandedEs = null
+  }
+  expandedId.value = null
+  expandedSteps.value = []
+}
+
+function toggleExpand(exec: ExecutionRecord) {
+  if (expandedId.value === exec.executionId) {
+    closeExpanded()
+    return
+  }
+  closeExpanded()
+  expandedId.value = exec.executionId
+  const es = createExecutionSSE(exec.executionId)
+  expandedEs = es
+
+  es.addEventListener('init', (event: MessageEvent) => {
+    try {
+      const data = JSON.parse(event.data) as ExecutionRecord
+      expandedSteps.value = data.steps ?? []
+    } catch {}
+  })
+
+  es.addEventListener('step', (event: MessageEvent) => {
+    try {
+      const data = JSON.parse(event.data) as ExecutionStepInfo
+      const idx = expandedSteps.value.findIndex(s => s.stepId === data.stepId)
+      if (idx >= 0) {
+        expandedSteps.value[idx] = { ...expandedSteps.value[idx], ...data }
+      } else {
+        expandedSteps.value.push(data)
+      }
+    } catch {}
+  })
+
+  es.addEventListener('done', () => {
+    closeExpanded()
+    loadActiveTasks()
+    loadExecutions()
+  })
+
+  es.addEventListener('pause', () => {
+    loadActiveTasks()
+  })
+}
+
+const expandedCompletedCount = computed(() =>
+  expandedSteps.value.filter(s => s.status === 'completed').length
+)
+
+const expandedProgressPercent = computed(() =>
+  expandedSteps.value.length
+    ? Math.round((expandedCompletedCount.value / expandedSteps.value.length) * 100)
+    : 0
+)
+
+async function cancelTask(exec: ExecutionRecord) {
+  cancellingId.value = exec.executionId
+  try {
+    await cancelExecution(exec.executionId)
+    await loadActiveTasks()
+  } catch (e) {
+    ElMessage.error((e as Error).message || t('harness.actionFailed'))
+  } finally {
+    cancellingId.value = null
+  }
+}
+
+async function retryTask(exec: ExecutionRecord) {
+  retryingId.value = exec.executionId
+  try {
+    await retryExecution(exec.executionId)
+    await loadActiveTasks()
+    await loadExecutions()
+  } catch (e) {
+    ElMessage.error((e as Error).message || t('harness.actionFailed'))
+  } finally {
+    retryingId.value = null
+  }
+}
+
 function goToPage(page: number) {
   if (page < 1 || page > totalPages.value) return
   currentPage.value = page
@@ -102,7 +229,20 @@ function formatTime(dateStr: string | null): string {
   return date.toLocaleDateString(locale.value === 'en' ? 'en-US' : 'zh-CN')
 }
 
+function elapsedText(exec: ExecutionRecord): string {
+  if (!exec.startTime) return ''
+  const ms = nowTs.value - new Date(exec.startTime).getTime()
+  if (ms <= 0) return ''
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m${s % 60}s`
+  const h = Math.floor(m / 60)
+  return `${h}h${m % 60}m`
+}
+
 function getSummary(exec: ExecutionRecord): string {
+  if (exec.payloadTitle) return exec.payloadTitle
   const cfg = typeConfig[exec.operationType]
   const typeLabel = cfg ? t(cfg.labelKey) : exec.operationType
 
@@ -149,6 +289,7 @@ function getTypeBadgeStyle(type: string) {
 watch(typeFilter, () => {
   currentPage.value = 1
   loadExecutions()
+  loadActiveTasks()
 })
 
 watch(currentPage, () => {
@@ -157,6 +298,15 @@ watch(currentPage, () => {
 
 onMounted(() => {
   loadExecutions()
+  loadActiveTasks()
+  elapsedTimer = window.setInterval(() => { nowTs.value = Date.now() }, 1000)
+  activeTimer = window.setInterval(() => { loadActiveTasks() }, ACTIVE_POLL_MS)
+})
+
+onUnmounted(() => {
+  if (elapsedTimer) window.clearInterval(elapsedTimer)
+  if (activeTimer) window.clearInterval(activeTimer)
+  closeExpanded()
 })
 </script>
 
@@ -172,6 +322,71 @@ onMounted(() => {
         </select>
       </div>
     </div>
+
+    <div v-if="activeTasks.length" class="harness-list__active">
+      <h2 class="harness-list__section-title">
+        {{ t('harness.activeTasks') }}
+        <span class="harness-list__active-count">{{ activeTasks.length }}</span>
+      </h2>
+      <div class="harness-list__active-list">
+        <div
+          v-for="exec in activeTasks"
+          :key="exec.executionId"
+          class="harness-list__active-card"
+        >
+          <div class="harness-list__active-top">
+            <span class="harness-list__item-type-badge" :style="getTypeBadgeStyle(exec.operationType)">
+              <component :is="getTypeIcon(exec.operationType)" :size="12" />
+              {{ typeConfig[exec.operationType] ? t(typeConfig[exec.operationType].labelKey) : exec.operationType }}
+            </span>
+            <span class="harness-list__item-status" :style="{ color: statusColor(exec.status) }">
+              {{ statusLabelUtil(exec.status) || exec.status }}
+            </span>
+          </div>
+          <p class="harness-list__active-title" @click="toggleExpand(exec)">{{ getSummary(exec) }}</p>
+          <div class="harness-list__active-meta">
+            <span v-if="exec.startTime" class="harness-list__active-elapsed">
+              <Clock :size="12" />
+              {{ elapsedText(exec) }}
+            </span>
+            <span class="harness-list__active-actions">
+              <router-link class="harness-list__action-link" :to="`/harness/${exec.executionId}`">
+                {{ t('harness.viewTaskDetail') }}
+              </router-link>
+              <button
+                class="harness-list__action-link harness-list__action-link--danger"
+                :disabled="cancellingId === exec.executionId"
+                @click.stop="cancelTask(exec)"
+              >
+                {{ t('harness.cancelExecution') }}
+              </button>
+            </span>
+          </div>
+          <div v-if="expandedId === exec.executionId" class="harness-list__active-steps">
+            <div class="harness-list__active-progress">
+              <div
+                class="harness-list__active-progress-fill"
+                :style="{ width: expandedProgressPercent + '%' }"
+              ></div>
+            </div>
+            <div
+              v-for="step in expandedSteps"
+              :key="step.stepId"
+              class="harness-list__active-step"
+            >
+              <component
+                :is="step.status === 'completed' ? CheckCircle : step.status === 'failed' ? XCircle : Loader2"
+                :size="12"
+                :style="{ color: step.status === 'completed' ? 'var(--success)' : step.status === 'failed' ? 'var(--error)' : 'var(--accent-primary)' }"
+              />
+              <span class="harness-list__active-step-name">{{ stepLabelUtil(step.stepName) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2 v-if="activeTasks.length" class="harness-list__section-title">{{ t('harness.taskHistory') }}</h2>
 
     <div v-if="loading" class="harness-list__loading">
       <Loader2 :size="24" class="harness-list__loading-icon" />
@@ -212,7 +427,22 @@ onMounted(() => {
               <span class="harness-list__item-status" :style="{ color: statusColor(exec.status) }">
                 {{ statusLabelUtil(exec.status) || exec.status }}
               </span>
+              <button
+                v-if="exec.status === 'failed'"
+                class="harness-list__retry-btn"
+                :disabled="retryingId === exec.executionId"
+                @click.stop="retryTask(exec)"
+              >
+                <RotateCw :size="12" />
+                {{ t('harness.retryExecution') }}
+              </button>
             </div>
+            <p
+              v-if="exec.status === 'failed' && exec.errorMessage"
+              class="harness-list__item-error"
+            >
+              {{ exec.errorMessage }}
+            </p>
           </div>
         </div>
       </div>
@@ -450,5 +680,173 @@ onMounted(() => {
 .harness-list__page-info {
   font-size: var(--font-body-sm);
   color: var(--text-secondary);
+}
+
+.harness-list__section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-body);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  margin: 0 0 var(--space-3) 0;
+}
+
+.harness-list__active {
+  margin-bottom: var(--space-6);
+}
+
+.harness-list__active-count {
+  font-size: var(--font-caption);
+  color: var(--text-tertiary);
+  background: var(--surface-secondary);
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+}
+
+.harness-list__active-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.harness-list__active-card {
+  background: var(--surface-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4);
+}
+
+.harness-list__active-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+
+.harness-list__active-title {
+  font-size: var(--font-body);
+  color: var(--text-primary);
+  margin: 0 0 var(--space-2) 0;
+  cursor: pointer;
+}
+
+.harness-list__active-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.harness-list__active-elapsed {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-caption);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.harness-list__active-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.harness-list__action-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: var(--font-caption);
+  color: var(--accent-primary);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.harness-list__action-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.harness-list__action-link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.harness-list__action-link--danger {
+  color: var(--error);
+}
+
+.harness-list__active-steps {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-default);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.harness-list__active-progress {
+  height: 4px;
+  background: var(--border-default);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: var(--space-2);
+}
+
+.harness-list__active-progress-fill {
+  height: 100%;
+  background: var(--accent-primary);
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+
+.harness-list__active-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-caption);
+  color: var(--text-secondary);
+}
+
+.harness-list__active-step-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.harness-list__retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  cursor: pointer;
+}
+
+.harness-list__retry-btn:hover:not(:disabled) {
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.harness-list__retry-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.harness-list__item-error {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-caption);
+  color: var(--error);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
 }
 </style>

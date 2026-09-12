@@ -72,4 +72,10 @@ public class HarnessEngineImpl implements HarnessEngine {
         log.info("Starting query save for scopeId={}", scopeId);
         return pipelineOrchestrator.runSaveQueryResultPipeline(scopeId, question, answer, sessionId);
     }
+
+    @Override
+    public WikiPageDO executeSaveQueryResultWithExecution(Long executionId, Long scopeId, String question, String answer, String sessionId) {
+        log.info("Starting query save with execution: executionId={}, scopeId={}", executionId, scopeId);
+        return pipelineOrchestrator.runSaveQueryResultPipelineWithExecution(executionId, scopeId, question, answer, sessionId);
+    }
 }

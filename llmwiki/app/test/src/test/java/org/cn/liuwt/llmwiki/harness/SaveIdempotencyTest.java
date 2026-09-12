@@ -131,4 +131,22 @@ class SaveIdempotencyTest {
         verify(wikiPageMapper).insert(any(WikiPageDO.class));
         verify(executionTracker).completeExecution(eq(1L), anyInt());
     }
+
+    @Test
+    void shouldReuseProvidedExecutionWhenRunningWithExecution() {
+        ExecutionModel provided = new ExecutionModel();
+        provided.setId(88L);
+        when(executionTracker.getExecution(88L)).thenReturn(provided);
+        String formatted = "{\"title\":\"任务标题\",\"summary\":\"摘要\",\"category\":\"问答沉淀\","
+            + "\"content\":\"# 任务标题\\n\\n内容\"}";
+        when(chatClient.chat(anyString(), anyString())).thenReturn(formatted);
+        when(wikiPageMapper.selectOne(any())).thenReturn(null);
+        when(wikiPageMapper.selectList(any())).thenReturn(List.of());
+
+        WikiPageDO result = orchestrator.runSaveQueryResultPipelineWithExecution(88L, 7L, "问题", "回答", "s1");
+
+        assertNotNull(result);
+        verify(executionTracker, never()).createExecution(anyString(), any(), any(), any());
+        verify(executionTracker).completeExecution(eq(88L), anyInt());
+    }
 }

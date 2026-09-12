@@ -9,6 +9,7 @@ import { Search, MessageCircle, Loader2, BookOpen, BookmarkPlus, Bot, FileText, 
 import { searchPages, searchSuggest, listCategories, type WikiPageInfo, type SearchResultInfo } from '@/api/wiki'
 import { useAuthStore } from '@/stores/auth'
 import { saveAnswer, resolveLinks, type QueryAnalysisMode } from '@/api/query'
+import type { TaskReceiptInfo } from '@/api/harness'
 import { useSSEQuery, type ToolActivity } from '@/composables/useSSEQuery'
 import { buildFactBlocksMarkdown, orderFactBlocksByConfidence, type FactBlockView } from '@/composables/queryStreamLogic'
 import FactEvidenceList from '@/components/search/FactEvidenceList.vue'
@@ -34,7 +35,7 @@ const queryInput = ref('')
 const lastQuestion = ref('')
 const isSaving = ref(false)
 const isSaved = ref(false)
-const savedPage = ref<WikiPageInfo | null>(null)
+const savedTask = ref<TaskReceiptInfo | null>(null)
 const showRefineInput = ref(false)
 const refineInput = ref('')
 const isRefining = ref(false)
@@ -190,7 +191,7 @@ const hasNoWikiInfo = computed(() => {
 })
 
 const hasAnswer = computed(() => aiAnswer.value.length > 0 || hasSavedAnswer.value || factBlocks.value.length > 0)
-const hasSavedAnswer = computed(() => isSaved.value && !!savedPage.value)
+const hasSavedAnswer = computed(() => isSaved.value && !!savedTask.value)
 
 watch(searchQuery, (val) => {
   if (searchMode.value === 'search' && val.trim().length >= 2) {
@@ -325,7 +326,7 @@ function handleQuery() {
   if (!q || isStreaming.value || isRefining.value) return
   lastQuestion.value = q
   isSaved.value = false
-  savedPage.value = null
+  savedTask.value = null
   showRefineInput.value = false
   refineInput.value = ''
   isSaving.value = false
@@ -351,7 +352,7 @@ function handleRefine() {
   const combinedQuestion = `当前文档内容：\n\n${answerBody.value}\n\n用户的完善要求：${instruction}\n\n请基于以上信息，更新和完善这份文档，保持原有结构，补充和完善用户要求的内容。直接输出更新后的完整文档。`
 
   isSaved.value = false
-  savedPage.value = null
+  savedTask.value = null
 
   sse.startQuery(combinedQuestion, 'quick', () => {
     isRefining.value = false
@@ -362,8 +363,9 @@ async function handleSave() {
   if (isSaving.value || isSaved.value) return
   isSaving.value = true
   try {
-    savedPage.value = await saveAnswer(lastQuestion.value, answerBody.value)
+    savedTask.value = await saveAnswer(lastQuestion.value, answerBody.value)
     isSaved.value = true
+    ElMessage.success(t('search.submittedToBackground'))
   } catch (e: any) {
     ElMessage.error(e.message || t('search.saveFailed'))
   } finally {
@@ -389,7 +391,7 @@ function startNewQuestion() {
   queryInput.value = ''
   lastQuestion.value = ''
   isSaved.value = false
-  savedPage.value = null
+  savedTask.value = null
   showRefineInput.value = false
   refineInput.value = ''
   isRefining.value = false
@@ -782,10 +784,10 @@ onUnmounted(() => {
           <span>{{ t('search.savingToWiki') }}</span>
         </div>
 
-        <div v-if="savedPage" class="search-page__saved-inline">
+        <div v-if="savedTask" class="search-page__saved-inline">
           <CheckCircle :size="14" />
-          <span>{{ t('search.savedAsWiki') }}</span>
-          <router-link :to="`/wiki/${savedPage.id}`" class="search-page__saved-link">{{ t('search.viewPage') }}</router-link>
+          <span>{{ t('search.submittedToBackground') }}</span>
+          <router-link :to="`/harness/${savedTask.executionId}`" class="search-page__saved-link">{{ t('search.viewTask') }}</router-link>
         </div>
 
         <div v-if="!isStreaming && !isRefining && wikiSources.length > 0" class="search-page__sources">
@@ -812,11 +814,11 @@ onUnmounted(() => {
             :class="{ 'search-page__action-btn--saved': isSaved }"
             @click="handleSave"
             :disabled="isSaved"
-            :title="isSaved ? t('search.savedToWiki') : t('search.saveToWiki')"
+            :title="isSaved ? t('search.submittedToBackground') : t('search.saveToWiki')"
           >
             <BookmarkPlus v-if="!isSaved" :size="14" />
             <CheckCircle v-else :size="14" />
-            {{ isSaved ? t('search.saved') : t('search.saveToWiki') }}
+            {{ isSaved ? t('search.submitted') : t('search.saveToWiki') }}
           </button>
           <button class="search-page__action-btn search-page__action-btn--secondary" @click="handleCopy" :title="t('search.copyAnswer')">
             <Copy :size="14" />

@@ -1,6 +1,7 @@
 package org.cn.liuwt.llmwiki.web.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.ConflictReviewDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.LintFindingDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
@@ -18,10 +19,14 @@ import org.cn.liuwt.llmwiki.facade.model.ExecutionInfo;
 import org.cn.liuwt.llmwiki.facade.model.HealthOverview;
 import org.cn.liuwt.llmwiki.facade.model.LintFindingInfo;
 import org.cn.liuwt.llmwiki.facade.model.PageResult;
+import org.cn.liuwt.llmwiki.facade.model.TaskReceiptInfo;
 import org.cn.liuwt.llmwiki.service.harness.mq.ExecutionNodeRegistry;
 import org.cn.liuwt.llmwiki.service.harness.mq.MqHealthService;
 import org.cn.liuwt.llmwiki.service.harness.mq.PipelineTaskMessage;
+import org.cn.liuwt.llmwiki.service.harness.task.BackgroundTaskService;
+import org.cn.liuwt.llmwiki.service.harness.task.TaskReceipt;
 import org.cn.liuwt.llmwiki.service.lint.LintService;
+import org.cn.liuwt.llmwiki.web.security.JwtTokenProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -70,6 +75,12 @@ public class LintController {
 
     @Autowired
     private MqHealthService mqHealthService;
+
+    @Autowired
+    private JwtTokenProvider jwtTokenProvider;
+
+    @Autowired
+    private BackgroundTaskService backgroundTaskService;
 
     @Value("${llmwiki.rocketmq.enabled:false}")
     private boolean mqEnabled;
@@ -327,11 +338,50 @@ public class LintController {
     }
 
     @PostMapping("/findings/{id}/execute-ruling")
-    public Result<Map<String, Object>> executeConflictRuling(
-            @PathVariable Long id, @RequestParam Long scopeId, @RequestBody Map<String, String> body) {
-        String action = body.getOrDefault("action", "coexist");
-        Map<String, Object> result = lintService.executeConflictRuling(scopeId, id, action);
+    public Result<TaskReceiptInfo> executeConflictRuling(
+            @PathVariable Long id, @RequestBody(required = false) Map<String, String> body) {
+        Long scopeId = jwtTokenProvider.getCurrentScopeId();
+        Long userId = jwtTokenProvider.getCurrentUserId();
+        String action = body != null ? body.getOrDefault("action", "coexist") : "coexist";
+        ConflictReviewDO review = lintService.resolveOrCreateReview(scopeId, id);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("reviewId", review.getId());
+        payload.put("action", action);
+        payload.put("detail", "用户从Lint体检页面裁决");
+        payload.put("findingId", id);
+        payload.put("title", "裁决：" + displayTitle(review.getFromPageTitle())
+            + " ↔ " + displayTitle(review.getToPageTitle()));
+        TaskReceipt receipt = backgroundTaskService.submit(scopeId, userId, "conflict_ruling", payload);
+        TaskReceiptInfo info = new TaskReceiptInfo();
+        info.setExecutionId(receipt.executionId());
+        info.setTaskType(receipt.taskType());
+        info.setStatus(receipt.status());
+        return Result.success(info);
+    }
+
+    private static String displayTitle(String title) {
+        return title != null && !title.isBlank() ? title : "未知页面";
+    }
+
+    @PostMapping("/findings/{id}/ruling-brief")
+    public Result<Map<String, Object>> generateRulingBrief(@PathVariable Long id, @RequestParam Long scopeId) {
+        Map<String, Object> result = lintService.generateRulingBrief(scopeId, id);
+        Object status = result.get("status");
+        if ("generated".equals(status) || "already_generated".equals(status)) {
+            LintFindingDO updated = lintFindingService.getFinding(id);
+            if (updated != null) {
+                result.put("finding", toFindingInfo(updated));
+            }
+        }
         return Result.success(result);
+    }
+
+    @GetMapping("/page-conflicts")
+    public Result<List<LintFindingInfo>> listPageConflicts(@RequestParam Long scopeId, @RequestParam Long pageId) {
+        List<LintFindingInfo> infos = lintService.listPageConflicts(scopeId, pageId).stream()
+            .map(this::toFindingInfo)
+            .toList();
+        return Result.success(infos);
     }
 
     @PostMapping("/findings/{id}/reject")

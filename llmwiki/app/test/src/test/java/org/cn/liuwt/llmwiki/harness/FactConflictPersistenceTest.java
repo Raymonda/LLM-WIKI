@@ -1,7 +1,8 @@
 package org.cn.liuwt.llmwiki.harness;
 
-import org.cn.liuwt.llmwiki.common.dal.dataobject.LintFindingDO;
-import org.cn.liuwt.llmwiki.common.dal.mapper.LintFindingMapper;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
+import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageMapper;
+import org.cn.liuwt.llmwiki.domain.service.harness.LintFindingService;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.ConsistencyReconciler;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestContext;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.WriterOrchestrator;
@@ -15,138 +16,126 @@ import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class FactConflictPersistenceTest {
 
     @Mock
-    private LintFindingMapper lintFindingMapper;
+    private WikiPageMapper wikiPageMapper;
 
-    @Test
-    void persistFactConflicts_insertsFindings() {
+    @Mock
+    private LintFindingService lintFindingService;
+
+    private WriterOrchestrator newOrchestrator() {
         WriterOrchestrator orchestrator = new WriterOrchestrator();
+        inject(orchestrator, "wikiPageMapper", wikiPageMapper);
+        inject(orchestrator, "lintFindingService", lintFindingService);
+        return orchestrator;
+    }
+
+    private static void inject(Object target, String fieldName, Object value) {
         try {
-            java.lang.reflect.Field mapperField = WriterOrchestrator.class.getDeclaredField("lintFindingMapper");
-            mapperField.setAccessible(true);
-            mapperField.set(orchestrator, lintFindingMapper);
+            java.lang.reflect.Field f = WriterOrchestrator.class.getDeclaredField(fieldName);
+            f.setAccessible(true);
+            f.set(target, value);
         } catch (Exception e) {
-            fail("Failed to inject lintFindingMapper: " + e.getMessage());
-            return;
+            fail("Failed to inject " + fieldName + ": " + e.getMessage());
         }
+    }
 
-        when(lintFindingMapper.countOpenConflictByPageAndDetailPrefix(anyLong(), anyString(), anyString()))
-            .thenReturn(0);
+    private static void invokePersist(WriterOrchestrator orchestrator, IngestContext context,
+                                      ConsistencyReconciler.ConsistencyReport report) {
+        try {
+            java.lang.reflect.Method method = WriterOrchestrator.class.getDeclaredMethod(
+                "persistFactConflicts", IngestContext.class, ConsistencyReconciler.ConsistencyReport.class);
+            method.setAccessible(true);
+            method.invoke(orchestrator, context, report);
+        } catch (Exception e) {
+            fail("persistFactConflicts failed: "
+                + (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()));
+        }
+    }
 
-        ConsistencyReconciler.ConsistencyReport report = new ConsistencyReconciler.ConsistencyReport(
+    private static WikiPageDO page(long id, String title, String path) {
+        WikiPageDO page = new WikiPageDO();
+        page.setId(id);
+        page.setTitle(title);
+        page.setFilePath(path);
+        return page;
+    }
+
+    private static ConsistencyReconciler.ConsistencyReport conflictReport() {
+        return new ConsistencyReconciler.ConsistencyReport(
             List.of(),
             List.of(new ConsistencyReconciler.FactConflict(
                 "Revenue mismatch",
-                "wiki/pages/finance.md",
-                "wiki/pages/report.md",
-                "Revenue is 100M",
-                "Revenue is 120M"
+                "entities/trump.md",
+                "entities/biden.md",
+                "税率是10%",
+                "税率是15%"
             )),
             0,
             1,
             Set.of()
         );
-
-        IngestContext context = new IngestContext(1L, 1L, 100L, null);
-
-        try {
-            java.lang.reflect.Method method = WriterOrchestrator.class.getDeclaredMethod(
-                "persistFactConflicts", IngestContext.class, ConsistencyReconciler.ConsistencyReport.class);
-            method.setAccessible(true);
-            method.invoke(orchestrator, context, report);
-        } catch (Exception e) {
-            fail("persistFactConflicts failed: " + e.getCause().getMessage());
-        }
-
-        ArgumentCaptor<LintFindingDO> captor = ArgumentCaptor.forClass(LintFindingDO.class);
-        verify(lintFindingMapper).insert(captor.capture());
-        LintFindingDO inserted = captor.getValue();
-        assertEquals(1L, inserted.getScopeId());
-        assertEquals("conflict", inserted.getFindingType());
-        assertEquals("open", inserted.getStatus());
-        assertEquals("wiki/pages/finance.md", inserted.getPagePath());
-        assertEquals(100L, inserted.getExecutionId());
-        assertNotNull(inserted.getDetail());
-        assertNotNull(inserted.getExtra());
-        assertTrue(inserted.getExtra().contains("wiki/pages/report.md"));
     }
 
     @Test
-    void persistFactConflicts_deduplicates() {
-        WriterOrchestrator orchestrator = new WriterOrchestrator();
-        try {
-            java.lang.reflect.Field mapperField = WriterOrchestrator.class.getDeclaredField("lintFindingMapper");
-            mapperField.setAccessible(true);
-            mapperField.set(orchestrator, lintFindingMapper);
-        } catch (Exception e) {
-            fail("Failed to inject lintFindingMapper: " + e.getMessage());
-            return;
-        }
+    void shouldPersistCanonicalConflictCard() {
+        when(wikiPageMapper.selectOne(any())).thenReturn(
+            page(11L, "特朗普", "entities/trump.md"),
+            page(42L, "拜登", "entities/biden.md"));
+        when(lintFindingService.upsertConflictFinding(any(), any(), any())).thenReturn(7L);
 
-        when(lintFindingMapper.countOpenConflictByPageAndDetailPrefix(anyLong(), anyString(), anyString()))
-            .thenReturn(1);
+        invokePersist(newOrchestrator(), new IngestContext(1L, 1L, 100L, null), conflictReport());
 
-        ConsistencyReconciler.ConsistencyReport report = new ConsistencyReconciler.ConsistencyReport(
-            List.of(),
-            List.of(new ConsistencyReconciler.FactConflict(
-                "Duplicate conflict",
-                "wiki/pages/a.md",
-                "wiki/pages/b.md",
-                "claim A",
-                "claim B"
-            )),
-            0,
-            1,
-            Set.of()
-        );
-
-        IngestContext context = new IngestContext(1L, 1L, 100L, null);
-
-        try {
-            java.lang.reflect.Method method = WriterOrchestrator.class.getDeclaredMethod(
-                "persistFactConflicts", IngestContext.class, ConsistencyReconciler.ConsistencyReport.class);
-            method.setAccessible(true);
-            method.invoke(orchestrator, context, report);
-        } catch (Exception e) {
-            fail("persistFactConflicts failed: " + e.getCause().getMessage());
-        }
-
-        verify(lintFindingMapper).countOpenConflictByPageAndDetailPrefix(anyLong(), anyString(), anyString());
-        verifyNoMoreInteractions(lintFindingMapper);
+        ArgumentCaptor<LintFindingService.ConflictCard> captor =
+            ArgumentCaptor.forClass(LintFindingService.ConflictCard.class);
+        verify(lintFindingService).upsertConflictFinding(eq(1L), eq(100L), captor.capture());
+        LintFindingService.ConflictCard card = captor.getValue();
+        assertEquals("medium", card.priority());
+        assertEquals("entities/trump.md", card.fromPagePath());
+        assertEquals(11L, card.fromPageId());
+        assertEquals("特朗普", card.fromPageTitle());
+        assertEquals("entities/biden.md", card.relatedPagePath());
+        assertEquals(42L, card.relatedPageId());
+        assertEquals("拜登", card.relatedPageTitle());
+        assertEquals("fact_conflict", card.conflictType());
+        assertEquals("税率是10%", card.claimA());
+        assertEquals("税率是15%", card.claimB());
+        assertEquals("ingest_fact_conflict", card.source());
+        assertTrue(card.detail().contains("页面A: entities/trump.md"));
+        assertTrue(card.detail().contains("声明B: 税率是15%"));
     }
 
     @Test
-    void persistFactConflicts_emptyList_noInsert() {
-        WriterOrchestrator orchestrator = new WriterOrchestrator();
-        try {
-            java.lang.reflect.Field mapperField = WriterOrchestrator.class.getDeclaredField("lintFindingMapper");
-            mapperField.setAccessible(true);
-            mapperField.set(orchestrator, lintFindingMapper);
-        } catch (Exception e) {
-            fail("Failed to inject lintFindingMapper: " + e.getMessage());
-            return;
-        }
+    void shouldDegradeWhenRelatedPageMissing() {
+        when(wikiPageMapper.selectOne(any())).thenReturn(
+            page(11L, "特朗普", "entities/trump.md"), null);
+        when(lintFindingService.upsertConflictFinding(any(), any(), any())).thenReturn(7L);
 
+        invokePersist(newOrchestrator(), new IngestContext(1L, 1L, 100L, null), conflictReport());
+
+        ArgumentCaptor<LintFindingService.ConflictCard> captor =
+            ArgumentCaptor.forClass(LintFindingService.ConflictCard.class);
+        verify(lintFindingService).upsertConflictFinding(any(), any(), captor.capture());
+        LintFindingService.ConflictCard card = captor.getValue();
+        assertEquals(11L, card.fromPageId());
+        assertNull(card.relatedPageId());
+        assertNull(card.relatedPageTitle());
+        assertEquals("entities/biden.md", card.relatedPagePath());
+    }
+
+    @Test
+    void shouldNotUpsertWhenNoFactConflicts() {
         ConsistencyReconciler.ConsistencyReport report = new ConsistencyReconciler.ConsistencyReport(
             List.of(), List.of(), 0, 0, Set.of());
 
-        IngestContext context = new IngestContext(1L, 1L, 100L, null);
+        invokePersist(newOrchestrator(), new IngestContext(1L, 1L, 100L, null), report);
 
-        try {
-            java.lang.reflect.Method method = WriterOrchestrator.class.getDeclaredMethod(
-                "persistFactConflicts", IngestContext.class, ConsistencyReconciler.ConsistencyReport.class);
-            method.setAccessible(true);
-            method.invoke(orchestrator, context, report);
-        } catch (Exception e) {
-            fail("persistFactConflicts failed: " + e.getCause().getMessage());
-        }
-
-        verifyNoInteractions(lintFindingMapper);
+        verifyNoInteractions(lintFindingService);
     }
 }

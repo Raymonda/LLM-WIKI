@@ -14,4 +14,5 @@ public interface HarnessEngine {
     ExecutionModel executeLintWithExecution(Long executionId, Long scopeId, boolean fullScan);
     ExecutionModel getExecution(Long executionId);
     WikiPageDO executeSaveQueryResult(Long scopeId, String question, String answer, String sessionId);
+    WikiPageDO executeSaveQueryResultWithExecution(Long executionId, Long scopeId, String question, String answer, String sessionId);
 }

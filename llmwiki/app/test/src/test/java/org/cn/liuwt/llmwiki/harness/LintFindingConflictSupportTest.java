@@ -227,6 +227,7 @@ class LintFindingConflictSupportTest {
         ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<LintFindingDO>> captor =
             ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper.class);
         verify(lintFindingMapper).update(any(), captor.capture());
+        captor.getValue().getSqlSegment();
         assertTrue(captor.getValue().getParamNameValuePairs().containsValue("auto_resolved"));
     }
 }

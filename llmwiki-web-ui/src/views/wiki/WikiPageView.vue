@@ -41,7 +41,12 @@ const hasConflictWarning = computed(() => pageHealth.value === 'conflict-warning
 const hasHealthIssues = computed(() => isLintIssue(pageHealth.value))
 
 function navigateToLintDiagnostics() {
-  router.push('/lint')
+  const targetId = page.value?.id || pageId.value
+  if (!targetId || Number.isNaN(targetId)) {
+    router.push('/lint')
+    return
+  }
+  router.push({ path: '/lint', query: { pageId: String(targetId) } })
 }
 
 const estimatedReadingTime = computed(() => {
