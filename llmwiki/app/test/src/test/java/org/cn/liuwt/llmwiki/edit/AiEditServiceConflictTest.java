@@ -117,11 +117,12 @@ class AiEditServiceConflictTest {
             .collectList().block();
 
         List<String> types = events.stream().map(AiEditResponse::getType).toList();
-        assertEquals(List.of("anchor", "token", "retry", "patch", "token", "done"), types);
-        AiEditResponse retry = events.get(2);
+        assertEquals(List.of("anchor", "progress", "token", "retry", "patch", "token", "done"), types);
+        assertEquals("editing", events.get(1).getPhase());
+        AiEditResponse retry = events.get(3);
         assertEquals(2, retry.getRetryRound());
         assertEquals(1, retry.getFailedBlockCount());
-        AiEditResponse done = events.get(5);
+        AiEditResponse done = events.get(6);
         assertEquals("# Title\n你好\n"
             + "This page describes the greeting workflow used by the demo wiki project, "
             + "covering the greeting rules and examples.", done.getContent());
@@ -158,11 +159,12 @@ class AiEditServiceConflictTest {
             .collectList().block();
 
         List<String> types = events.stream().map(AiEditResponse::getType).toList();
-        assertEquals(List.of("patch", "token", "retry", "patch", "token", "done"), types);
-        AiEditResponse retry = events.get(2);
+        assertEquals(List.of("progress", "patch", "token", "retry", "patch", "token", "done"), types);
+        assertEquals("editing", events.get(0).getPhase());
+        AiEditResponse retry = events.get(3);
         assertEquals(2, retry.getRetryRound());
         assertEquals(1, retry.getFailedBlockCount());
-        AiEditResponse done = events.get(5);
+        AiEditResponse done = events.get(6);
         assertEquals("# Title\nhi\n"
             + "alpha bravo charlie delta echo foxtrot golf for enough length here\n"
             + "你好\ntail-line\nhello\n", done.getContent());
