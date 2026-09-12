@@ -53,7 +53,7 @@ public class AuditLogServiceImpl implements AuditLogService {
         }
         wrapper.orderByDesc(AuditLogDO::getCreatedAt);
 
-        Page<AuditLogDO> pageParam = new Page<>(page, size);
+        Page<AuditLogDO> pageParam = new Page<>(Math.max(page, 1), Math.max(size, 1));
         Page<AuditLogDO> result = auditLogMapper.selectPage(pageParam, wrapper);
 
         PageResult<AuditLogModel> pageResult = new PageResult<>();

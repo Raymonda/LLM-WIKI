@@ -305,7 +305,7 @@ public class ExecutionTrackerImpl implements ExecutionTracker {
             ExecutionDO::getStartedAt, ExecutionDO::getCompletedAt, ExecutionDO::getTotalTokens,
             ExecutionDO::getTotalCost, ExecutionDO::getCreatedAt, ExecutionDO::getErrorMessage,
             ExecutionDO::getBatchId, ExecutionDO::getPayloadJson, ExecutionDO::getSubmittedBy);
-        Page<ExecutionDO> pageParam = new Page<>(page, size);
+        Page<ExecutionDO> pageParam = new Page<>(Math.max(page, 1), Math.max(size, 1));
         IPage<ExecutionDO> doPage = executionMapper.selectPage(pageParam, wrapper);
         IPage<ExecutionModel> modelPage = new Page<>(doPage.getCurrent(), doPage.getSize(), doPage.getTotal());
         modelPage.setRecords(doPage.getRecords().stream()
