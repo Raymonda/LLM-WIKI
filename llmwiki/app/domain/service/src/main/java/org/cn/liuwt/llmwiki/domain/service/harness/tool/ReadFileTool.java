@@ -2,10 +2,12 @@ package org.cn.liuwt.llmwiki.domain.service.harness.tool;
 
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageMapper;
+import org.cn.liuwt.llmwiki.domain.service.harness.query.QueryToolProgress;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.cn.liuwt.llmwiki.integration.storage.StorageProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,9 +43,11 @@ public class ReadFileTool {
     @Tool(description = "读取 wiki-data 中的文件（Wiki 页面）。path 是相对于 wiki-data/{scopeId}/ 的路径。支持两种格式：'wiki/pages/xxx.md'（完整存储路径）或 'pages/xxx.md'（数据库 filePath 格式，会自动补 'wiki/' 前缀）。超过 20000 字符的文件会截断返回并提示文件大小")
     public String readFile(
         @ToolParam(description = "知识库范围 ID") String scopeId,
-        @ToolParam(description = "文件路径，相对于 wiki-data/{scopeId}/。支持 'wiki/pages/xxx.md' 或 'pages/xxx.md' 格式，后者会自动补 'wiki/' 前缀") String path
+        @ToolParam(description = "文件路径，相对于 wiki-data/{scopeId}/。支持 'wiki/pages/xxx.md' 或 'pages/xxx.md' 格式，后者会自动补 'wiki/' 前缀") String path,
+        ToolContext toolContext
     ) {
         String originalPath = path;
+        QueryToolProgress.emit(toolContext, "readFile", QueryToolProgress.displayName(originalPath), null);
         if (path != null && path.startsWith("parsed/")) {
             return "请参考对应的 Wiki 参考页获取原文内容，参考页包含该文档的结构化摘要和完整原文。使用 searchWiki 搜索相关关键词定位具体参考页。";
         }
@@ -118,12 +122,15 @@ public class ReadFileTool {
     public String readFileSection(
         @ToolParam(description = "知识库范围 ID") String scopeId,
         @ToolParam(description = "文件路径，相对于 wiki-data/{scopeId}/。支持 'wiki/pages/xxx.md' 或 'pages/xxx.md' 格式") String path,
-        @ToolParam(description = "Markdown 标题文本（不含 # 前缀），如 '风险评估'、'合规管理要求'。支持模糊匹配") String sectionHeading
+        @ToolParam(description = "Markdown 标题文本（不含 # 前缀），如 '风险评估'、'合规管理要求'。支持模糊匹配") String sectionHeading,
+        ToolContext toolContext
     ) {
         if (sectionHeading == null || sectionHeading.isBlank()) {
             return "sectionHeading 参数不能为空，请提供目标章节标题";
         }
-        String fileContent = readFile(scopeId, path);
+        QueryToolProgress.emit(toolContext, "readFileSection",
+            QueryToolProgress.displayName(path) + " · " + QueryToolProgress.truncate(sectionHeading, 40), null);
+        String fileContent = readFile(scopeId, path, toolContext);
         if (fileContent == null || fileContent.isBlank()) {
             return "文件内容为空或读取失败: " + path;
         }

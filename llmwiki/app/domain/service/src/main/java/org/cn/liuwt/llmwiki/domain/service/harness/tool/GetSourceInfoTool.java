@@ -8,9 +8,11 @@ import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageSourceMapper;
 import org.cn.liuwt.llmwiki.domain.service.harness.ParsedSourceIndex;
+import org.cn.liuwt.llmwiki.domain.service.harness.query.QueryToolProgress;
 import org.cn.liuwt.llmwiki.integration.storage.StorageProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -40,7 +42,8 @@ public class GetSourceInfoTool {
     @Tool(description = "查询某个 Wiki 页面的原始来源文档信息。返回该页面编译自哪些原始文档（ID、名称、格式、大小、章节结构），用于需要了解知识的原始出处、或需要用 readRawSource 工具读取原始文档详情时的前置查询。返回的章节结构（chapters）可用于 readRawSource 的 sectionHeading 参数精准定位")
     public List<SourceInfoResult> getSourceInfo(
         @ToolParam(description = "知识库范围 ID") String scopeId,
-        @ToolParam(description = "页面路径，如 'pages/compliance-management.md'") String pagePath
+        @ToolParam(description = "页面路径，如 'pages/compliance-management.md'") String pagePath,
+        ToolContext toolContext
     ) {
         Long scopeIdLong = Long.parseLong(scopeId);
 
@@ -104,6 +107,7 @@ public class GetSourceInfoTool {
 
         log.info("tool=getSourceInfo scopeId={} pagePath='{}' pageTitle='{}' sources={}",
             scopeId, pagePath, page.getTitle(), results.size());
+        QueryToolProgress.emit(toolContext, "getSourceInfo", QueryToolProgress.displayName(pagePath), results.size());
         return results;
     }
 

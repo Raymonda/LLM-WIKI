@@ -7,6 +7,9 @@ import java.util.List;
 
 public class RetrievalContext {
 
+    private static final int TOTAL_CONTEXT_BUDGET_CHARS = 32000;
+    private static final int MIN_BLOCK_CHARS = 400;
+
     public record ParsedSection(Long sourceId, String sourceName, String sectionContent) {}
 
     public record GraphNeighbor(
@@ -16,16 +19,20 @@ public class RetrievalContext {
         String anchorTitle
     ) {}
 
+    public record PageExcerpt(Long pageId, String title, String path, String excerpt) {}
+
     private GlobalSummaryService.GlobalSummary globalSummary;
     private int pageCount;
     private List<SearchResultInfo> searchResults;
     private List<ParsedSection> parsedSourceSections;
     private List<GraphNeighbor> graphNeighbors;
+    private List<PageExcerpt> pageExcerpts;
 
     private RetrievalContext() {
         this.searchResults = new ArrayList<>();
         this.parsedSourceSections = new ArrayList<>();
         this.graphNeighbors = new ArrayList<>();
+        this.pageExcerpts = new ArrayList<>();
     }
 
     public static Builder builder() {
@@ -50,6 +57,10 @@ public class RetrievalContext {
 
     public List<GraphNeighbor> getGraphNeighbors() {
         return graphNeighbors;
+    }
+
+    public List<PageExcerpt> getPageExcerpts() {
+        return pageExcerpts;
     }
 
     public String toPromptContextLight() {
@@ -119,51 +130,96 @@ public class RetrievalContext {
             sb.append("## 搜索结果\n\n（未找到匹配的知识页面）\n\n");
         }
 
-        if (!graphNeighbors.isEmpty()) {
-            sb.append("## 知识图谱邻域（搜索结果的 1-hop 关联页面）\n\n");
-            sb.append("以下页面通过交叉引用链接与上方搜索结果直接关联。矛盾链接（contradiction）的页面尤其重要——回答时必须同时呈现双方观点。\n\n");
-            String currentAnchor = null;
-            for (GraphNeighbor gn : graphNeighbors) {
-                String nbStatus = gn.lifecycleStatus();
-                if ("DEPRECATED".equals(nbStatus) || "MERGED".equals(nbStatus) || "DELETED".equals(nbStatus)) {
-                    continue;
-                }
-                if (!gn.anchorTitle().equals(currentAnchor)) {
-                    currentAnchor = gn.anchorTitle();
-                    sb.append("\n**「").append(currentAnchor).append("」的关联页面：**\n");
-                }
-                sb.append("  ");
-                sb.append("outgoing".equals(gn.direction()) ? "→" : "←");
-                sb.append(" [").append(gn.linkType()).append("] ");
-                sb.append(gn.title());
-                if (gn.pageType() != null && !gn.pageType().isEmpty()) {
-                    sb.append(" (").append(gn.pageType()).append(")");
-                }
-                if ("contradiction".equals(gn.linkType())) {
-                    sb.append(" ⚠️矛盾");
-                }
-                sb.append("\n");
-                if (gn.linkContext() != null && !gn.linkContext().isBlank()) {
-                    sb.append("    关联语境: ").append(gn.linkContext()).append("\n");
-                }
-                if (gn.summary() != null && !gn.summary().isBlank()) {
-                    sb.append("    摘要: ").append(gn.summary()).append("\n");
-                }
+        int remaining = TOTAL_CONTEXT_BUDGET_CHARS - sb.length();
+        remaining = appendBlockWithinBudget(sb, renderPageExcerptsBlock(), remaining);
+        remaining = appendBlockWithinBudget(sb, renderGraphNeighborsBlock(), remaining);
+        appendBlockWithinBudget(sb, renderParsedSectionsBlock(), remaining);
+
+        return sb.toString();
+    }
+
+    private static int appendBlockWithinBudget(StringBuilder sb, String block, int remaining) {
+        if (block == null || block.isEmpty() || remaining <= 0) {
+            return Math.max(remaining, 0);
+        }
+        if (block.length() <= remaining) {
+            sb.append(block);
+            return remaining - block.length();
+        }
+        int allowed = remaining - 160;
+        if (allowed >= MIN_BLOCK_CHARS) {
+            sb.append(block, 0, allowed);
+            sb.append("\n...(预检索内容已达预算上限被截断，未覆盖的问题维度请用工具补检索)\n\n");
+        }
+        return 0;
+    }
+
+    private String renderPageExcerptsBlock() {
+        if (pageExcerpts.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("## 页面正文节选（最相关页面已按问题关键词预提取章节）\n\n");
+        sb.append("以下节选自 ES Top 相关页面的正文。如节选未覆盖问题的全部维度，仍须用 readFile / readFileSection / searchWiki 补检索。\n\n");
+        for (PageExcerpt pe : pageExcerpts) {
+            sb.append("### 《").append(pe.title()).append("》 (").append(pe.path()).append(")\n\n");
+            sb.append(pe.excerpt()).append("\n\n");
+        }
+        return sb.toString();
+    }
+
+    private String renderGraphNeighborsBlock() {
+        if (graphNeighbors.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("## 知识图谱邻域（搜索结果的 1-hop 关联页面）\n\n");
+        sb.append("以下页面通过交叉引用链接与上方搜索结果直接关联。矛盾链接（contradiction）的页面尤其重要——回答时必须同时呈现双方观点。\n\n");
+        String currentAnchor = null;
+        for (GraphNeighbor gn : graphNeighbors) {
+            String nbStatus = gn.lifecycleStatus();
+            if ("DEPRECATED".equals(nbStatus) || "MERGED".equals(nbStatus) || "DELETED".equals(nbStatus)) {
+                continue;
+            }
+            if (!gn.anchorTitle().equals(currentAnchor)) {
+                currentAnchor = gn.anchorTitle();
+                sb.append("\n**「").append(currentAnchor).append("」的关联页面：**\n");
+            }
+            sb.append("  ");
+            sb.append("outgoing".equals(gn.direction()) ? "→" : "←");
+            sb.append(" [").append(gn.linkType()).append("] ");
+            sb.append(gn.title());
+            if (gn.pageType() != null && !gn.pageType().isEmpty()) {
+                sb.append(" (").append(gn.pageType()).append(")");
+            }
+            if ("contradiction".equals(gn.linkType())) {
+                sb.append(" ⚠️矛盾");
             }
             sb.append("\n");
-        }
-
-        if (!parsedSourceSections.isEmpty()) {
-            sb.append("## 原始来源预加载（parsed 章节，已从 wiki 页面关联自动提取）\n\n");
-            sb.append("以下章节来自知识库 Wiki 页面关联的原始来源文档，已按问题关键词匹配提取相关段落。\n");
-            sb.append("当 Wiki 编译页面缺少细节时，直接引用这些原始章节，无需再调用 readRawSource。\n\n");
-            for (ParsedSection ps : parsedSourceSections) {
-                sb.append("### 📄 ").append(ps.sourceName());
-                sb.append(" (sourceId=").append(ps.sourceId()).append(")\n");
-                sb.append(ps.sectionContent()).append("\n\n");
+            if (gn.linkContext() != null && !gn.linkContext().isBlank()) {
+                sb.append("    关联语境: ").append(gn.linkContext()).append("\n");
+            }
+            if (gn.summary() != null && !gn.summary().isBlank()) {
+                sb.append("    摘要: ").append(gn.summary()).append("\n");
             }
         }
-    
+        sb.append("\n");
+        return sb.toString();
+    }
+
+    private String renderParsedSectionsBlock() {
+        if (parsedSourceSections.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("## 原始来源预加载（parsed 章节，已从 wiki 页面关联自动提取）\n\n");
+        sb.append("以下章节来自知识库 Wiki 页面关联的原始来源文档，已按问题关键词匹配提取相关段落。\n");
+        sb.append("当 Wiki 编译页面缺少细节时，直接引用这些原始章节，无需再调用 readRawSource。\n\n");
+        for (ParsedSection ps : parsedSourceSections) {
+            sb.append("### 📄 ").append(ps.sourceName());
+            sb.append(" (sourceId=").append(ps.sourceId()).append(")\n");
+            sb.append(ps.sectionContent()).append("\n\n");
+        }
         return sb.toString();
     }
 
@@ -198,6 +254,7 @@ public class RetrievalContext {
         private List<SearchResultInfo> searchResults = new ArrayList<>();
         private List<ParsedSection> parsedSourceSections = new ArrayList<>();
         private List<GraphNeighbor> graphNeighbors = new ArrayList<>();
+        private List<PageExcerpt> pageExcerpts = new ArrayList<>();
 
         public Builder globalSummary(GlobalSummaryService.GlobalSummary globalSummary) {
             this.globalSummary = globalSummary;
@@ -224,6 +281,11 @@ public class RetrievalContext {
             return this;
         }
 
+        public Builder pageExcerpts(List<PageExcerpt> pageExcerpts) {
+            this.pageExcerpts = pageExcerpts != null ? pageExcerpts : new ArrayList<>();
+            return this;
+        }
+
         public RetrievalContext build() {
             RetrievalContext ctx = new RetrievalContext();
             ctx.globalSummary = this.globalSummary;
@@ -231,6 +293,7 @@ public class RetrievalContext {
             ctx.searchResults = this.searchResults;
             ctx.parsedSourceSections = this.parsedSourceSections;
             ctx.graphNeighbors = this.graphNeighbors;
+            ctx.pageExcerpts = this.pageExcerpts;
             return ctx;
         }
     }

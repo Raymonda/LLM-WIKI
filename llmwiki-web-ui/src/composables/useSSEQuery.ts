@@ -15,6 +15,14 @@ export interface FunFact {
   text: string
 }
 
+export interface ToolActivity {
+  tool: string
+  target?: string
+  count?: number
+}
+
+const MAX_TOOL_ACTIVITIES = 5
+
 const DEFAULT_PROGRESS_STEPS: ProgressStep[] = [
   { id: 'search-index', label: '搜索知识索引', status: 'pending' },
   { id: 'progressive-retrieve', label: '渐进式检索', status: 'pending' },
@@ -40,6 +48,7 @@ export function useSSEQuery() {
   const queryAnalysisModeForRetry = ref<QueryAnalysisMode>('quick')
   const sessionId = ref('')
   const narrativeEnabled = ref(false)
+  const toolActivity = ref<ToolActivity[]>([])
 
   let eventSource: EventSource | null = null
   let progressTimers: ReturnType<typeof setTimeout>[] = []
@@ -117,6 +126,17 @@ export function useSSEQuery() {
             text: f.text || ''
           })).filter((f: FunFact) => f.text)
         }
+      } catch {}
+    })
+
+    es.addEventListener('tool-progress', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data)
+        if (!data || typeof data.tool !== 'string') return
+        const activity: ToolActivity = { tool: data.tool }
+        if (typeof data.target === 'string' && data.target) activity.target = data.target
+        if (typeof data.count === 'number') activity.count = data.count
+        toolActivity.value = [...toolActivity.value.slice(-(MAX_TOOL_ACTIVITIES - 1)), activity]
       } catch {}
     })
 
@@ -226,6 +246,7 @@ export function useSSEQuery() {
     isSynthesizing.value = false
     funFacts.value = []
     factBlocks.value = []
+    toolActivity.value = []
     closeEventSource()
 
     startProgress()
@@ -254,6 +275,7 @@ export function useSSEQuery() {
     isSynthesizing.value = false
     funFacts.value = []
     factBlocks.value = []
+    toolActivity.value = []
     clarification.value = null
     sessionId.value = ''
     narrativeEnabled.value = false
@@ -284,6 +306,7 @@ export function useSSEQuery() {
     factBlocks,
     clarification,
     narrativeEnabled,
+    toolActivity,
     startQuery,
     reset,
     completeProgress,

@@ -14,6 +14,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -31,6 +32,9 @@ public class RetrievalService {
     private static final int MAX_SECTION_CHARS = 3000;
     private static final int MAX_TOTAL_PARSED_CHARS = 25000;
     private static final int TOP_PAGES_FOR_SOURCE_LOOKUP = 6;
+
+    private static final int TOP_PAGES_FOR_EXCERPT = 3;
+    private static final int MAX_TOTAL_EXCERPT_CHARS = 12000;
 
     private static final int GRAPH_ANCHOR_LIMIT = 5;
     private static final int MAX_GRAPH_NEIGHBORS = 10;
@@ -71,6 +75,9 @@ public class RetrievalService {
     @Autowired
     private WikiPageMapper wikiPageMapper;
 
+    @Value("${llmwiki.query.preretrieval.enhanced.enabled:true}")
+    private boolean enhancedPreRetrievalEnabled;
+
     public RetrievalContext preRetrieveLight(Long scopeId, String question) {
         long startTime = System.currentTimeMillis();
 
@@ -82,27 +89,33 @@ public class RetrievalService {
         GlobalSummaryService.GlobalSummary summary = summaryFuture.join();
         List<SearchResultInfo> searchResults = searchFuture.join();
 
-        boolean needSupplementaryContext = searchResults.size() < SUPPLEMENTARY_SEARCH_THRESHOLD;
+        boolean needSupplementaryContext = enhancedPreRetrievalEnabled
+            || searchResults.size() < SUPPLEMENTARY_SEARCH_THRESHOLD;
 
         List<RetrievalContext.ParsedSection> parsedSections;
         List<RetrievalContext.GraphNeighbor> graphNeighbors;
+        List<RetrievalContext.PageExcerpt> pageExcerpts;
 
         if (needSupplementaryContext) {
             CompletableFuture<List<RetrievalContext.ParsedSection>> parsedFuture =
                 CompletableFuture.supplyAsync(() -> preloadParsedSections(scopeId, searchResults, question));
             CompletableFuture<List<RetrievalContext.GraphNeighbor>> graphFuture =
                 CompletableFuture.supplyAsync(() -> expandGraphNeighbors(scopeId, searchResults));
+            CompletableFuture<List<RetrievalContext.PageExcerpt>> excerptFuture =
+                CompletableFuture.supplyAsync(() -> preloadPageExcerpts(scopeId, searchResults, question));
             parsedSections = parsedFuture.join();
             graphNeighbors = graphFuture.join();
+            pageExcerpts = excerptFuture.join();
         } else {
             parsedSections = List.of();
             graphNeighbors = List.of();
+            pageExcerpts = List.of();
         }
 
         long elapsed = System.currentTimeMillis() - startTime;
-        log.info("Light pre-retrieval completed: scopeId={} results={} supplementary={} parsedSections={} graphNeighbors={} elapsed={}ms",
+        log.info("Light pre-retrieval completed: scopeId={} results={} supplementary={} parsedSections={} graphNeighbors={} pageExcerpts={} elapsed={}ms",
             scopeId, searchResults.size(), needSupplementaryContext,
-            parsedSections.size(), graphNeighbors.size(), elapsed);
+            parsedSections.size(), graphNeighbors.size(), pageExcerpts.size(), elapsed);
 
         return RetrievalContext.builder()
             .globalSummary(summary)
@@ -110,6 +123,7 @@ public class RetrievalService {
             .searchResults(searchResults)
             .parsedSourceSections(parsedSections)
             .graphNeighbors(graphNeighbors)
+            .pageExcerpts(pageExcerpts)
             .build();
     }
 
@@ -365,6 +379,63 @@ public class RetrievalService {
             }
         } catch (Exception e) {
             log.debug("Failed to read parsed file for sourceId={}: {}", sourceId, e.getMessage());
+        }
+        return null;
+    }
+
+    private List<RetrievalContext.PageExcerpt> preloadPageExcerpts(
+            Long scopeId, List<SearchResultInfo> searchResults, String question) {
+        if (searchResults.isEmpty()) {
+            return List.of();
+        }
+        List<String> keywords = extractKeywords(question);
+        if (keywords.isEmpty()) {
+            return List.of();
+        }
+
+        String scopeIdStr = String.valueOf(scopeId);
+        List<RetrievalContext.PageExcerpt> excerpts = new ArrayList<>();
+        int totalChars = 0;
+        int limit = Math.min(TOP_PAGES_FOR_EXCERPT, searchResults.size());
+        for (int i = 0; i < limit; i++) {
+            SearchResultInfo r = searchResults.get(i);
+            String status = r.getLifecycleStatus();
+            if ("DEPRECATED".equals(status) || "MERGED".equals(status) || "DELETED".equals(status)) {
+                continue;
+            }
+            String dbPath = r.getPath();
+            if (dbPath == null || dbPath.isBlank()) {
+                continue;
+            }
+            String storagePath = dbPath.startsWith("pages/") ? "wiki/" + dbPath : dbPath;
+            String content = readPageFile(scopeIdStr, storagePath);
+            if (content == null || content.isBlank()) {
+                continue;
+            }
+            String excerpt = extractRelevantSections(content, keywords);
+            if (excerpt == null || excerpt.isBlank()) {
+                continue;
+            }
+            if (totalChars + excerpt.length() > MAX_TOTAL_EXCERPT_CHARS) {
+                break;
+            }
+            totalChars += excerpt.length();
+            excerpts.add(new RetrievalContext.PageExcerpt(r.getId(), r.getTitle(), dbPath, excerpt));
+        }
+
+        log.info("Page excerpts preloaded: scopeId={} candidates={} excerpts={} chars={}",
+            scopeId, limit, excerpts.size(), totalChars);
+        return excerpts;
+    }
+
+    private String readPageFile(String scopeIdStr, String storagePath) {
+        try {
+            byte[] bytes = storageProvider.read(scopeIdStr, storagePath);
+            if (bytes != null && bytes.length > 0) {
+                return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+            }
+        } catch (Exception e) {
+            log.debug("Failed to read page file for excerpt: {} {}", storagePath, e.getMessage());
         }
         return null;
     }

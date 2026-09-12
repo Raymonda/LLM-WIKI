@@ -60,6 +60,9 @@ public class WikiMcpTools {
     private static final Duration ASK_TIMEOUT_QUICK = Duration.ofSeconds(55);
     private static final Duration ASK_TIMEOUT_DEEP = Duration.ofSeconds(280);
     private static final String STEP_PREFIX = "__STEP__:";
+    private static final String TOOL_PREFIX = "__TOOL__:";
+    private static final String FACT_PREFIX = "__FACT__:";
+    private static final String CLARIFY_PREFIX = "__CLARIFY__:";
 
     @Tool(name = "wiki_search", description = "在当前 scope 的知识库中检索 wiki 页面。返回 pageId、标题、路径、摘要与相关度评分；先用本工具定位，再用 wiki_read_page 精读。")
     public List<Map<String, Object>> wikiSearch(
@@ -145,33 +148,40 @@ public class WikiMcpTools {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("answer", collected.answer());
         result.put("steps", collected.steps());
+        if (!collected.clarification().isEmpty()) {
+            result.put("clarification", collected.clarification());
+        }
         result.put("timedOut", collected.timedOut());
         return result;
     }
 
-    /** wikiAsk 的三态结果：答案 / 步骤名列表 / 是否因超时提前返回。 */
-    record AskResult(String answer, List<String> steps, boolean timedOut) {}
+    /** wikiAsk 的四态结果：答案 / 步骤名列表 / 澄清问题 / 是否因超时提前返回。 */
+    record AskResult(String answer, List<String> steps, String clarification, boolean timedOut) {}
 
     /**
-     * 聚合 queryWikiStreaming 的 Flux：__STEP__: 前缀的 chunk 归入 steps，其余拼接为答案。
+     * 聚合 queryWikiStreaming 的 Flux：__STEP__: 前缀归入 steps，__CLARIFY__: 前缀归入 clarification，
+     * __TOOL__: / __FACT__: 为 UI 协议事件（跳过，不污染答案），其余拼接为答案。
      * blockLast 超时抛 IllegalStateException，捕获后按"部分答案 + timedOut"返回（防御式三态独立报告）。
      */
     static AskResult collectAnswer(Flux<String> stream, Duration timeout) {
         List<String> steps = new ArrayList<>();
         StringBuilder answer = new StringBuilder();
+        StringBuilder clarification = new StringBuilder();
         boolean[] timedOut = {false};
         try {
             stream.doOnNext(chunk -> {
                 if (chunk.startsWith(STEP_PREFIX)) {
                     steps.add(chunk.substring(STEP_PREFIX.length()));
-                } else {
+                } else if (chunk.startsWith(CLARIFY_PREFIX)) {
+                    clarification.append(chunk.substring(CLARIFY_PREFIX.length()));
+                } else if (!chunk.startsWith(TOOL_PREFIX) && !chunk.startsWith(FACT_PREFIX)) {
                     answer.append(chunk);
                 }
             }).blockLast(timeout);
         } catch (IllegalStateException e) {
             timedOut[0] = true;
         }
-        return new AskResult(answer.toString(), List.copyOf(steps), timedOut[0]);
+        return new AskResult(answer.toString(), List.copyOf(steps), clarification.toString(), timedOut[0]);
     }
 
     @Tool(name = "wiki_ingest_text", description = "把一段 Markdown 文本作为新来源摄入知识库：写入 raw/ 存储并启动完整摄入流水线（分析、编译、链接）。摄入是长任务，本工具立即返回 executionId；用 wiki_ingest_status 查询进度。")

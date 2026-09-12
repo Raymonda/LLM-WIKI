@@ -172,13 +172,20 @@ public class QueryPrompts {
     }
 
     public String factAgentPromptStructured(Long scopeId, int pageCount, String lightContext) {
+        return factAgentPromptStructured(scopeId, pageCount, lightContext, false);
+    }
+
+    public String factAgentPromptStructured(Long scopeId, int pageCount, String lightContext, boolean focusOutput) {
+        String coverageRule = focusOutput
+            ? "- 维度覆盖表用于自检，无需在输出中展示；输出仅包含 JSON 事实行\n"
+            : "- 维度覆盖表未完成时禁止输出 JSON 行\n";
         return """
             你是 Wiki 事实检索引擎，任务是收集知识库事实信息，产出结构化事实包（FactBlock）。
 
             ## 检索策略
-            1. **分析索引信息**：GlobalSummary + ES搜索结果 + 知识图谱邻域（如有）
-            2. **定向读取**（经济性优先）：readFile(path) 读取完整页面，参考页优先（信息密度最高）
-            3. **补充检索**：searchWiki(query)、getRelatedPages(path) 扩展
+            1. **分析索引信息**：GlobalSummary + ES搜索结果 + 知识图谱邻域（如有）——预检索已提供正文节选与图谱邻域，覆盖足够的问题维度时无需重复读取
+            2. **批量定向读取**（经济性优先）：第一轮尽可能一次性发起所有必要的检索调用（并行读取多个高相关页面 + 展开图谱），减少往返轮次；参考页优先（信息密度最高）
+            3. **补充检索**：预载内容未覆盖的维度，用 searchWiki(query)、getRelatedPages(path)、readFile / readFileSection 补检索
             4. **原始回溯**（最后手段）：预加载的原始来源章节优先，不够用 readRawSource
 
             ## 回答前自检（强制）
@@ -200,8 +207,7 @@ public class QueryPrompts {
 
             ## 护栏
             - 事实块总数上限 8 条；工具调用轮次上限 4 轮，超限强制输出已收集事实
-            - 维度覆盖表未完成时禁止输出 JSON 行
-            - 不输出 Layer 1 长文、不输出分析观点、不输出编号引用列表
+            %s- 不输出 Layer 1 长文、不输出分析观点、不输出编号引用列表
 
             当前 Wiki 范围 ID: %d
             Wiki 页面总数: %d
@@ -209,7 +215,7 @@ public class QueryPrompts {
             ## 预检索索引信息
 
             %s
-            """.formatted(scopeId, pageCount, lightContext);
+            """.formatted(coverageRule, scopeId, pageCount, lightContext);
     }
 
     public String synthesisPrompt(Long scopeId, String question, String factSummaryView, String deprecatedContext) {

@@ -1,9 +1,11 @@
 package org.cn.liuwt.llmwiki.domain.service.harness.tool;
 
+import org.cn.liuwt.llmwiki.domain.service.harness.query.QueryToolProgress;
 import org.cn.liuwt.llmwiki.domain.service.search.SearchService;
 import org.cn.liuwt.llmwiki.facade.model.SearchResultInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,7 +27,8 @@ public class SearchWikiTool {
     public List<PageResult> searchWiki(
         @ToolParam(description = "知识库范围 ID") String scopeId,
         @ToolParam(description = "搜索关键词") String query,
-        @ToolParam(description = "分类筛选（可选，如 '架构设计'）") String category
+        @ToolParam(description = "分类筛选（可选，如 '架构设计'）") String category,
+        ToolContext toolContext
     ) {
         Long scopeIdLong = Long.parseLong(scopeId);
         List<SearchResultInfo> searchResults = searchService.search(scopeIdLong, query, category);
@@ -34,6 +37,7 @@ public class SearchWikiTool {
             .collect(Collectors.toList());
         log.info("tool=searchWiki scopeId={} query={} category={} rawResults={} filteredResults={}",
             scopeId, query, category, searchResults.size(), filteredResults.size());
+        QueryToolProgress.emit(toolContext, "searchWiki", QueryToolProgress.truncate(query, 40), filteredResults.size());
 
         List<PageResult> results = new ArrayList<>();
         for (SearchResultInfo info : filteredResults) {
