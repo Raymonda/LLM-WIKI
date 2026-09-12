@@ -629,6 +629,13 @@ public class HarnessController {
             h.setMigrationUntaggedCount(mig.getUntaggedCount());
             h.setMigrationOutdatedCount(mig.getOutdatedCount());
         }
+
+        SchemaManager.SchemaStructureHealth structureHealth = schemaManager.buildStructureHealth(scopeId);
+        if (structureHealth != null) {
+            h.setTemplateCount(structureHealth.templateCount());
+            h.setStructureDefectCount(structureHealth.defectCount());
+            h.setStructureDefectDetail(structureHealth.detail());
+        }
         return Result.success(h);
     }
 

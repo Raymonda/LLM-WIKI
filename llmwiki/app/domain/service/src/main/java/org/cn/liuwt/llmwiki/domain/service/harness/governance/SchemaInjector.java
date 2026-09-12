@@ -1,6 +1,9 @@
 package org.cn.liuwt.llmwiki.domain.service.harness.governance;
 
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SchemaConfigDO;
+import org.cn.liuwt.llmwiki.domain.model.harness.SchemaStructuredModel;
+import org.cn.liuwt.llmwiki.domain.model.harness.SchemaStructuredModel.PageTemplate;
+import org.cn.liuwt.llmwiki.domain.model.harness.SchemaStructuredModel.Templates;
 import org.cn.liuwt.llmwiki.domain.service.harness.LanguageDirective;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.validation.SchemaSkeletonValidator;
 import org.cn.liuwt.llmwiki.domain.service.system.ScopeService;
@@ -10,7 +13,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.EnumSet;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Matcher;
@@ -75,6 +81,7 @@ public class SchemaInjector {
 
     private final ConcurrentMap<Long, String> cache = new ConcurrentHashMap<>();
     private final ConcurrentMap<Long, Map<Integer, String>> sectionCache = new ConcurrentHashMap<>();
+    private final ConcurrentMap<Long, ConcurrentMap<String, String>> categorySectionCache = new ConcurrentHashMap<>();
 
     public String prepend(Long scopeId, String prompt) {
         if (prompt == null) {
@@ -96,6 +103,34 @@ public class SchemaInjector {
 
     public String prependForWriter(Long scopeId, String prompt) {
         return prepend(scopeId, prompt, WRITER_SECTIONS);
+    }
+
+    public String prependForWriter(Long scopeId, String prompt, String category) {
+        if (prompt == null) {
+            prompt = "";
+        }
+        if (scopeId == null || category == null || category.isBlank()) {
+            return prependForWriter(scopeId, prompt);
+        }
+        String filteredSection3 = getCategorySection3(scopeId, category);
+        if (filteredSection3 == null) {
+            return prependForWriter(scopeId, prompt);
+        }
+        Map<Integer, String> sectionMap = sectionCache.computeIfAbsent(scopeId, this::loadSections);
+        if (sectionMap.isEmpty()) {
+            return getLanguagePrefix(scopeId) + FALLBACK_PROMPT + prompt;
+        }
+        StringBuilder sb = new StringBuilder(HEADER_OPEN);
+        for (Section section : WRITER_SECTIONS) {
+            String content = section == Section.TEMPLATES
+                ? filteredSection3
+                : sectionMap.get(section.number);
+            if (content != null) {
+                sb.append(content).append("\n\n");
+            }
+        }
+        sb.append(HEADER_CLOSE);
+        return getLanguagePrefix(scopeId) + sb + prompt;
     }
 
     public String prependForEdit(Long scopeId, String prompt) {
@@ -134,9 +169,11 @@ public class SchemaInjector {
         if (scopeId == null) {
             cache.clear();
             sectionCache.clear();
+            categorySectionCache.clear();
         } else {
             cache.remove(scopeId);
             sectionCache.remove(scopeId);
+            categorySectionCache.remove(scopeId);
         }
     }
 
@@ -207,5 +244,83 @@ public class SchemaInjector {
             return schemaMarkdown;
         }
         return stripped;
+    }
+
+    private String getCategorySection3(Long scopeId, String category) {
+        ConcurrentMap<String, String> perScope =
+            categorySectionCache.computeIfAbsent(scopeId, k -> new ConcurrentHashMap<>());
+        String cached = perScope.computeIfAbsent(category, k -> buildFilteredSection3(scopeId, k));
+        return cached.isEmpty() ? null : cached;
+    }
+
+    private String buildFilteredSection3(Long scopeId, String category) {
+        try {
+            SchemaStructuredModel model = schemaManager.getStructuredModel(scopeId);
+            if (model == null || model.getTemplates() == null) {
+                return "";
+            }
+            Templates templates = model.getTemplates();
+            List<PageTemplate> matched = templates.findByCategory(category);
+            if (matched.isEmpty()) {
+                return "";
+            }
+            Set<String> allLabels = new LinkedHashSet<>();
+            Set<String> keepLabels = new LinkedHashSet<>();
+            for (PageTemplate pt : templates.getPageTemplates()) {
+                if (pt.getLabel() != null && !pt.getLabel().isBlank()) {
+                    allLabels.add(pt.getLabel().trim());
+                }
+                if (isSummaryTemplate(pt)) {
+                    keepLabels.add(pt.getLabel().trim());
+                }
+            }
+            for (PageTemplate pt : matched) {
+                if (pt.getLabel() != null && !pt.getLabel().isBlank()) {
+                    keepLabels.add(pt.getLabel().trim());
+                }
+            }
+            Map<Integer, String> sectionMap = sectionCache.computeIfAbsent(scopeId, this::loadSections);
+            String section3 = sectionMap.get(Section.TEMPLATES.number);
+            if (section3 == null || section3.isBlank()) {
+                return "";
+            }
+            String filtered = filterTemplateBlocks(section3, allLabels, keepLabels);
+            return filtered == null ? "" : filtered;
+        } catch (Exception e) {
+            log.warn("模板裁剪构建失败，回退全量注入。scopeId={} category={}, err={}", scopeId, category, e.getMessage());
+            return "";
+        }
+    }
+
+    private boolean isSummaryTemplate(PageTemplate template) {
+        return matchesSummaryKeyword(template.getLabel()) || matchesSummaryKeyword(template.getType());
+    }
+
+    private boolean matchesSummaryKeyword(String value) {
+        if (value == null) return false;
+        String normalized = value.toLowerCase();
+        return normalized.contains("摘要") || normalized.contains("summary");
+    }
+
+    private String filterTemplateBlocks(String section3, Set<String> allLabels, Set<String> keepLabels) {
+        StringBuilder sb = new StringBuilder();
+        boolean blocksStarted = false;
+        boolean keepCurrent = false;
+        boolean keptAny = false;
+        for (String line : section3.split("\n", -1)) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("### ")) {
+                String label = trimmed.substring(4).trim();
+                if (allLabels.contains(label)) {
+                    blocksStarted = true;
+                    keepCurrent = keepLabels.contains(label);
+                    keptAny = keptAny || keepCurrent;
+                }
+            }
+            if (!blocksStarted || keepCurrent) {
+                sb.append(line).append('\n');
+            }
+        }
+        return keptAny ? sb.toString().strip() : null;
     }
 }

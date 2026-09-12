@@ -52,6 +52,7 @@ export default {
   pendingUpgrade: '待升级页面',
   outdatedVersion: '· 过期版本',
   untaggedVersion: '· 未标注',
+  templateStructureDefects: '· 模板结构缺陷',
   viewMigrationDetail: '查看迁移明细',
   runtimeOverview: '运行概览',
   alertExceeded: '已超额',

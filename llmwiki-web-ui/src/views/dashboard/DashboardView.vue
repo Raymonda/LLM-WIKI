@@ -109,6 +109,9 @@ const migrationSummary = computed(() => {
     outdated: out,
     untagged: un,
     stale: out + un,
+    templateCount: g.templateCount ?? 0,
+    templateDefects: g.structureDefectCount ?? 0,
+    templateDefectDetail: g.structureDefectDetail ?? '',
   }
 })
 
@@ -334,6 +337,16 @@ onMounted(async () => {
               <div class="dashboard__gov-migration-row dashboard__gov-migration-row--sub">
                 <span class="dashboard__gov-migration-label">{{ t('dashboard.untaggedVersion') }}</span>
                 <span class="tabular-nums">{{ migrationSummary?.untagged ?? 0 }}</span>
+              </div>
+              <div
+                class="dashboard__gov-migration-row dashboard__gov-migration-row--sub"
+                :title="migrationSummary?.templateDefectDetail || ''"
+              >
+                <span class="dashboard__gov-migration-label">{{ t('dashboard.templateStructureDefects') }}</span>
+                <span
+                  class="tabular-nums"
+                  :class="{ 'text-warning': (migrationSummary?.templateDefects ?? 0) > 0 }"
+                >{{ migrationSummary?.templateDefects ?? 0 }}</span>
               </div>
             </div>
             <router-link to="/system" class="dashboard__gov-panel-link">

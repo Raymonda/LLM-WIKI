@@ -8,6 +8,7 @@ import org.cn.liuwt.llmwiki.common.dal.dataobject.NotificationDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.IngestBatchMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.NotificationMapper;
+import org.cn.liuwt.llmwiki.common.dal.mapper.ScopeMapper;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionStatusEvent;
@@ -23,6 +24,7 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.HashSet;
@@ -42,8 +44,6 @@ public class IngestBatchScheduler {
 
     private static final Set<String> TERMINAL_EXECUTION_STATUSES =
         Set.of("completed", "failed", "cancelled", "budget_exhausted");
-
-    private static final int WRITE_CONCURRENCY = 1;
 
     @Autowired
     private ExecutionMapper executionMapper;
@@ -66,8 +66,20 @@ public class IngestBatchScheduler {
     @Autowired
     private NotificationService notificationService;
 
+    @Autowired
+    private ScopeMapper scopeMapper;
+
+    @Autowired
+    private TransactionTemplate transactionTemplate;
+
     @Value("${llmwiki.ingest.batch.analyze-concurrency:2}")
     private int analyzeConcurrency = 2;
+
+    @Value("${llmwiki.ingest.batch.write-concurrency:1}")
+    private int writeConcurrency = 1;
+
+    @Value("${llmwiki.rocketmq.enabled:false}")
+    private boolean mqEnabled;
 
     private final ConcurrentHashMap<Long, ReentrantLock> scopeLocks = new ConcurrentHashMap<>();
 
@@ -88,12 +100,12 @@ public class IngestBatchScheduler {
                 }
             }
             Set<Long> skipped = new HashSet<>();
-            while (writing < WRITE_CONCURRENCY || analyzing < analyzeGate()) {
+            while (writing < writeGate() || analyzing < analyzeGate()) {
                 DispatchCandidate candidate = selectDispatchableCandidate(scopeId, skipped, analyzing, writing);
                 if (candidate == null) return;
                 ExecutionDO execution = candidate.execution();
                 String expected = execution.getStatus();
-                if (!claimForDispatch(execution.getId(), expected)) {
+                if (!claimForDispatch(execution, expected, candidate.writePhase())) {
                     skipped.add(execution.getId());
                     continue;
                 }
@@ -177,6 +189,10 @@ public class IngestBatchScheduler {
         return Math.max(1, analyzeConcurrency);
     }
 
+    private int writeGate() {
+        return Math.max(1, writeConcurrency);
+    }
+
     private DispatchCandidate selectDispatchableCandidate(Long scopeId, Set<Long> skipped, int analyzing, int writing) {
         List<ExecutionDO> ordered = executionMapper.selectList(new LambdaQueryWrapper<ExecutionDO>()
             .eq(ExecutionDO::getType, "ingest")
@@ -184,7 +200,7 @@ public class IngestBatchScheduler {
             .in(ExecutionDO::getStatus, "confirmed", "pending")
             .orderByAsc(ExecutionDO::getCreatedAt)
             .orderByAsc(ExecutionDO::getId));
-        if (writing < WRITE_CONCURRENCY) {
+        if (writing < writeGate()) {
             for (ExecutionDO execution : ordered) {
                 if (skipped.contains(execution.getId())) continue;
                 if (!isEligible(execution)) continue;
@@ -196,7 +212,7 @@ public class IngestBatchScheduler {
             if (!isEligible(execution)) continue;
             if ("confirmed".equals(execution.getStatus())) continue;
             boolean writePhase = isWritePhase(execution);
-            if (writePhase ? writing < WRITE_CONCURRENCY : analyzing < analyzeGate()) {
+            if (writePhase ? writing < writeGate() : analyzing < analyzeGate()) {
                 return new DispatchCandidate(execution, writePhase);
             }
         }
@@ -217,7 +233,29 @@ public class IngestBatchScheduler {
         return batch != null && "active".equals(batch.getStatus());
     }
 
-    private boolean claimForDispatch(Long executionId, String expectedStatus) {
+    private boolean claimForDispatch(ExecutionDO execution, String expectedStatus, boolean writePhase) {
+        if (writePhase && mqEnabled) {
+            Boolean claimed = transactionTemplate.execute(tx -> {
+                if (scopeMapper.lockScopeRow(execution.getScopeId()) == null) {
+                    log.warn("Write-phase claim rejected: scope row missing, scopeId={}, executionId={}",
+                        execution.getScopeId(), execution.getId());
+                    return false;
+                }
+                for (ExecutionDO running : executionMapper.selectRunningIngestForUpdate(execution.getScopeId())) {
+                    if (isWritePhase(running)) {
+                        log.info("Write-phase claim deferred to running writer: scopeId={}, executionId={}, runningExecutionId={}",
+                            execution.getScopeId(), execution.getId(), running.getId());
+                        return false;
+                    }
+                }
+                return casSetRunning(execution.getId(), expectedStatus);
+            });
+            return Boolean.TRUE.equals(claimed);
+        }
+        return casSetRunning(execution.getId(), expectedStatus);
+    }
+
+    private boolean casSetRunning(Long executionId, String expectedStatus) {
         ExecutionDO patch = new ExecutionDO();
         patch.setStatus("running");
         patch.setNodeId(dispatcher.getNodeId());

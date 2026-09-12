@@ -393,6 +393,9 @@ export interface SchemaGovernanceHealth {
   currentVersionNumber: number | null
   migrationUntaggedCount: number
   migrationOutdatedCount: number
+  templateCount: number
+  structureDefectCount: number
+  structureDefectDetail: string | null
 }
 
 export function getSchemaGovernanceHealth(): Promise<SchemaGovernanceHealth> {

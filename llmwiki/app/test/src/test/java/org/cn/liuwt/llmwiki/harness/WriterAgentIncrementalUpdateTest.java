@@ -5,6 +5,7 @@ import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageSourceMapper;
 import org.cn.liuwt.llmwiki.domain.service.harness.LintFindingService;
 import org.cn.liuwt.llmwiki.domain.service.harness.LlmConcurrencyBarrier;
+import org.cn.liuwt.llmwiki.domain.service.harness.PageWriteLockRegistry;
 import org.cn.liuwt.llmwiki.domain.service.harness.eventlog.ExecutionEventLogService;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.SchemaInjector;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.SchemaManager;
@@ -13,6 +14,10 @@ import org.cn.liuwt.llmwiki.domain.service.harness.ingest.WriterAgent;
 import org.cn.liuwt.llmwiki.domain.service.system.NotificationService;
 import org.cn.liuwt.llmwiki.integration.ai.LlmClient;
 import org.cn.liuwt.llmwiki.integration.storage.StorageProvider;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -67,6 +72,12 @@ class WriterAgentIncrementalUpdateTest {
         - 总部位于上海（来源：2023 年报）
         - 注册资本 10 亿元（来源：2023 年报）""";
 
+    @BeforeAll
+    static void initTableInfo() {
+        TableInfoHelper.initTableInfo(
+            new MapperBuilderAssistant(new MybatisConfiguration(), ""), WikiPageDO.class);
+    }
+
     private static void inject(Object target, String field, Object value) {
         try {
             java.lang.reflect.Field f = WriterAgent.class.getDeclaredField(field);
@@ -89,6 +100,7 @@ class WriterAgentIncrementalUpdateTest {
         inject(agent, "wikiPageSourceMapper", wikiPageSourceMapper);
         inject(agent, "lintFindingService", lintFindingService);
         inject(agent, "schemaManager", schemaManager);
+        inject(agent, "pageWriteLockRegistry", new PageWriteLockRegistry());
         return agent;
     }
 
@@ -108,14 +120,20 @@ class WriterAgentIncrementalUpdateTest {
         try {
             java.lang.reflect.Method m = WriterAgent.class.getDeclaredMethod("applyIncrementalEntityUpdate",
                 Long.class, Long.class, String.class, WikiPageDO.class, String.class, String.class,
-                String.class, String.class, String.class, List.class, Map.class, IngestContext.class);
+                String.class, String.class, List.class, Map.class, IngestContext.class);
             m.setAccessible(true);
-            return (WikiPageDO) m.invoke(agent, 1L, 2L, "1", existing, existing.getFilePath(), EXISTING,
+            return (WikiPageDO) m.invoke(agent, 1L, 2L, "1", existing, existing.getFilePath(),
                 "某公司 2024 年公告：注册资本变更为 12 亿元。", "分析结果",
                 "{\"title\":\"2024 公告\"}", List.of(), new HashMap<String, String>(), context);
         } catch (Exception e) {
             throw new IllegalStateException("applyIncrementalEntityUpdate failed", e);
         }
+    }
+
+    private void stubLockedPageRead(WikiPageDO existing) {
+        when(wikiPageMapper.selectById(77L)).thenReturn(existing);
+        when(storageProvider.read(eq("1"), eq("wiki/pages/test-entity.md")))
+            .thenReturn(EXISTING.getBytes(StandardCharsets.UTF_8));
     }
 
     @Test
@@ -127,6 +145,7 @@ class WriterAgentIncrementalUpdateTest {
                 + "\"relation\":\"conflict_with:1\"}]");
         WriterAgent agent = agentWithMocks();
         WikiPageDO existing = entityPage();
+        stubLockedPageRead(existing);
 
         WikiPageDO result = invokeApply(agent, existing, new IngestContext(1L, 2L, 100L, null));
 
@@ -138,7 +157,7 @@ class WriterAgentIncrementalUpdateTest {
         assertTrue(written.contains("- 注册资本变更为 12 亿元（来源：2024 公告）"), "conflicting claim must be appended as a new entry");
         assertEquals("conflict-warning", existing.getHealthStatus());
         assertEquals(2, existing.getSourceCount());
-        verify(wikiPageMapper).updateById(existing);
+        verify(wikiPageMapper).update(isNull(), any());
         verify(notificationService, never()).createNotification(any(), any(), any(), any(), any(), any(), any());
     }
 
@@ -149,6 +168,7 @@ class WriterAgentIncrementalUpdateTest {
         when(chatClient.chat(anyString())).thenReturn("这不是 JSON");
         WriterAgent agent = agentWithMocks();
         WikiPageDO existing = entityPage();
+        stubLockedPageRead(existing);
 
         WikiPageDO result = invokeApply(agent, existing, new IngestContext(1L, 2L, 100L, null));
 
@@ -166,6 +186,7 @@ class WriterAgentIncrementalUpdateTest {
         when(chatClient.chat(anyString())).thenReturn("这不是 JSON");
         WriterAgent agent = agentWithMocks();
         WikiPageDO existing = entityPage();
+        stubLockedPageRead(existing);
         IngestContext context = new IngestContext(1L, 2L, 100L, null);
         context.setSuppressNotifications(true);
 
@@ -185,6 +206,7 @@ class WriterAgentIncrementalUpdateTest {
         when(lintFindingService.upsertConflictFinding(any(), any(), any())).thenReturn(7L);
         WriterAgent agent = agentWithMocks();
         WikiPageDO existing = entityPage();
+        stubLockedPageRead(existing);
 
         invokeApply(agent, existing, new IngestContext(1L, 2L, 100L, null));
 

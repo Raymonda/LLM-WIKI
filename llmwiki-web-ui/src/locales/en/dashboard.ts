@@ -52,6 +52,7 @@ export default {
   pendingUpgrade: 'Pending Upgrade',
   outdatedVersion: '· Outdated',
   untaggedVersion: '· Untagged',
+  templateStructureDefects: '· Template defects',
   viewMigrationDetail: 'View Migration Details',
   runtimeOverview: 'Runtime Overview',
   alertExceeded: 'Exceeded',

@@ -21,6 +21,7 @@ public class SchemaStructuredParser {
     private static final Pattern H4_PATTERN = Pattern.compile("^####\\s+(.+)$", Pattern.MULTILINE);
     private static final Pattern LIST_ITEM = Pattern.compile("^[\\-\\*\\+]\\s+(.+)$");
     private static final Pattern NUMBERED_ITEM = Pattern.compile("^\\d+[.、]\\s*(.+)$");
+    private static final Pattern REQUIRED_MARKER_PATTERN = Pattern.compile("[（(](?:必需|可选|必填)[）)]");
     private static final Pattern MAX_LENGTH_PATTERN = Pattern.compile("(\\d+)\\s*[字个字符]");
     private static final Pattern DAYS_PATTERN = Pattern.compile("(\\d+)\\s*(天|日|day)");
     private static final Pattern HANDLING_METHOD_PATTERN = Pattern.compile(
@@ -218,6 +219,32 @@ public class SchemaStructuredParser {
         return m.matches() ? m.group(1).trim() : line;
     }
 
+    private boolean isNumberedItem(String line) {
+        return NUMBERED_ITEM.matcher(line).matches();
+    }
+
+    private String extractNumberedContent(String line) {
+        Matcher m = NUMBERED_ITEM.matcher(line);
+        return m.matches() ? m.group(1).trim() : line;
+    }
+
+    private SectionDef buildSectionDef(String content) {
+        if (content == null || content.isBlank()) return null;
+        boolean hasMarker = REQUIRED_MARKER_PATTERN.matcher(content).find();
+        boolean hasKeyword = content.contains("章节") || content.contains("section")
+            || content.contains("必须") || content.contains("包含");
+        if (!hasMarker && !hasKeyword) return null;
+
+        String label = extractCategoryLabel(REQUIRED_MARKER_PATTERN.matcher(content).replaceAll("")).trim();
+        if (label.isEmpty()) return null;
+
+        SectionDef sd = new SectionDef();
+        sd.setId(slugify(label));
+        sd.setLabel(label);
+        sd.setRequired(!content.contains("可选") && !content.contains("optional"));
+        return sd;
+    }
+
     private String extractCategoryLabel(String content) {
         Matcher bracket = Pattern.compile("[【\\[](.+?)[】\\]]").matcher(content);
         if (bracket.find()) return bracket.group(1).trim();
@@ -299,13 +326,17 @@ public class SchemaStructuredParser {
             }
 
             if (isListItem(trimmed) && inTemplate) {
-                String content = extractListContent(trimmed);
-                if (content.contains("章节") || content.contains("section") || content.contains("必须") || content.contains("包含")) {
-                    SectionDef sd = new SectionDef();
-                    String label = extractCategoryLabel(content);
-                    sd.setId(slugify(label));
-                    sd.setLabel(label);
-                    sd.setRequired(!content.contains("可选") && !content.contains("optional"));
+                SectionDef sd = buildSectionDef(extractListContent(trimmed));
+                if (sd != null) {
+                    sd.setOrder(++sectionOrder);
+                    currentSections.add(sd);
+                }
+                continue;
+            }
+
+            if (isNumberedItem(trimmed) && inTemplate) {
+                SectionDef sd = buildSectionDef(extractNumberedContent(trimmed));
+                if (sd != null) {
                     sd.setOrder(++sectionOrder);
                     currentSections.add(sd);
                 }

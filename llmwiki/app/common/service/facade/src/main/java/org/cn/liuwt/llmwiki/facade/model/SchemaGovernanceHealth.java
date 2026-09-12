@@ -37,4 +37,13 @@ public class SchemaGovernanceHealth {
     private Integer currentVersionNumber;
     private Integer migrationUntaggedCount;
     private Integer migrationOutdatedCount;
+
+    /** 结构化模型当前模板数（系统运行时实际使用的模板数量）。 */
+    private Integer templateCount;
+
+    /** 模板结构缺陷总数：空模板 + 未解析模板块 + 结构化 JSON 落后于 markdown 的模板差。 */
+    private Integer structureDefectCount;
+
+    /** 模板结构缺陷明细（健康时为 null）。 */
+    private String structureDefectDetail;
 }

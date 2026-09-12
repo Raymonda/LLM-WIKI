@@ -435,6 +435,10 @@ public class SchemaPatchService {
                 if (patch.getDiffAfter() == null || patch.getDiffAfter().isBlank()) {
                     throw new BusinessException(ErrorCode.PATCH_DIFF_EMPTY_ADD);
                 }
+                if (extractSectionNumber(target) == 3 && patch.getDiffAfter().contains("###")
+                        && parseSectionDefsFromDiff(patch.getDiffAfter()).isEmpty()) {
+                    throw new BusinessException(ErrorCode.PATCH_DIFF_EMPTY_TEMPLATE_ADD);
+                }
                 String trimmedBody = body.replaceAll("\\s+$", "");
                 newBody = trimmedBody.isEmpty()
                     ? patch.getDiffAfter().stripTrailing() + "\n"
@@ -661,14 +665,17 @@ public class SchemaPatchService {
             case ADD -> {
                 String diffAfter = patch.getDiffAfter() == null ? "" : patch.getDiffAfter();
                 if (diffAfter.contains("###")) {
+                    List<SectionDef> sections = parseSectionDefsFromDiff(diffAfter);
+                    if (sections.isEmpty()) {
+                        throw new BusinessException(ErrorCode.PATCH_DIFF_EMPTY_TEMPLATE_ADD);
+                    }
                     PageTemplate existing = findTemplateByLabelOrType(templates, label);
                     if (existing != null) {
-                        mergeSectionsInto(existing, parseSectionDefsFromDiff(diffAfter));
+                        mergeSectionsInto(existing, sections);
                     } else {
                         PageTemplate pt = new PageTemplate();
                         pt.setType(slugify(label));
                         pt.setLabel(label);
-                        List<SectionDef> sections = parseSectionDefsFromDiff(diffAfter);
                         pt.setSections(sections);
                         templates.getPageTemplates().add(pt);
                     }

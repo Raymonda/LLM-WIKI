@@ -167,6 +167,7 @@ public enum ErrorCode {
     PATCH_OP_UNKNOWN("PATCH_011", "Unknown operation: {0}"),
     PATCH_SECTION_UNSUPPORTED("PATCH_012", "Structured path does not support section {0}: {1}"),
     PATCH_SCOPE_MISMATCH("PATCH_013", "Patch {0} does not belong to current scope"),
+    PATCH_DIFF_EMPTY_TEMPLATE_ADD("PATCH_014", "Template ADD must contain at least one parseable section definition"),
 
     // Execution step approval
     STEP_NOT_FOUND("STEP_001", "Execution step not found: {0}"),

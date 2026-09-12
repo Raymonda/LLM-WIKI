@@ -1,6 +1,7 @@
 package org.cn.liuwt.llmwiki.domain.service.harness.ingest;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageSourceDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageTagDO;
@@ -13,6 +14,7 @@ import org.cn.liuwt.llmwiki.common.dal.helper.ActivePageScope;
 import org.cn.liuwt.llmwiki.common.util.constant.PageLifecycle;
 import org.cn.liuwt.llmwiki.domain.service.harness.LinkWritingService;
 import org.cn.liuwt.llmwiki.domain.service.harness.LlmConcurrencyBarrier;
+import org.cn.liuwt.llmwiki.domain.service.harness.PageWriteLockRegistry;
 import org.cn.liuwt.llmwiki.domain.service.harness.DocumentChunker;
 import org.cn.liuwt.llmwiki.domain.service.harness.DocumentStructureAnalyzer;
 import org.cn.liuwt.llmwiki.domain.service.harness.ExecutionStrategy;
@@ -103,6 +105,9 @@ public class WriterAgent {
     @Autowired
     private IndexerAgent indexerAgent;
 
+    @Autowired
+    private PageWriteLockRegistry pageWriteLockRegistry;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${llmwiki.writer.pool.core-size:6}")
@@ -119,6 +124,15 @@ public class WriterAgent {
 
     @Value("${llmwiki.llm.barrier.acquire-timeout-ms:120000}")
     private long barrierAcquireTimeoutMs;
+
+    @Value("${llmwiki.llm.barrier.queue-warn-ms:2000}")
+    private long barrierQueueWarnMs = 2000;
+
+    @Value("${llmwiki.writer.page-lock.timeout-ms:300000}")
+    private long pageLockTimeoutMs = 300000;
+
+    @Value("${llmwiki.ingest.index-sync.mode:incremental}")
+    private String indexSyncMode = "incremental";
 
     private final ThreadPoolExecutor writerExecutor = new ThreadPoolExecutor(
         6, 16, 60L, TimeUnit.SECONDS,
@@ -193,6 +207,7 @@ public class WriterAgent {
     }
 
     private int writeEntityBased(IngestContext context) {
+        long writeStartMs = System.currentTimeMillis();
         Long scopeId = context.getScopeId();
         Long sourceId = context.getSourceId();
         String scopeIdStr = String.valueOf(scopeId);
@@ -224,7 +239,9 @@ public class WriterAgent {
         List<String> plannedEntityNames = classified.coreAndImportant().stream()
             .map(e -> e.get("name")).filter(n -> n != null && !n.isBlank()).toList();
 
+        long planStartMs = System.currentTimeMillis();
         String writingPlanJson = generateWritingPlan(scopeId, sourceContent, analysisResult, metadataJson, context.getPagesContext(), null, plannedEntityNames, context);
+        long planMs = System.currentTimeMillis() - planStartMs;
         if (writingPlanJson == null || writingPlanJson.isEmpty()) {
             log.warn("WritingPlan generation failed, falling back to serial execution");
             return writeSerial(context);
@@ -260,6 +277,8 @@ public class WriterAgent {
         }
         entityPagePaths.add(summaryPagePath);
 
+        int plannedTaskCount = 0;
+        long parallelStartMs = System.currentTimeMillis();
         try {
             List<CompletableFuture<Map.Entry<String, WikiPageDO>>> entityFutures = new ArrayList<>();
             for (Map<String, String> entity : classified.coreAndImportant()) {
@@ -335,6 +354,7 @@ public class WriterAgent {
             allFutures.add(summaryFuture);
             allFutures.addAll(entityFutures);
             allFutures.addAll(relatedFutures);
+            plannedTaskCount = allFutures.size();
             long batchTimeoutSeconds = parallelBaseTimeoutSeconds + (long) parallelPerTaskTimeoutSeconds * allFutures.size();
             boolean batchCompleted = true;
             try {
@@ -371,11 +391,20 @@ public class WriterAgent {
         } catch (Exception e) {
             log.error("Writer parallel execution failed, some pages may be incomplete", e);
         }
+        long parallelMs = System.currentTimeMillis() - parallelStartMs;
 
+        long finalizeStartMs = System.currentTimeMillis();
         verifySourceRelations(scopeId, sourceId, context);
         batchPersistTagsAndKeywords(scopeId, context, metadataJson);
         context.getPageContents().putAll(contentCollector);
         bulkSyncToIndex(scopeId, context);
+        long finalizeMs = System.currentTimeMillis() - finalizeStartMs;
+
+        int harvestedCount = (context.getSummaryPage() != null ? 1 : 0)
+            + context.getEntityPages().size() + context.getUpdatedPages().size();
+        log.info("writeEntityBased timings: plan={}ms parallel={}ms ({} tasks, {} pages harvested) finalize={}ms total={}ms scopeId={}",
+            planMs, parallelMs, plannedTaskCount, harvestedCount, finalizeMs,
+            System.currentTimeMillis() - writeStartMs, scopeId);
 
         context.setLinksFuture(indexerAgent.startLinksGeneration(context, buildPageInventory(context)));
 
@@ -405,15 +434,30 @@ public class WriterAgent {
     }
 
     private boolean acquireBarrier(LlmConcurrencyBarrier.Bucket bucket, String taskLabel) {
-        if (llmBarrier.tryAcquire(bucket, barrierAcquireTimeoutMs)) {
+        long waitStartMs = System.currentTimeMillis();
+        boolean acquired = llmBarrier.tryAcquire(bucket, barrierAcquireTimeoutMs);
+        long waitedMs = System.currentTimeMillis() - waitStartMs;
+        if (acquired) {
+            logBarrierQueueWait(bucket, taskLabel, waitedMs);
             return true;
         }
         log.error("Barrier acquire timeout ({}ms) for bucket {} on '{}', retrying once", barrierAcquireTimeoutMs, bucket, taskLabel);
-        if (llmBarrier.tryAcquire(bucket, barrierAcquireTimeoutMs)) {
+        waitStartMs = System.currentTimeMillis();
+        acquired = llmBarrier.tryAcquire(bucket, barrierAcquireTimeoutMs);
+        waitedMs += System.currentTimeMillis() - waitStartMs;
+        if (acquired) {
+            logBarrierQueueWait(bucket, taskLabel, waitedMs);
             return true;
         }
-        log.error("Barrier acquire failed after retry for bucket {} on '{}', page write skipped", bucket, taskLabel);
+        log.error("Barrier acquire failed after retry for bucket {} on '{}' (total wait {}ms), page write skipped",
+            bucket, taskLabel, waitedMs);
         return false;
+    }
+
+    private void logBarrierQueueWait(LlmConcurrencyBarrier.Bucket bucket, String taskLabel, long waitedMs) {
+        if (waitedMs >= barrierQueueWarnMs) {
+            log.info("Barrier queue wait: bucket={} waitedMs={} task='{}'", bucket, waitedMs, taskLabel);
+        }
     }
 
     private String flushCompiledPage(String scopeIdStr, String pagePath, String content, String pageTitleOrNull,
@@ -541,6 +585,7 @@ public class WriterAgent {
     }
 
     private int writeChapterBased(IngestContext context) {
+        long writeStartMs = System.currentTimeMillis();
         Long scopeId = context.getScopeId();
         Long sourceId = context.getSourceId();
         String scopeIdStr = String.valueOf(scopeId);
@@ -570,7 +615,9 @@ public class WriterAgent {
         CompletableFuture<Map<Integer, String>> batchSummariesFuture = CompletableFuture.supplyAsync(
             () -> batchGenerateReferenceSummaries(scopeId, chaptersForBatch), writerExecutor);
 
+        long planStartMs = System.currentTimeMillis();
         String writingPlanJson = generateWritingPlan(scopeId, sourceContent, analysisResult, metadataJson, context.getPagesContext(), chapters, context);
+        long planMs = System.currentTimeMillis() - planStartMs;
         if (writingPlanJson == null || writingPlanJson.isEmpty()) {
             log.warn("WritingPlan generation failed for chapter-based mode, falling back to entity-based");
             return writeEntityBased(context);
@@ -605,6 +652,8 @@ public class WriterAgent {
         String docTitle = resolveDocTitle(extractJsonField(metadataJson, "title"), context);
         String docCategory = extractJsonField(metadataJson, "category");
 
+        int plannedTaskCount = 0;
+        long parallelStartMs = System.currentTimeMillis();
         try {
             Map<Integer, String> batchSummaries;
             try {
@@ -734,6 +783,7 @@ public class WriterAgent {
             allFutures.addAll(entityFutures);
             allFutures.addAll(chapterFutures);
             allFutures.addAll(relatedFutures);
+            plannedTaskCount = allFutures.size();
             long batchTimeoutSeconds = parallelBaseTimeoutSeconds + (long) parallelPerTaskTimeoutSeconds * allFutures.size();
             boolean batchCompleted = true;
             try {
@@ -778,11 +828,20 @@ public class WriterAgent {
         } catch (Exception e) {
             log.error("Writer chapter-based parallel execution failed", e);
         }
+        long parallelMs = System.currentTimeMillis() - parallelStartMs;
 
+        long finalizeStartMs = System.currentTimeMillis();
         verifySourceRelations(scopeId, sourceId, context);
         batchPersistTagsAndKeywords(scopeId, context, metadataJson);
         context.getPageContents().putAll(contentCollector);
         bulkSyncToIndex(scopeId, context);
+        long finalizeMs = System.currentTimeMillis() - finalizeStartMs;
+
+        int harvestedCount = (context.getSummaryPage() != null ? 1 : 0)
+            + context.getEntityPages().size() + context.getChapterPages().size() + context.getUpdatedPages().size();
+        log.info("writeChapterBased timings: plan={}ms parallel={}ms ({} tasks, {} pages harvested) finalize={}ms total={}ms scopeId={}",
+            planMs, parallelMs, plannedTaskCount, harvestedCount, finalizeMs,
+            System.currentTimeMillis() - writeStartMs, scopeId);
 
         context.setLinksFuture(indexerAgent.startLinksGeneration(context, buildPageInventory(context)));
 
@@ -1158,19 +1217,21 @@ public class WriterAgent {
         allPages.addAll(context.getChapterPages().values());
         allPages = new ArrayList<>(allPages.stream().filter(p -> p != null && p.getId() != null).toList());
 
-        try {
-            List<WikiPageDO> dbPages = wikiPageMapper.selectList(
-                new LambdaQueryWrapper<WikiPageDO>()
-                    .eq(WikiPageDO::getScopeId, scopeId)
-            );
-            Set<Long> contextPageIds = allPages.stream().map(WikiPageDO::getId).collect(java.util.stream.Collectors.toSet());
-            for (WikiPageDO dbPage : dbPages) {
-                if (!contextPageIds.contains(dbPage.getId())) {
-                    allPages.add(dbPage);
+        if ("full".equalsIgnoreCase(indexSyncMode)) {
+            try {
+                List<WikiPageDO> dbPages = wikiPageMapper.selectList(
+                    new LambdaQueryWrapper<WikiPageDO>()
+                        .eq(WikiPageDO::getScopeId, scopeId)
+                );
+                Set<Long> contextPageIds = allPages.stream().map(WikiPageDO::getId).collect(java.util.stream.Collectors.toSet());
+                for (WikiPageDO dbPage : dbPages) {
+                    if (!contextPageIds.contains(dbPage.getId())) {
+                        allPages.add(dbPage);
+                    }
                 }
+            } catch (Exception e) {
+                log.warn("bulkSyncToIndex: failed to query all DB pages for scopeId={}, indexing context pages only: {}", scopeId, e.getMessage());
             }
-        } catch (Exception e) {
-            log.warn("bulkSyncToIndex: failed to query all DB pages for scopeId={}, indexing context pages only: {}", scopeId, e.getMessage());
         }
 
         if (!allPages.isEmpty()) {
@@ -1552,11 +1613,12 @@ public class WriterAgent {
                 return null;
             }
             boolean structuredSource = context != null && context.getDocumentType() == DocumentStructureAnalyzer.DocumentType.STRUCTURED;
+            String summaryCategory = extractJsonField(metadataJson, "category");
             String prompt;
             if (subPlanJson != null) {
-                prompt = schemaInjector.prependForWriter(scopeId, PromptRegistry.forIngest().writeSummaryWithPlan(metadataJson, subPlanJson, schemaPageTemplate, structuredSource));
+                prompt = schemaInjector.prependForWriter(scopeId, PromptRegistry.forIngest().writeSummaryWithPlan(metadataJson, subPlanJson, schemaPageTemplate, structuredSource), summaryCategory);
             } else {
-                prompt = schemaInjector.prependForWriter(scopeId, PromptRegistry.forIngest().writeSummary(metadataJson, schemaPageTemplate));
+                prompt = schemaInjector.prependForWriter(scopeId, PromptRegistry.forIngest().writeSummary(metadataJson, schemaPageTemplate), summaryCategory);
             }
             String userMessage = PromptTemplate.buildSourceAndAnalysisUserMessage(sourceContent, analysisResult);
             String summary;
@@ -1739,59 +1801,113 @@ public class WriterAgent {
                     log.info("Skipping writeEntityPage merge for non-active page '{}' - lifecycle_status={}", entityName, lifecycleStatus);
                     return null;
                 }
-                byte[] existingBytes = storageProvider.read(scopeIdStr, "wiki/" + entityPagePath);
-                if (existingBytes != null) {
-                    String existingContent = new String(existingBytes, StandardCharsets.UTF_8);
-                    return applyIncrementalEntityUpdate(scopeId, sourceId, scopeIdStr, existing, entityPagePath,
-                        existingContent, sourceContent, filteredAnalysis, metadataJson, conflictAnnotations,
-                        contentCollector, context);
-                }
+                return applyIncrementalEntityUpdate(scopeId, sourceId, scopeIdStr, existing, entityPagePath,
+                    sourceContent, filteredAnalysis, metadataJson, conflictAnnotations,
+                    contentCollector, context);
             } else {
-                if (!acquireBarrier(LlmConcurrencyBarrier.Bucket.ENTITY, "writeEntityPage(create):" + entityName)) {
+                String createPagePath = entityPagePath;
+                try {
+                    return pageWriteLockRegistry.withPageLock(scopeId, createPagePath, pageLockTimeoutMs,
+                        () -> createEntityPage(scopeId, sourceId, scopeIdStr, entityName, entityType, createPagePath,
+                            sourceContent, filteredAnalysis, metadataJson, subPlanJson, contentCollector,
+                            schemaPageTemplate, healthStatus, conflictAnnotations, context));
+                } catch (PageWriteLockRegistry.PageLockTimeoutException e) {
+                    log.warn("writeEntityPage: create skipped for '{}' reason=page_lock_timeout", entityName);
                     return null;
                 }
-                boolean structuredSource = context != null && context.getDocumentType() == DocumentStructureAnalyzer.DocumentType.STRUCTURED;
-                String entityPrompt;
-                try {
-                    if (subPlanJson != null) {
-                        entityPrompt = schemaInjector.prependForWriter(scopeId, PromptRegistry.forIngest().writeEntityPageWithPlan(entityName, entityType, subPlanJson, metadataJson, schemaPageTemplate, structuredSource));
-                    } else {
-                        entityPrompt = schemaInjector.prependForWriter(scopeId, PromptRegistry.forIngest().writeEntityPage(entityName, entityType, filteredAnalysis, metadataJson, schemaPageTemplate, structuredSource));
-                    }
-                    String entityUserMsg = PromptTemplate.buildSourceAndAnalysisUserMessage(sourceContent, filteredAnalysis);
-                    String entityContent = chatClient.chat(entityPrompt, entityUserMsg);
-                    entityContent = PromptTemplate.stripConversationalFiller(stripMarkdownFences(entityContent));
-                    entityContent = linkWritingService.sanitizeSourceLinks(entityContent);
-                    entityContent = linkWritingService.sanitizeWikiLinks(entityContent, scopeId);
-                    entityContent = flushCompiledPage(scopeIdStr, entityPagePath, entityContent, entityName, contentCollector, context);
-                } finally {
-                    llmBarrier.release(LlmConcurrencyBarrier.Bucket.ENTITY);
-                }
-
-                String entityCategory = deriveEntityCategory(entityType, metadataJson);
-                WikiPageDO entityPageDO = new WikiPageDO();
-                entityPageDO.setTitle(entityName);
-                entityPageDO.setFilePath(entityPagePath);
-                entityPageDO.setSummary("关于「" + entityName + "」的知识页面");
-                entityPageDO.setCategory(entityCategory);
-                entityPageDO.setPageType("entity");
-                entityPageDO.setScopeId(scopeId);
-                entityPageDO.setSourceCount(1);
-                entityPageDO.setHealthStatus(healthStatus);
-                entityPageDO.setLifecycleStatus(PageLifecycle.ACTIVE.name());
-                entityPageDO.setSchemaVersion(schemaManager.getCurrentVersionId(scopeId, SchemaSkeletonValidator.WIKI_SCHEMA_KEY));
-                entityPageDO.setContentUpdatedAt(java.time.LocalDateTime.now());
-                wikiPageMapper.insert(entityPageDO);
-                persistSourceRelation(scopeId, entityPageDO.getId(), sourceId);
-                persistTagsAndKeywords(scopeId, entityPageDO.getId(), metadataJson);
-                lintFindingService.resolvePageFindingsOnIngest(scopeId, entityPageDO.getId());
-                return entityPageDO;
             }
-            return null;
         } catch (Exception e) {
             log.error("writeEntityPage failed for '{}': {}", entityName, e.getMessage());
             return null;
         }
+    }
+
+    private WikiPageDO createEntityPage(Long scopeId, Long sourceId, String scopeIdStr, String entityName,
+        String entityType, String entityPagePath, String sourceContent, String filteredAnalysis,
+        String metadataJson, String subPlanJson, Map<String, String> contentCollector,
+        String schemaPageTemplate, String healthStatus,
+        List<IngestContext.ConflictAnnotation> conflictAnnotations, IngestContext context) {
+        WikiPageDO raced = wikiPageMapper.selectOne(
+            new LambdaQueryWrapper<WikiPageDO>()
+                .eq(WikiPageDO::getScopeId, scopeId)
+                .eq(WikiPageDO::getFilePath, entityPagePath)
+        );
+        if (raced == null) {
+            raced = findPageByTitleIgnoreCase(scopeId, entityName);
+        }
+        if (raced != null) {
+            if (!PageLifecycle.ACTIVE.name().equals(raced.getLifecycleStatus())) {
+                log.warn("writeEntityPage: create skipped for '{}' - concurrent page id={} lifecycle_status={}",
+                    entityName, raced.getId(), raced.getLifecycleStatus());
+                return null;
+            }
+            log.info("writeEntityPage: concurrent create detected for '{}' (id={}, path='{}'), switching to incremental merge",
+                entityName, raced.getId(), raced.getFilePath());
+            return applyIncrementalEntityUpdate(scopeId, sourceId, scopeIdStr, raced, raced.getFilePath(),
+                sourceContent, filteredAnalysis, metadataJson, conflictAnnotations, contentCollector, context);
+        }
+
+        if (!acquireBarrier(LlmConcurrencyBarrier.Bucket.ENTITY, "writeEntityPage(create):" + entityName)) {
+            return null;
+        }
+        boolean structuredSource = context != null && context.getDocumentType() == DocumentStructureAnalyzer.DocumentType.STRUCTURED;
+        String entityCategory = deriveEntityCategory(entityType, metadataJson);
+        String entityPrompt;
+        try {
+            if (subPlanJson != null) {
+                entityPrompt = schemaInjector.prependForWriter(scopeId, PromptRegistry.forIngest().writeEntityPageWithPlan(entityName, entityType, subPlanJson, metadataJson, schemaPageTemplate, structuredSource), entityCategory);
+            } else {
+                entityPrompt = schemaInjector.prependForWriter(scopeId, PromptRegistry.forIngest().writeEntityPage(entityName, entityType, filteredAnalysis, metadataJson, schemaPageTemplate, structuredSource), entityCategory);
+            }
+            String entityUserMsg = PromptTemplate.buildSourceAndAnalysisUserMessage(sourceContent, filteredAnalysis);
+            String entityContent = chatClient.chat(entityPrompt, entityUserMsg);
+            entityContent = PromptTemplate.stripConversationalFiller(stripMarkdownFences(entityContent));
+            entityContent = linkWritingService.sanitizeSourceLinks(entityContent);
+            entityContent = linkWritingService.sanitizeWikiLinks(entityContent, scopeId);
+            entityContent = flushCompiledPage(scopeIdStr, entityPagePath, entityContent, entityName, contentCollector, context);
+        } finally {
+            llmBarrier.release(LlmConcurrencyBarrier.Bucket.ENTITY);
+        }
+
+        WikiPageDO entityPageDO = new WikiPageDO();
+        entityPageDO.setTitle(entityName);
+        entityPageDO.setFilePath(entityPagePath);
+        entityPageDO.setSummary("关于「" + entityName + "」的知识页面");
+        entityPageDO.setCategory(entityCategory);
+        entityPageDO.setPageType("entity");
+        entityPageDO.setScopeId(scopeId);
+        entityPageDO.setSourceCount(1);
+        entityPageDO.setHealthStatus(healthStatus);
+        entityPageDO.setLifecycleStatus(PageLifecycle.ACTIVE.name());
+        entityPageDO.setSchemaVersion(schemaManager.getCurrentVersionId(scopeId, SchemaSkeletonValidator.WIKI_SCHEMA_KEY));
+        entityPageDO.setContentUpdatedAt(java.time.LocalDateTime.now());
+        try {
+            wikiPageMapper.insert(entityPageDO);
+        } catch (org.springframework.dao.DuplicateKeyException dupEx) {
+            WikiPageDO winner = wikiPageMapper.selectOne(
+                new LambdaQueryWrapper<WikiPageDO>()
+                    .eq(WikiPageDO::getScopeId, scopeId)
+                    .eq(WikiPageDO::getTitle, entityName)
+                    .orderByDesc(WikiPageDO::getCreatedAt)
+                    .last("LIMIT 1")
+            );
+            if (winner == null) {
+                throw dupEx;
+            }
+            if (!PageLifecycle.ACTIVE.name().equals(winner.getLifecycleStatus())) {
+                log.warn("writeEntityPage: title race for '{}' resolved to non-active page id={} lifecycle_status={}; skipped",
+                    entityName, winner.getId(), winner.getLifecycleStatus());
+                return null;
+            }
+            log.info("writeEntityPage: title race for '{}' resolved to winner id={} path='{}', switching to incremental merge",
+                entityName, winner.getId(), winner.getFilePath());
+            return applyIncrementalEntityUpdate(scopeId, sourceId, scopeIdStr, winner, winner.getFilePath(),
+                sourceContent, filteredAnalysis, metadataJson, conflictAnnotations, contentCollector, context);
+        }
+        persistSourceRelation(scopeId, entityPageDO.getId(), sourceId);
+        persistTagsAndKeywords(scopeId, entityPageDO.getId(), metadataJson);
+        lintFindingService.resolvePageFindingsOnIngest(scopeId, entityPageDO.getId());
+        return entityPageDO;
     }
 
     private WikiPageDO updateRelatedPage(Long scopeId, Long sourceId, String scopeIdStr, String affectedPath, String action, String sourceContent, String analysisResult, String metadataJson, String subPlanJson, Map<String, String> contentCollector, List<IngestContext.ConflictAnnotation> conflictAnnotations, IngestContext context) {
@@ -1870,7 +1986,7 @@ public class WriterAgent {
             String filteredAnalysis = filterAnalysisForRelated(analysisResult, affectedPath, existingContent, maxAnalysisCharsRelated, context);
 
             return applyIncrementalEntityUpdate(scopeId, sourceId, scopeIdStr, existing, affectedPath,
-                existingContent, sourceContent, filteredAnalysis, metadataJson, conflictAnnotations,
+                sourceContent, filteredAnalysis, metadataJson, conflictAnnotations,
                 contentCollector, context);
         } catch (Exception e) {
             log.error("updateRelatedPage failed for '{}': {}", affectedPath, e.getMessage());
@@ -1879,14 +1995,50 @@ public class WriterAgent {
     }
 
     private WikiPageDO applyIncrementalEntityUpdate(Long scopeId, Long sourceId, String scopeIdStr,
-        WikiPageDO existing, String pagePath, String existingContent, String sourceContent,
+        WikiPageDO existing, String pagePath, String sourceContent,
         String filteredAnalysis, String metadataJson,
         List<IngestContext.ConflictAnnotation> conflictAnnotations,
         Map<String, String> contentCollector, IngestContext context) {
-        String pageTitle = existing.getTitle();
+        Long pageId = existing != null ? existing.getId() : null;
+        String pageTitle = existing != null ? existing.getTitle() : pagePath;
         try {
+            return pageWriteLockRegistry.withPageLock(scopeId, pagePath, pageLockTimeoutMs,
+                () -> applyIncrementalEntityUpdateLocked(scopeId, sourceId, scopeIdStr, existing, pagePath,
+                    sourceContent, filteredAnalysis, metadataJson, conflictAnnotations, contentCollector, context));
+        } catch (PageWriteLockRegistry.PageLockTimeoutException e) {
+            log.warn("Entity incremental update skipped: page='{}' reason=page_lock_timeout", pageTitle);
+            reportIncrementalDegradation(scopeId, pageId, pageTitle, "page_lock_timeout", context);
+            return null;
+        } catch (Exception e) {
+            log.error("Incremental entity update failed for '{}': {}", pageTitle, e.getMessage());
+            reportIncrementalDegradation(scopeId, pageId, pageTitle,
+                "exception:" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()), context);
+            return null;
+        }
+    }
+
+    private WikiPageDO applyIncrementalEntityUpdateLocked(Long scopeId, Long sourceId, String scopeIdStr,
+        WikiPageDO existing, String pagePath, String sourceContent,
+        String filteredAnalysis, String metadataJson,
+        List<IngestContext.ConflictAnnotation> conflictAnnotations,
+        Map<String, String> contentCollector, IngestContext context) {
+        WikiPageDO fresh = existing != null && existing.getId() != null
+            ? wikiPageMapper.selectById(existing.getId()) : null;
+        if (fresh == null || !scopeId.equals(fresh.getScopeId())) {
+            log.warn("Entity incremental update skipped: page missing or scope mismatch, pagePath={}", pagePath);
+            return null;
+        }
+        String pageTitle = fresh.getTitle();
+        try {
+            byte[] lockedBytes = storageProvider.read(scopeIdStr, "wiki/" + pagePath);
+            if (lockedBytes == null) {
+                log.warn("Entity incremental update skipped: content unreadable, page='{}'", pagePath);
+                return null;
+            }
+            String lockedContent = new String(lockedBytes, StandardCharsets.UTF_8);
+
             String entriesListing = EntityPageEntryParser.formatForPrompt(
-                EntityPageEntryParser.parse(existingContent).entries());
+                EntityPageEntryParser.parse(lockedContent).entries());
             String sourceName = extractJsonField(metadataJson, "title");
             if (sourceName == null || sourceName.isBlank()) {
                 sourceName = context != null && context.getSourceName() != null && !context.getSourceName().isBlank()
@@ -1896,7 +2048,7 @@ public class WriterAgent {
                 + "\n\n【来源名称】" + sourceName;
 
             if (!acquireBarrier(LlmConcurrencyBarrier.Bucket.ENTITY, "incrementalEntityUpdate:" + pageTitle)) {
-                reportIncrementalDegradation(scopeId, existing.getId(), pageTitle, "barrier_timeout", context);
+                reportIncrementalDegradation(scopeId, fresh.getId(), pageTitle, "barrier_timeout", context);
                 return null;
             }
             String raw;
@@ -1913,7 +2065,7 @@ public class WriterAgent {
                 log.warn("EntityCandidateParser skipped candidate for '{}': {}", pageTitle, entry);
             }
             if (outcome.fatal()) {
-                reportIncrementalDegradation(scopeId, existing.getId(), pageTitle, "candidate_json_fatal", context);
+                reportIncrementalDegradation(scopeId, fresh.getId(), pageTitle, "candidate_json_fatal", context);
                 return null;
             }
             if (outcome.candidates().isEmpty()) {
@@ -1922,7 +2074,7 @@ public class WriterAgent {
             }
 
             EntityPageIncrementalApplier.ApplyResult applied =
-                EntityPageIncrementalApplier.apply(existingContent, outcome.candidates());
+                EntityPageIncrementalApplier.apply(lockedContent, outcome.candidates());
             for (String entry : applied.skipped()) {
                 log.warn("EntityPageIncrementalApplier skipped entry for '{}': {}", pageTitle, entry);
             }
@@ -1945,8 +2097,8 @@ public class WriterAgent {
                         context != null ? context.getExecutionId() : null,
                         new org.cn.liuwt.llmwiki.domain.service.harness.LintFindingService.ConflictCard(
                             "同页条目冲突 — " + pageTitle, detail, "medium",
-                            pagePath, existing.getId(), pageTitle,
-                            pagePath, existing.getId(), pageTitle,
+                            pagePath, fresh.getId(), pageTitle,
+                            pagePath, fresh.getId(), pageTitle,
                             "fact_conflict", conflict.existingClaim(), conflict.newClaim(),
                             "ingest_fact_conflict"));
                 } catch (Exception e) {
@@ -1954,20 +2106,29 @@ public class WriterAgent {
                 }
             }
 
-            existing.setSourceCount(existing.getSourceCount() == null ? 1 : existing.getSourceCount() + 1);
-            existing.setHealthStatus(healthStatus);
-            existing.setSchemaVersion(schemaManager.getCurrentVersionId(scopeId, SchemaSkeletonValidator.WIKI_SCHEMA_KEY));
-            existing.setContentUpdatedAt(java.time.LocalDateTime.now());
-            existing.setPageType("entity");
-            wikiPageMapper.updateById(existing);
-            persistSourceRelation(scopeId, existing.getId(), sourceId);
-            persistTagsAndKeywords(scopeId, existing.getId(), metadataJson);
-            lintFindingService.resolvePageFindingsOnIngest(scopeId, existing.getId());
+            java.time.LocalDateTime contentUpdatedAt = java.time.LocalDateTime.now();
+            Long schemaVersion = schemaManager.getCurrentVersionId(scopeId, SchemaSkeletonValidator.WIKI_SCHEMA_KEY);
+            wikiPageMapper.update(null, new LambdaUpdateWrapper<WikiPageDO>()
+                .eq(WikiPageDO::getId, fresh.getId())
+                .eq(WikiPageDO::getScopeId, scopeId)
+                .setSql("source_count = COALESCE(source_count, 0) + 1")
+                .set(WikiPageDO::getHealthStatus, healthStatus)
+                .set(WikiPageDO::getSchemaVersion, schemaVersion)
+                .set(WikiPageDO::getContentUpdatedAt, contentUpdatedAt)
+                .set(WikiPageDO::getPageType, "entity"));
+            fresh.setSourceCount(fresh.getSourceCount() == null ? 1 : fresh.getSourceCount() + 1);
+            fresh.setHealthStatus(healthStatus);
+            fresh.setSchemaVersion(schemaVersion);
+            fresh.setContentUpdatedAt(contentUpdatedAt);
+            fresh.setPageType("entity");
+            persistSourceRelation(scopeId, fresh.getId(), sourceId);
+            persistTagsAndKeywords(scopeId, fresh.getId(), metadataJson);
+            lintFindingService.resolvePageFindingsOnIngest(scopeId, fresh.getId());
 
-            return existing;
+            return fresh;
         } catch (Exception e) {
             log.error("Incremental entity update failed for '{}': {}", pageTitle, e.getMessage());
-            reportIncrementalDegradation(scopeId, existing.getId(), pageTitle,
+            reportIncrementalDegradation(scopeId, fresh.getId(), pageTitle,
                 "exception:" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()), context);
             return null;
         }
@@ -1995,49 +2156,62 @@ public class WriterAgent {
     public WikiPageDO modifyExistingPage(Long scopeId, String pagePath, String instruction,
                                           String analysisContext, String metadataJson, Long sourceId) {
         try {
-            WikiPageDO existing = wikiPageMapper.selectOne(
-                new LambdaQueryWrapper<WikiPageDO>()
+            return pageWriteLockRegistry.withPageLock(scopeId, pagePath, pageLockTimeoutMs, () -> {
+                WikiPageDO existing = wikiPageMapper.selectOne(
+                    new LambdaQueryWrapper<WikiPageDO>()
+                        .eq(WikiPageDO::getScopeId, scopeId)
+                        .eq(WikiPageDO::getFilePath, pagePath)
+                );
+                if (existing == null) {
+                    log.warn("modifyExistingPage: page not found for path='{}' scopeId={}", pagePath, scopeId);
+                    return null;
+                }
+
+                String scopeIdStr = String.valueOf(scopeId);
+                byte[] existingBytes = storageProvider.read(scopeIdStr, "wiki/" + pagePath);
+                if (existingBytes == null) {
+                    log.warn("modifyExistingPage: content not found for path='{}'", pagePath);
+                    return null;
+                }
+                String existingContent = new String(existingBytes, StandardCharsets.UTF_8);
+
+                if (!acquireBarrier(LlmConcurrencyBarrier.Bucket.ENTITY, "modifyExistingPage:" + pagePath)) {
+                    return null;
+                }
+                try {
+                    String modifyPrompt = schemaInjector.prependForWriter(scopeId,
+                        PromptRegistry.forPageModify().modifyPage(existingContent, instruction, analysisContext));
+                    String merged = chatClient.chat(modifyPrompt);
+                    merged = PromptTemplate.stripConversationalFiller(stripMarkdownFences(merged));
+                    merged = linkWritingService.sanitizeSourceLinks(merged);
+                    merged = linkWritingService.sanitizeWikiLinks(merged, scopeId);
+                    flushCompiledPage(scopeIdStr, pagePath, merged, existing.getTitle(), null, null);
+                } finally {
+                    llmBarrier.release(LlmConcurrencyBarrier.Bucket.ENTITY);
+                }
+
+                java.time.LocalDateTime contentUpdatedAt = java.time.LocalDateTime.now();
+                Long schemaVersion = schemaManager.getCurrentVersionId(scopeId, SchemaSkeletonValidator.WIKI_SCHEMA_KEY);
+                wikiPageMapper.update(null, new LambdaUpdateWrapper<WikiPageDO>()
+                    .eq(WikiPageDO::getId, existing.getId())
                     .eq(WikiPageDO::getScopeId, scopeId)
-                    .eq(WikiPageDO::getFilePath, pagePath)
-            );
-            if (existing == null) {
-                log.warn("modifyExistingPage: page not found for path='{}' scopeId={}", pagePath, scopeId);
-                return null;
-            }
+                    .setSql("source_count = COALESCE(source_count, 0) + 1")
+                    .set(WikiPageDO::getHealthStatus, "healthy")
+                    .set(WikiPageDO::getSchemaVersion, schemaVersion)
+                    .set(WikiPageDO::getContentUpdatedAt, contentUpdatedAt));
+                existing.setHealthStatus("healthy");
+                existing.setSourceCount(existing.getSourceCount() == null ? 1 : existing.getSourceCount() + 1);
+                existing.setSchemaVersion(schemaVersion);
+                existing.setContentUpdatedAt(contentUpdatedAt);
+                persistSourceRelation(scopeId, existing.getId(), sourceId);
+                persistTagsAndKeywords(scopeId, existing.getId(), metadataJson);
+                lintFindingService.resolvePageFindingsOnIngest(scopeId, existing.getId());
 
-            String scopeIdStr = String.valueOf(scopeId);
-            byte[] existingBytes = storageProvider.read(scopeIdStr, "wiki/" + pagePath);
-            if (existingBytes == null) {
-                log.warn("modifyExistingPage: content not found for path='{}'", pagePath);
-                return null;
-            }
-            String existingContent = new String(existingBytes, StandardCharsets.UTF_8);
-
-            if (!acquireBarrier(LlmConcurrencyBarrier.Bucket.ENTITY, "modifyExistingPage:" + pagePath)) {
-                return null;
-            }
-            try {
-                String modifyPrompt = schemaInjector.prependForWriter(scopeId,
-                    PromptRegistry.forPageModify().modifyPage(existingContent, instruction, analysisContext));
-                String merged = chatClient.chat(modifyPrompt);
-                merged = PromptTemplate.stripConversationalFiller(stripMarkdownFences(merged));
-                merged = linkWritingService.sanitizeSourceLinks(merged);
-                merged = linkWritingService.sanitizeWikiLinks(merged, scopeId);
-                flushCompiledPage(scopeIdStr, pagePath, merged, existing.getTitle(), null, null);
-            } finally {
-                llmBarrier.release(LlmConcurrencyBarrier.Bucket.ENTITY);
-            }
-
-            existing.setHealthStatus("healthy");
-            existing.setSourceCount(existing.getSourceCount() == null ? 1 : existing.getSourceCount() + 1);
-            existing.setSchemaVersion(schemaManager.getCurrentVersionId(scopeId, SchemaSkeletonValidator.WIKI_SCHEMA_KEY));
-            existing.setContentUpdatedAt(java.time.LocalDateTime.now());
-            wikiPageMapper.updateById(existing);
-            persistSourceRelation(scopeId, existing.getId(), sourceId);
-            persistTagsAndKeywords(scopeId, existing.getId(), metadataJson);
-            lintFindingService.resolvePageFindingsOnIngest(scopeId, existing.getId());
-
-            return existing;
+                return existing;
+            });
+        } catch (PageWriteLockRegistry.PageLockTimeoutException e) {
+            log.warn("modifyExistingPage skipped: page='{}' reason=page_lock_timeout", pagePath);
+            return null;
         } catch (Exception e) {
             log.error("modifyExistingPage failed for '{}': {}", pagePath, e.getMessage());
             return null;

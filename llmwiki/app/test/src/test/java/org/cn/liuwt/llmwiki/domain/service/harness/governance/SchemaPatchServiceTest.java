@@ -336,4 +336,45 @@ class SchemaPatchServiceTest {
         assertEquals(2, model.getTemplates().getPageTemplates().size());
         assertEquals("市场日报", model.getTemplates().getPageTemplates().get(1).getLabel());
     }
+
+    @Test
+    void section3AddRejectsTemplateHeadingWithoutParseableSections() {
+        SchemaStructuredModel model = new SchemaStructuredModel();
+        SchemaPatchDO p = section3Patch(50L, "ADD", null, "### 空模板\n\n无章节定义");
+        BusinessException ex = expectBusinessException("applySection3Patch", SECTION3_TYPES,
+            model, p, Operation.ADD);
+        assertEquals(ErrorCode.PATCH_DIFF_EMPTY_TEMPLATE_ADD.getCode(), ex.getCode());
+        assertTrue(model.getTemplates().getPageTemplates().isEmpty());
+    }
+
+    @Test
+    void section3AddRejectsUnparseableSectionsWhenTemplateExists() {
+        SchemaStructuredModel model = new SchemaStructuredModel();
+        SchemaStructuredModel.PageTemplate pt = new SchemaStructuredModel.PageTemplate();
+        pt.setType("基金月报");
+        pt.setLabel("基金月报");
+        model.getTemplates().getPageTemplates().add(pt);
+        SchemaPatchDO p = section3Patch(51L, "ADD", null, "### 基金月报\n\n先看市场再看个股");
+        BusinessException ex = expectBusinessException("applySection3Patch", SECTION3_TYPES,
+            model, p, Operation.ADD);
+        assertEquals(ErrorCode.PATCH_DIFF_EMPTY_TEMPLATE_ADD.getCode(), ex.getCode());
+        assertTrue(pt.getSections().isEmpty());
+    }
+
+    @Test
+    void textPathAddRejectsTemplateHeadingWithoutParseableSections() {
+        String schemaText = String.join("\n",
+            "## 3. 页面模板",
+            "",
+            "既有规则",
+            "",
+            "### 基金月报",
+            "",
+            "1. 基金概况（必需）",
+            "");
+        SchemaPatchDO p = section3Patch(52L, "ADD", null, "### 空模板\n\n无章节定义");
+        BusinessException ex = expectBusinessException("applyPatch",
+            new Class<?>[]{String.class, SchemaPatchDO.class}, schemaText, p);
+        assertEquals(ErrorCode.PATCH_DIFF_EMPTY_TEMPLATE_ADD.getCode(), ex.getCode());
+    }
 }

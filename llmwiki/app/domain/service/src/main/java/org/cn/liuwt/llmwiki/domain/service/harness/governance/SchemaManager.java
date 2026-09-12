@@ -321,6 +321,82 @@ public class SchemaManager {
         return n;
     }
 
+    /**
+     * 模板结构完整性：对比 markdown 模板块数与结构化模型模板数，暴露三类缺陷——
+     * 无法解析的模板块（markdown 有块但解析不出章节）、空模板（sections 为空）、
+     * 结构化 JSON 落后于 markdown（模板数少于 markdown 可解析数）。
+     */
+    public record SchemaStructureHealth(int templateCount, int emptyTemplateCount,
+                                        int unparsedBlockCount, int staleTemplateCount, String detail) {
+        public int defectCount() {
+            return emptyTemplateCount + unparsedBlockCount + staleTemplateCount;
+        }
+    }
+
+    public SchemaStructureHealth buildStructureHealth(Long scopeId) {
+        if (scopeId == null) return null;
+        SchemaConfigDO schema = getSchema(scopeId, SchemaSkeletonValidator.WIKI_SCHEMA_KEY);
+        if (schema == null || schema.getConfigValue() == null || schema.getConfigValue().isBlank()) {
+            return null;
+        }
+        int markdownBlockCount = countSection3TemplateBlocks(schema.getConfigValue());
+        SchemaStructuredModel markdownModel = schemaStructuredParser.parse(schema.getConfigValue());
+        int markdownTemplateCount = countTemplates(markdownModel);
+        int unparsedBlockCount = Math.max(0, markdownBlockCount - markdownTemplateCount);
+
+        SchemaStructuredModel storedModel = getStructuredModel(scopeId);
+        int storedTemplateCount = countTemplates(storedModel);
+        int emptyTemplateCount = countEmptyTemplates(storedModel);
+        int staleTemplateCount = Math.max(0, markdownTemplateCount - storedTemplateCount);
+
+        if (unparsedBlockCount == 0 && emptyTemplateCount == 0 && staleTemplateCount == 0) {
+            return new SchemaStructureHealth(storedTemplateCount, 0, 0, 0, null);
+        }
+        String detail = String.format(
+            "markdown 模板块 %d，解析模板 %d，结构化模型模板 %d（落后 %d），空模板 %d，未解析块 %d",
+            markdownBlockCount, markdownTemplateCount, storedTemplateCount,
+            staleTemplateCount, emptyTemplateCount, unparsedBlockCount);
+        log.warn("Schema 模板结构存在缺陷 scope={}: {}", scopeId, detail);
+        return new SchemaStructureHealth(storedTemplateCount, emptyTemplateCount,
+            unparsedBlockCount, staleTemplateCount, detail);
+    }
+
+    private int countSection3TemplateBlocks(String markdown) {
+        int count = 0;
+        boolean inSection3 = false;
+        for (String line : markdown.replace("\r\n", "\n").split("\n")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("## ")) {
+                inSection3 = trimmed.matches("^##\\s*3[.、\\s].*");
+                continue;
+            }
+            if (inSection3 && trimmed.startsWith("### ")) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private int countTemplates(SchemaStructuredModel model) {
+        if (model == null || model.getTemplates() == null || model.getTemplates().getPageTemplates() == null) {
+            return 0;
+        }
+        return model.getTemplates().getPageTemplates().size();
+    }
+
+    private int countEmptyTemplates(SchemaStructuredModel model) {
+        if (model == null || model.getTemplates() == null || model.getTemplates().getPageTemplates() == null) {
+            return 0;
+        }
+        int empty = 0;
+        for (SchemaStructuredModel.PageTemplate pt : model.getTemplates().getPageTemplates()) {
+            if (pt.getSections() == null || pt.getSections().isEmpty()) {
+                empty++;
+            }
+        }
+        return empty;
+    }
+
     private void invalidateInjectorCache(Long scopeId) {
         if (schemaInjector != null) {
             schemaInjector.invalidate(scopeId);

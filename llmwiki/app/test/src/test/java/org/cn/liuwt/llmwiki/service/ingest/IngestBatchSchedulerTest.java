@@ -8,6 +8,7 @@ import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.IngestBatchDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.IngestBatchMapper;
+import org.cn.liuwt.llmwiki.common.dal.mapper.ScopeMapper;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel.ExecutionStepModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
@@ -22,6 +23,8 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 
@@ -40,6 +43,8 @@ class IngestBatchSchedulerTest {
     @Mock private ExecutionTracker executionTracker;
     @Mock private IngestDispatcher dispatcher;
     @Mock private IngestService ingestService;
+    @Mock private ScopeMapper scopeMapper;
+    @Mock private TransactionTemplate transactionTemplate;
 
     @InjectMocks
     private IngestBatchScheduler scheduler;
@@ -150,6 +155,43 @@ class IngestBatchSchedulerTest {
         scheduler.kick(10L);
 
         verify(dispatcher).dispatch(eq(2L), eq(10L), any(), any(), eq(PipelineTaskMessage.TYPE_INGEST_ANALYZE), any());
+    }
+
+    @Test
+    void shouldDeferWriteClaimWhenRemoteWritePhaseRunning() {
+        ReflectionTestUtils.setField(scheduler, "mqEnabled", true);
+        stubQueries(List.of(), List.of(executionWithId(2L, "confirmed", null)));
+        when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(null);
+        });
+        when(scopeMapper.lockScopeRow(10L)).thenReturn(10L);
+        ExecutionDO remoteWriter = runningWriteExecution(9L);
+        when(executionMapper.selectRunningIngestForUpdate(10L)).thenReturn(List.of(remoteWriter));
+
+        scheduler.kick(10L);
+
+        verify(executionMapper, never()).update(any(), any());
+        verify(dispatcher, never()).dispatch(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void shouldClaimWritePhaseWhenOnlyAnalyzeRunning() {
+        ReflectionTestUtils.setField(scheduler, "mqEnabled", true);
+        stubQueries(List.of(executionWithId(9L, "running", null)),
+            List.of(executionWithId(2L, "confirmed", null)));
+        when(executionTracker.getExecution(9L)).thenReturn(modelWithoutSteps());
+        when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(null);
+        });
+        when(scopeMapper.lockScopeRow(10L)).thenReturn(10L);
+        when(executionMapper.selectRunningIngestForUpdate(10L)).thenReturn(List.of(executionWithId(9L, "running", null)));
+        when(executionMapper.update(any(), any())).thenReturn(1);
+
+        scheduler.kick(10L);
+
+        verify(dispatcher).dispatch(eq(2L), eq(10L), any(), any(), eq(PipelineTaskMessage.TYPE_INGEST_EXECUTE), any());
     }
 
     private void stubQueries(List<ExecutionDO> running, List<ExecutionDO> candidates) {

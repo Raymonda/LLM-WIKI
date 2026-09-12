@@ -105,6 +105,12 @@ llmwiki:
     batch:
       max-size: ${INGEST_BATCH_MAX_SIZE:50}
       analyze-concurrency: ${INGEST_BATCH_ANALYZE_CONCURRENCY:2}
+      # Write-phase concurrency. Values >1 rely on the JVM page write lock
+      # (WriterAgent/PageWriteLockRegistry) and are safe on a single node.
+      # In multi-node (RocketMQ) mode, write-phase claims are serialized per
+      # scope in the DB (scope row lock + recheck + CAS): at most one write
+      # phase runs per scope cluster-wide, so values >1 add no throughput.
+      write-concurrency: ${INGEST_BATCH_WRITE_CONCURRENCY:1}
 
 rocketmq:
   name-server: ${ROCKETMQ_NAME_SERVER:}
