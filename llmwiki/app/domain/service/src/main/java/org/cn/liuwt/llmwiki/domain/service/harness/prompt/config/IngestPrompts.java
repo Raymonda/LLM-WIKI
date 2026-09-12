@@ -6,13 +6,14 @@ public class IngestPrompts {
 
     private static final String ENTITY_CENTRIC_PRINCIPLE = """
             【实体中心原则 —— 实体页的核心使命】
-            实体页的使命是描述实体本身，而不是复制源文档的结构。你必须：
+            实体页是围绕实体的零断言汇集台：只汇集来源明确陈述过的事实，不产生任何新断言。你必须：
             1. 从实体的视角组织内容：章节应围绕实体的属性、特征、角色、规则、关联等维度展开，而不是照搬源文档的章节结构。
-            2. 提炼而非搬运：源文档是制度/规范/报告等特定体裁，但实体页是百科全书式的知识条目。你需要从源文档中提取与该实体相关的事实，按实体自身的逻辑重新组织。
-            3. 举例说明——如果源文档是《合规管理办法》制度文件，其中提到"XX证券股份有限公司"：
+            2. 汇集而非重写：源文档是制度/规范/报告等特定体裁，实体页是陈述汇集台。你需要从源文档中逐条提取与该实体相关的陈述，保持来源的原始表述，按实体自身的维度归类，不得改写、压缩或合并来源中的独立陈述。
+            3. 每条陈述可追溯：每条事实性陈述必须紧随「（来源：<来源名称>）」标注；没有来源标注的陈述不得写入。
+            4. 举例说明——如果源文档是《合规管理办法》制度文件，其中提到"XX证券股份有限公司"：
                - ✗ 错误：按制度文件的章节结构（总则→组织架构→合规职责→合规管理流程→附则）来组织"XX证券股份有限公司"的实体页
-               - ✓ 正确：按公司实体的维度组织（公司概况→组织架构→业务领域→合规要求→关联机构），从制度文件中提取与公司相关的事实填充各维度
-            4. 实体类型决定内容重心：
+               - ✓ 正确：按公司实体的维度组织（公司概况→组织架构→业务领域→合规要求→关联机构），从制度文件中逐条提取与公司相关的陈述填入各维度
+            5. 实体类型决定内容重心：
                - 组织/公司类：定位、职能、业务范围、组织架构、关联实体
                - 人物类：角色、职责、权限、汇报关系
                - 系统/工具类：功能、用途、技术特征、集成关系
@@ -238,16 +239,15 @@ public class IngestPrompts {
         if (schemaPageTemplate != null && !schemaPageTemplate.isBlank()) {
             pageStructureGuidance = "页面结构请严格遵循上方 Schema 骨架中「## 3. 页面模板」的定义来组织章节，不要自行发明结构。如果 Schema 页面模板中定义了必需章节，确保每个必需章节都有实质性内容。";
         } else {
-            pageStructureGuidance = "页面应包含：\n"
-                + "1. 标题（一级标题，与元数据中的 title 一致）\n"
-                + "2. 概述段落（用5-8句话详细概括核心内容，包含关键结论和要点，而非简单缩写）\n"
-                + "3. 核心概念详解（每个概念配2-3句话详细说明，包含定义、属性和应用场景，而非一句话带过）\n"
-                + "4. 关键细节与要点（提取原始文件中的重要细节、数据、规则、流程等，每个要点独立成段）\n"
-                + "5. 关系与关联（以叙述性段落描述概念/实体之间的关系网络，在叙述中自然嵌入 [[页面标题]] 链接。禁止生成纯链接平铺列表）\n"
-                + "6. 参考来源（标注来源文件信息）";
+            pageStructureGuidance = "页面结构（来源编译页，遵循忠实编译约束）：\n"
+                + "1. 文档结构地图（列出源文档的章节结构，每章一句话说明其内容范围，帮助读者定位原文，不写 H1 标题）\n"
+                + "2. 关键陈述（逐条列出源文档明确陈述的关键事实、数据、规则，每条一句话或一段，保持原始表述粒度，紧随「（来源：<来源名称>）」标注）\n"
+                + "3. 核心内容章节（按主题分节，每节聚焦一个方面，用 ## 或 ### 标题）\n"
+                + "4. 原文引用（对规则条款、定义表述、量化指标，使用 blockquote（>）引用原文，不得改写）\n"
+                + "5. 来源未提供的信息（列出读者可能期待但源文档未明确陈述的主题清单，帮助消费端识别知识边界）";
         }
 
-        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n---\n\n" + """
+        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT + "\n\n---\n\n" + """
             根据下方用户消息中的原始文件内容和结构化导航索引，生成一个完整深入的 Wiki 页面（Markdown 格式）。
             用户消息包含【原始文件内容】（事实来源）和【结构化导航索引】（写作方向指引）两个部分。
 
@@ -308,7 +308,7 @@ public class IngestPrompts {
         if (sourceContent != null && !sourceContent.isBlank()) {
             sourceSection = "\n\n【原始文件内容】（事实来源 —— 最高优先级，融合新内容时所有新增的事实性内容必须源自此处）\n" + sourceContent;
         }
-        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + """
+        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT + "\n\n" + """
 
             你是知识库的增量编译器。请将下面的新内容融合到现有 Wiki 页面中，生成更新后的完整页面（Markdown 格式）。
 
@@ -317,9 +317,9 @@ public class IngestPrompts {
             原则：
             1. 保留现有页面的有效信息，不要丢弃。现有页面的 Markdown 格式风格（标题层级、表格结构、链接格式等）必须保持一致，新融合的内容要融入现有风格。
             2. 仅将结构化导航索引中确实有新增信息的差异点融合到适当章节，融合时必须以原始文件内容中的具体表述为事实来源，不要为了"充实"而展开原始文件没有的内容。
-            3. 对于冲突信息，以原始文件内容为准，并在该处用「[已更新]」注释说明变更。
+            3. 对于冲突信息，忠实并列呈现双方主张与各自来源，用「（另有观点认为...）」格式标注新主张，严禁裁决、严禁择一保留。
             4. 新内容中未涉及的章节保持原样不动。
-            5. 在「参考来源」章节追加新的来源信息（如果有）。
+            5. 新增的每条事实性陈述必须紧随「（来源：<来源名称>）」标注；不得改写、压缩或删除现有页面中已标注来源的陈述。
 
             """ + PromptTemplate.MARKDOWN_OUTPUT_CONSTRAINT + """
 
@@ -342,15 +342,13 @@ public class IngestPrompts {
         if (schemaPageTemplate != null && !schemaPageTemplate.isBlank()) {
             pageStructureGuidance = "页面结构请严格遵循上方 Schema 骨架中「## 3. 页面模板」的定义来组织章节。如果 Schema 页面模板中定义了必需章节，确保每个必需章节都有实质性内容。";
         } else {
-            pageStructureGuidance = "页面应包含：\n"
-                + "1. 标题（一级标题，使用实体名称）\n"
-                + "2. 概述（3-5句话介绍该实体的核心信息、定位和重要性，必须基于原始文件中的具体表述）\n"
-                + "3. 详细信息（从原始文件中提取与该实体相关的所有细节：属性、职责、规则、关联等，而非从导航索引中展开）\n"
-                + "4. 关联关系（以叙述性段落描述该实体与其他实体/概念的关联，在叙述中自然嵌入 [[页面标题]] 链接。禁止生成纯链接平铺列表）\n"
-                + "5. 参考来源";
+            pageStructureGuidance = "页面结构（实体汇集台，遵循忠实编译约束）：\n"
+                + "1. 概述（逐条列出该实体在源文档中被明确陈述的核心事实，每条紧随「（来源：<来源名称>）」标注，不写 H1 标题）\n"
+                + "2. 详细信息（从源文档中逐条提取与该实体相关的陈述：属性、职责、规则、关联等，保持原始表述粒度，每条紧随「（来源：<来源名称>）」标注）\n"
+                + "3. 关联关系（以叙述性段落描述该实体与其他实体/概念的关联，在叙述中自然嵌入 [[页面标题]] 链接。禁止生成纯链接平铺列表）";
         }
 
-        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n---\n\n"
+        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT + "\n\n---\n\n"
             + "根据下方用户消息中的原始文件内容和结构化导航索引，为实体「" + entityName + "」生成一个独立的 Wiki 页面（Markdown 格式）。\n"
             + "用户消息包含【原始文件内容】（事实来源）和【结构化导航索引】（写作方向指引）两个部分。\n\n"
             + "实体类型：" + entityType + "\n\n"
@@ -410,23 +408,17 @@ public class IngestPrompts {
             + "  * 有精确数值数据 → 可规划 echarts（风险高，需源文档数字精确且可直接引用）\n"
             + "  宁可不规划某类富元素，也不要让后续写作阶段被迫构造不准确的图表）\n"
             + "- consistencyRules: 全局一致性约束（JSON对象，包含以下子字段：\n"
-            + "  * termMap: 术语映射表（JSON对象，key为标准术语，value为变体列表。"
-            + "例如 {\"合规官\": [\"合规专员\", \"合规负责人\"]} 表示所有页面统一使用「合规官」，不使用变体）\n"
             + "  * forbiddenPhrases: 禁用短语列表（string[]，如 [\"大概\", \"差不多\"]，所有页面禁止使用这些模糊表述）\n"
             + "  * requiredStructure: 页面必需章节（JSON对象，key为页面类型模式如 entity_* 或 summary，"
             + "value为必需章节标题列表 string[]。例如 {\"entity_*\": [\"定义\", \"职责\"]}）\n"
-            + "  * rules: 自然语言规则列表（string[]，补充上述结构化规则的额外约定）\n"
-            + "  注意：termMap 是最关键的——仔细检查源文档中的同义术语，确保每个同义术语组只保留一个标准名称）\n"
+            + "  * rules: 自然语言规则列表（string[]，补充上述结构化规则的额外约定））\n"
             + "- conflictAnnotations: 矛盾标注列表（JSON数组，每个元素包含：pagePath:涉及页面路径、conflictType:矛盾类型"
             + "（value_conflict/fact_conflict/definition_conflict/temporal_conflict）、"
             + "existingClaim:现有页面中的主张、newClaim:本次新内容的相反主张、"
-            + "resolution:处置方式（annotate_both/annotate_and_patch/source_priority/newer_wins）、"
+            + "resolution:处置方式（固定值 annotate_both）、"
             + "sourceRef:新主张的来源引用）。若本次摄入内容与现有页面无矛盾，返回空数组 []。\n\n"
-            + "矛盾处置策略说明：\n"
-            + "- annotate_both：标注双方观点，保留原有主张的同时追加新主张，用「（另有观点认为...）」格式\n"
-            + "- annotate_and_patch：标注双方 + 触发Schema补丁建议，用于暴露系统性定义冲突\n"
-            + "- source_priority：按来源层级裁决（学术论文>官方报告>行业分析>技术博客>个人笔记），高优先级来源胜出\n"
-            + "- newer_wins：最新来源胜出，用于时效性强的信息（如统计数据、版本号）\n\n"
+            + "冲突处置原则：本知识库为忠实编译模式，所有冲突一律 annotate_both——并列呈现双方主张与各自来源，"
+            + "禁止裁决、禁止来源优先级排序、禁止时效优先。\n\n"
             + "元数据：" + metadataJson + "\n\n"
             + (entityRelationshipSummary != null && !entityRelationshipSummary.isBlank()
                 ? entityRelationshipSummary + "\n\n"
@@ -450,14 +442,14 @@ public class IngestPrompts {
         if (schemaPageTemplate != null && !schemaPageTemplate.isBlank()) {
             structureHint = "页面结构请严格遵循上方 Schema 骨架中「## 3. 页面模板」的定义来组织章节，不要自行发明结构。如果 Schema 页面模板中定义了必需章节，确保每个必需章节都有实质性内容。";
         } else {
-            structureHint = "页面应包含以下结构（可根据内容灵活调整）：\n"
-                + "1. 元数据表格（标题、类型、标签、创建日期、状态等键值对，必须用表格呈现）\n"
-                + "2. 概述（5-8句话详细概括核心内容，包含关键结论和要点）\n"
+            structureHint = "页面结构（来源编译页，遵循忠实编译约束，可根据内容灵活调整）：\n"
+                + "1. 文档结构地图（列出源文档的章节结构，帮助读者定位原文，不写 H1 标题、不写元数据表格）\n"
+                + "2. 关键陈述（逐条列出源文档明确陈述的关键事实、数据、规则，保持原始表述粒度）\n"
                 + "3. 核心内容章节（按主题分节，每节聚焦一个方面，用 ## 或 ### 标题）\n"
-                + "4. 关系与关联（以叙述性段落描述与其他知识页面的关系，在叙述中自然嵌入 [[页面标题]] 链接。禁止生成纯链接平铺列表）\n"
-                + "5. 参考来源";
+                + "4. 原文引用（对规则条款、定义表述、量化指标，使用 blockquote（>）引用原文）\n"
+                + "5. 来源未提供的信息（列出读者可能期待但源文档未明确陈述的主题清单）";
         }
-        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + """
+        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT + "\n\n" + """
 
             根据下方用户消息中的原始文件内容、结构化导航索引、元数据和全局写作计划，生成摘要页。
             用户消息包含【原始文件内容】（事实来源）和【结构化导航索引】（写作方向指引）两个部分。
@@ -496,14 +488,12 @@ public class IngestPrompts {
         if (schemaPageTemplate != null && !schemaPageTemplate.isBlank()) {
             pageStructureGuidance = "页面结构请严格遵循上方 Schema 骨架中「## 3. 页面模板」的定义来组织章节。如果 Schema 页面模板中定义了必需章节，确保每个必需章节都有实质性内容。";
         } else {
-            pageStructureGuidance = "页面应包含以下结构：\n"
-                + "1. 元数据表格（实体名称、类型、标签、创建日期等，必须用表格呈现）\n"
-                + "2. 概述（3-5句话介绍该实体的核心信息和定位）\n"
-                + "3. 详细信息（按主题分节，每节聚焦一个方面：属性、职责、规则、关联等）\n"
-                + "4. 关联关系（以叙述性段落描述与其他实体/概念的关系，在叙述中自然嵌入 [[页面标题]] 链接。禁止生成纯链接平铺列表）\n"
-                + "5. 参考来源";
+            pageStructureGuidance = "页面结构（实体汇集台，遵循忠实编译约束）：\n"
+                + "1. 概述（逐条列出该实体在源文档中被明确陈述的核心事实，每条紧随「（来源：<来源名称>）」标注，不写 H1 标题、不写元数据表格）\n"
+                + "2. 详细信息（按主题分节，从源文档中逐条提取与该实体相关的陈述：属性、职责、规则、关联等，保持原始表述粒度，每条紧随「（来源：<来源名称>）」标注）\n"
+                + "3. 关联关系（以叙述性段落描述与其他实体/概念的关系，在叙述中自然嵌入 [[页面标题]] 链接。禁止生成纯链接平铺列表）";
         }
-        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n"
+        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT + "\n\n"
             + "根据下方用户消息中的原始文件内容和结构化导航索引，为实体「" + entityName + "」（类型：" + entityType + "）生成 Wiki 页面。"
             + "用户消息包含【原始文件内容】（事实来源）和【结构化导航索引】（写作方向指引）两个部分。"
             + "严格遵循写作计划中该实体的定位（positioning）、重点方向（focus）和交叉引用约定（crossReferences）。\n\n"
@@ -524,43 +514,33 @@ public class IngestPrompts {
             + (structuredSource ? STRUCTURED_SOURCE_CONSTRAINT : "");
     }
 
-    public String mergeIntoExistingPageWithPlan(String existingContent, String sourceContent, String newAnalysis, String newMetadataJson, String action, String writingPlanJson) {
-        String sourceSection = "";
-        if (sourceContent != null && !sourceContent.isBlank()) {
-            sourceSection = "\n\n【原始文件内容】（事实来源 —— 最高优先级，融合新内容时所有新增的事实性内容必须源自此处）\n" + sourceContent;
-        }
-        return PromptTemplate.SOURCE_FIDELITY_PRINCIPLE + "\n\n" + PromptTemplate.knowledgeNormalizationPrinciple() + "\n\n" + """
+    public String mergeEntityClaims(String existingEntries, String newSourceMaterial) {
+        return PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT + "\n\n" + """
+            你是实体页的增量编译器。下面给出【现有条目清单】（编号 [n]）与【新来源材料】，请判断新来源中有哪些事实应进入该实体页，并以候选条目的形式输出。
 
-            你是知识库的增量编译器。根据全局写作计划，将新内容融合到现有 Wiki 页面中，生成更新后的完整页面。
+            """ + PromptTemplate.JSON_OUTPUT_CONSTRAINT + """
+            输出严格 JSON 数组，每个元素包含：
+            - section: 目标章节名（引用现有条目时给出其所属章节；relation 为 new 时给出应归入或新建的章节）
+            - claim: 陈述内容（忠实于来源原文，保持原始表述粒度，不推断、不合并、不裁决）
+            - source: 来源名称（用于「（来源：<来源名称>）」标注，必填）
+            - quote: 来源原文引用（可选，规则条款/定义/量化指标建议提供）
+            - relation: 关系类型，取值必须是以下之一：
+              * new：新来源陈述了现有条目未覆盖的事实
+              * duplicate_of:<n>：与第 n 条现有条目实质相同（将为其追加来源标注）
+              * conflict_with:<n>：与第 n 条现有条目冲突（两条将并列保留，不做裁决）
 
-            用户消息中包含【原始文件内容】（事实来源）和【结构化导航索引】（写作方向指引）两个部分。
+            要求：
+            - 只提取新来源材料中明确陈述的、与该实体直接相关的事实
+            - 来源未陈述的内容不得输出；不确定的内容不输出
+            - relation 为 duplicate_of/conflict_with 时，<n> 必须是【现有条目清单】中真实存在的编号
+            - 严禁改写既有陈述、严禁选择"更可信"版本；冲突一律用 conflict_with 标注
+            - 若无任何新事实可补充，输出空数组 []
 
-            原则：
-            1. 保留现有页面的有效信息，不要丢弃。现有页面的 Markdown 格式风格（标题层级、表格结构、链接格式等）必须保持一致，新融合的内容要融入现有风格。
-            2. 仅将结构化导航索引中确实有新增信息的差异点融合到适当章节，融合时必须以原始文件内容中的具体表述为事实来源。
-            3. 遵循写作计划中该页面的更新方向和交叉引用约定。
-            4. 保持一致性约束中的术语和关系表述规范。
-            5. 新内容中未涉及的章节保持原样不动。
+            【现有条目清单】
+            """ + existingEntries + """
 
-            矛盾处置规则（Schema Section 6.5）：
-            - 若新内容与现有页面存在事实冲突，检查 WritingPlan 中的 conflictAnnotations
-            - 若 conflictAnnotations 有对应的处置方案，按方案执行：
-              * annotate_both：保留双方观点，添加「（另有观点认为...）」标注
-              * source_priority：按来源层级裁决，学术论文 > 官方报告 > 行业分析 > 技术博客 > 个人笔记
-              * newer_wins：保留新内容，标注「（已更新，原版本：...）」
-              * annotate_and_patch：标注双方 + 在页面末尾添加 Schema 补丁建议区块
-            - 若无明确处置方案，默认使用 annotate_both 策略
-
-            """ + PromptTemplate.MARKDOWN_OUTPUT_CONSTRAINT + """
-
-            【全局写作计划】
-            """ + writingPlanJson + """
-
-            操作类型：""" + action + "\n\n"
-            + "现有页面内容：\n" + existingContent
-            + sourceSection
-            + "\n\n【结构化导航索引】（写作方向指引 —— 帮助你确定需要融合的差异点，但不是事实来源）\n" + newAnalysis + "\n\n"
-            + "新内容元数据：\n" + newMetadataJson;
+            【新来源材料】
+            """ + newSourceMaterial;
     }
 
     public String referenceSummary() {
@@ -575,6 +555,9 @@ public class IngestPrompts {
             + "要求：\n"
             + "- 严格基于原文，不推断不构造\n"
             + "- 保留条款编号、阈值、条件分支等精确信息\n"
+            + "- 保留原文结构：摘要按原文条款顺序组织，不重新编排、不合并独立条款\n"
+            + "- 引用原文：规则条款、定义、量化指标使用 blockquote（>）引用原文表述，不得改写\n"
+            + "- 最小改写：只做归纳性连接，不替换原文明示的表述与责任主体\n"
             + "- 直接输出，不加前缀标记";
     }
 
@@ -593,6 +576,9 @@ public class IngestPrompts {
             要求：
             - 严格基于提供的原文片段，不推断不构造
             - 保留条款编号、阈值、条件分支等精确信息
+            - 保留原文结构：corePoints 按原文条款顺序排列，不重新编排、不合并独立条款
+            - 引用原文：定义与规则条款的 corePoints 应引用原文关键句，不做归纳之外的改写
+            - 最小改写：不替换原文明示的表述与责任主体
             - 每个章节的 corePoints 最多8条，keyTerms 最多10个
             """;
     }

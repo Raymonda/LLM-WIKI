@@ -2,6 +2,7 @@ package org.cn.liuwt.llmwiki.integration.storage;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -11,16 +12,22 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3ClientBuilder;
+import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.services.s3.model.S3Object;
 
 import java.io.InputStream;
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
 
 @Component
 @ConditionalOnProperty(name = "llmwiki.storage.provider", havingValue = "s3")
@@ -36,6 +43,7 @@ public class S3StorageProvider implements StorageProvider {
     @Value("${llmwiki.storage.s3.public-url:}")
     private String publicUrl;
 
+    @Autowired
     public S3StorageProvider(
             @Value("${llmwiki.storage.s3.endpoint}") String endpoint,
             @Value("${llmwiki.storage.s3.access-key}") String accessKey,
@@ -54,6 +62,12 @@ public class S3StorageProvider implements StorageProvider {
             builder.forcePathStyle(true);
         }
         this.s3Client = builder.build();
+    }
+
+    S3StorageProvider(S3Client s3Client, String bucketPrefix, String publicUrl) {
+        this.s3Client = s3Client;
+        this.bucketPrefix = bucketPrefix;
+        this.publicUrl = publicUrl;
     }
 
     private String bucketName(String scopeId) {
@@ -252,6 +266,51 @@ public class S3StorageProvider implements StorageProvider {
                 return false;
             }
             throw new RuntimeException("Failed to check S3 bucket: " + bucket, e);
+        }
+    }
+
+    @Override
+    public void move(String scopeId, String fromPath, String toPath) {
+        String bucket = bucketName(scopeId);
+        String fromKey = objectKey(fromPath);
+        String toKey = objectKey(toPath);
+        try {
+            CopyObjectRequest copyRequest = CopyObjectRequest.builder()
+                    .sourceBucket(bucket)
+                    .sourceKey(fromKey)
+                    .destinationBucket(bucket)
+                    .destinationKey(toKey)
+                    .build();
+            s3Client.copyObject(copyRequest);
+            DeleteObjectRequest deleteRequest = DeleteObjectRequest.builder()
+                    .bucket(bucket)
+                    .key(fromKey)
+                    .build();
+            s3Client.deleteObject(deleteRequest);
+        } catch (S3Exception e) {
+            log.error("Failed to move S3 object: bucket={}, from={}, to={}", bucket, fromKey, toKey, e);
+            throw new RuntimeException("Failed to move S3 object: " + fromPath + " -> " + toPath, e);
+        }
+    }
+
+    @Override
+    public List<String> list(String scopeId, String dirPath) {
+        String bucket = bucketName(scopeId);
+        String prefix = dirPath.endsWith("/") ? dirPath : dirPath + "/";
+        try {
+            ListObjectsV2Request request = ListObjectsV2Request.builder()
+                    .bucket(bucket)
+                    .prefix(prefix)
+                    .build();
+            ListObjectsV2Response response = s3Client.listObjectsV2(request);
+            List<String> keys = new ArrayList<>();
+            for (S3Object object : response.contents()) {
+                keys.add(object.key());
+            }
+            return keys;
+        } catch (S3Exception e) {
+            log.error("Failed to list S3 objects: bucket={}, prefix={}", bucket, prefix, e);
+            throw new RuntimeException("Failed to list S3 objects: " + dirPath, e);
         }
     }
 

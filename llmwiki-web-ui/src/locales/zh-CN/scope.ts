@@ -57,6 +57,8 @@ export default {
   auditPageSensitivity: '敏感度变更',
   auditSourceUpload: '源文档上传',
   auditSourceDelete: '源文档删除',
+  auditSourceDeprecate: '源文档废弃',
+  auditSourceUndeprecate: '源文档恢复',
   auditSubCreate: '创建订阅',
   auditSubCancel: '取消订阅',
   auditMemberAdd: '添加成员',

@@ -1,6 +1,7 @@
 package org.cn.liuwt.llmwiki.integration.storage;
 
 import java.io.InputStream;
+import java.util.List;
 
 public interface StorageProvider {
 
@@ -27,4 +28,8 @@ public interface StorageProvider {
     boolean scopeDirectoryExists(String scopeId);
 
     void moveScopeDirectory(String oldScopeId, String newScopeId);
+
+    void move(String scopeId, String fromPath, String toPath);
+
+    List<String> list(String scopeId, String dirPath);
 }

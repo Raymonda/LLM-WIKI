@@ -16,6 +16,7 @@ public class NotificationDO {
     private Long scopeId;
     private Long relatedPageId;
     private Long executionId;
+    private Long batchId;
     private Integer isRead;
     private LocalDateTime createdAt;
 }

@@ -102,6 +102,7 @@ export default {
   hasProblems: '有问题',
   conflictWarning: '有矛盾',
   deprecatedLabel: '已过时',
+  sourceDeprecated: '已废弃',
   // WikiPageView
   defaultPageTitle: '知识页面',
   minuteReading: '{0} 分钟',

@@ -102,6 +102,7 @@ export default {
   hasProblems: 'Has Issues',
   conflictWarning: 'Conflict',
   deprecatedLabel: 'Deprecated',
+  sourceDeprecated: 'Deprecated',
   // WikiPageView
   defaultPageTitle: 'Knowledge Page',
   minuteReading: '{0} min',

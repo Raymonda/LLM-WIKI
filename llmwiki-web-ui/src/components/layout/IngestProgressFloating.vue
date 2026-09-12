@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { CheckCircle2, AlertTriangle, Loader2, X, XCircle, ArrowRight, PauseCircle } from 'lucide-vue-next'
+import { CheckCircle2, AlertTriangle, Loader2, X, XCircle, ArrowRight, PauseCircle, ClipboardCheck } from 'lucide-vue-next'
 import { useIngestProgressStore } from '@/stores/ingestProgress'
+import { useIngestBatchStore } from '@/stores/ingestBatch'
 import { formatRemaining } from '@/views/ingest/progressModel'
 
 const store = useIngestProgressStore()
+const batchStore = useIngestBatchStore()
 const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
@@ -27,6 +29,8 @@ const mostUrgentTask = computed(() => {
   if (cancelled) return cancelled
   const running = all.find(t => t.isPhaseRunning)
   if (running) return running
+  const reviewing = all.find(t => t.currentStep === 'review')
+  if (reviewing) return reviewing
   const paused = all.find(t => t.status === 'paused')
   if (paused) return paused
   const done = all.find(t => t.currentStep === 'done')
@@ -41,6 +45,20 @@ const extraTaskCount = computed(() => {
 const show = computed(() => {
   return mostUrgentTask.value !== null
 })
+
+const awaitingBatch = computed(() => {
+  return batchStore.inbox.find(b => b.awaitingCount > 0) ?? null
+})
+
+const showBatchFloating = computed(() => {
+  return !show.value && awaitingBatch.value !== null
+})
+
+function openBatchReview() {
+  const batch = awaitingBatch.value
+  if (!batch) return
+  router.push({ path: '/ingest', query: { batch: String(batch.batchId) } })
+}
 
 const ringSize = 28
 const ringRadius = 12
@@ -57,6 +75,7 @@ const displayPhase = computed(() => {
   if (t.status === 'cancelled') return 'cancelled'
   if (t.status === 'paused') return 'paused'
   if (t.currentStep === 'done') return 'done'
+  if (t.currentStep === 'review') return 'review'
   if (t.isPhaseRunning) return 'executing'
   return 'analyzing'
 })
@@ -73,6 +92,7 @@ const phaseLabel = computed(() => {
     case 'failed': return t('ingest.floatingPhaseFailed')
     case 'cancelled': return t('ingest.floatingPhaseCancelled')
     case 'paused': return t('ingest.floatingPhasePaused')
+    case 'review': return t('ingest.floatingPhaseReview')
     default: return t('ingest.floatingPhaseDefault')
   }
 })
@@ -84,6 +104,7 @@ const secondaryLine = computed(() => {
   if (task.status === 'cancelled') return t('ingest.floatingPhaseCancelled')
   if (task.status === 'failed' || task.status === 'budget_exhausted') return task.pipelineError || t('ingest.floatingFailedRetry')
   if (task.currentStep === 'done') return t('ingest.floatingClickResult')
+  if (task.currentStep === 'review') return t('ingest.floatingReviewHint')
   if (store.currentTip) return store.currentTip
   return store.remainingMs > 0 ? t('ingest.floatingRemaining', [formatRemaining(store.remainingMs)]) : ''
 })
@@ -124,6 +145,14 @@ watch(show, (visible) => {
     }, AUTO_DISMISS_MS)
   }
 })
+
+onMounted(() => {
+  batchStore.startPolling()
+})
+
+onUnmounted(() => {
+  batchStore.stopPolling()
+})
 </script>
 
 <template>
@@ -147,6 +176,9 @@ watch(show, (visible) => {
         </template>
         <template v-else-if="displayPhase === 'paused'">
           <PauseCircle :size="20" />
+        </template>
+        <template v-else-if="displayPhase === 'review'">
+          <ClipboardCheck :size="20" />
         </template>
         <template v-else-if="displayPhase === 'failed'">
           <AlertTriangle :size="20" />
@@ -188,10 +220,43 @@ watch(show, (visible) => {
 
       <div class="ingest-floating__tail">
         <span v-if="extraTaskCount > 0" class="ingest-floating__badge">{{ extraTaskCount }}</span>
+        <span
+          v-if="batchStore.awaitingTotal > 0"
+          class="ingest-floating__badge ingest-floating__badge--awaiting"
+          :title="t('ingest.inboxTitle')"
+        >{{ batchStore.awaitingTotal }}</span>
         <button v-if="canClose" class="ingest-floating__close" :aria-label="t('common.close')" @click.stop="handleClose">
           <X :size="14" />
         </button>
         <ArrowRight v-else :size="14" class="ingest-floating__arrow" />
+      </div>
+    </div>
+  </Transition>
+
+  <Transition name="ingest-floating-fade">
+    <div
+      v-if="showBatchFloating && awaitingBatch"
+      class="ingest-floating ingest-floating--review"
+      :class="{ 'ingest-floating--editor': isEditorRoute }"
+      role="button"
+      tabindex="0"
+      @click="openBatchReview"
+      @keydown.enter="openBatchReview"
+      @keydown.space.prevent="openBatchReview"
+    >
+      <div class="ingest-floating__indicator">
+        <ClipboardCheck :size="20" />
+      </div>
+
+      <div class="ingest-floating__body">
+        <div class="ingest-floating__head">
+          <span class="ingest-floating__phase">{{ t('ingest.inboxTitle') }}</span>
+        </div>
+        <div class="ingest-floating__sub">{{ t('ingest.batchFloatingAwaiting', [awaitingBatch.awaitingCount]) }}</div>
+      </div>
+
+      <div class="ingest-floating__tail">
+        <ArrowRight :size="14" class="ingest-floating__arrow" />
       </div>
     </div>
   </Transition>
@@ -316,6 +381,10 @@ watch(show, (visible) => {
   line-height: 1;
 }
 
+.ingest-floating__badge--awaiting {
+  background: var(--warning);
+}
+
 .ingest-floating__close {
   display: inline-flex;
   align-items: center;
@@ -375,6 +444,15 @@ watch(show, (visible) => {
 
 .ingest-floating--paused {
   border-color: var(--warning);
+}
+
+.ingest-floating--review .ingest-floating__indicator {
+  background: var(--accent-light);
+  color: var(--accent-primary);
+}
+
+.ingest-floating--review {
+  border-color: var(--accent-primary);
 }
 
 @keyframes ingest-floating-spin {

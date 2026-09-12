@@ -274,4 +274,35 @@ class NASStorageProviderTest {
         assertThrows(SecurityException.class, () ->
             provider.moveScopeDirectory("../../etc", "new-scope"));
     }
+
+    @Test
+    void shouldMoveFileWithinScope(@TempDir Path tempDir) {
+        NASStorageProvider provider = createProvider(tempDir);
+
+        provider.write("test-scope", "raw/.tmp/a", "payload".getBytes(StandardCharsets.UTF_8));
+        provider.move("test-scope", "raw/.tmp/a", "raw/ab/cd/hash");
+
+        assertFalse(provider.exists("test-scope", "raw/.tmp/a"));
+        assertEquals("payload", new String(provider.read("test-scope", "raw/ab/cd/hash"), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void shouldListRegularFilesSortedByPath(@TempDir Path tempDir) throws Exception {
+        NASStorageProvider provider = createProvider(tempDir);
+
+        provider.write("test-scope", "raw/.tmp/b", "b".getBytes(StandardCharsets.UTF_8));
+        provider.write("test-scope", "raw/.tmp/a", "a".getBytes(StandardCharsets.UTF_8));
+        java.nio.file.Files.createDirectories(tempDir.resolve("test-scope/raw/.tmp/nested"));
+
+        java.util.List<String> files = provider.list("test-scope", "raw/.tmp");
+
+        assertEquals(java.util.List.of("raw/.tmp/a", "raw/.tmp/b"), files);
+    }
+
+    @Test
+    void shouldReturnEmptyListWhenDirectoryMissing(@TempDir Path tempDir) {
+        NASStorageProvider provider = createProvider(tempDir);
+
+        assertTrue(provider.list("test-scope", "raw/.tmp").isEmpty());
+    }
 }

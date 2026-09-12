@@ -19,6 +19,7 @@ import org.slf4j.LoggerFactory;
 import org.cn.liuwt.llmwiki.domain.service.wiki.WikiFileServiceImpl;
 import org.cn.liuwt.llmwiki.domain.model.harness.LintRulesConfig;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.parser.SchemaSection6Parser;
+import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionHistoryService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -50,6 +51,9 @@ public class LintFindingService {
     @Autowired
     private SchemaSection6Parser schemaSection6Parser;
 
+    @Autowired
+    private ExecutionHistoryService executionHistoryService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public Long createFinding(Long scopeId, Long executionId, String findingType,
@@ -63,13 +67,16 @@ public class LintFindingService {
                                String priority, String title, String detail,
                                String pagePath, Long assetId, Map<String, Object> extra,
                                LintRulesConfig rulesConfig) {
-        LintFindingDO existing = lintFindingMapper.selectOne(
-            new LambdaQueryWrapper<LintFindingDO>()
-                .eq(LintFindingDO::getScopeId, scopeId)
-                .eq(LintFindingDO::getFindingType, findingType)
-                .eq(LintFindingDO::getAssetId, assetId)
-                .in(LintFindingDO::getStatus, "open", "repairing")
-        );
+        LambdaQueryWrapper<LintFindingDO> existingWrapper = new LambdaQueryWrapper<LintFindingDO>()
+            .eq(LintFindingDO::getScopeId, scopeId)
+            .eq(LintFindingDO::getFindingType, findingType)
+            .in(LintFindingDO::getStatus, "open", "repairing", "awaiting_approval");
+        if (assetId != null) {
+            existingWrapper.eq(LintFindingDO::getAssetId, assetId);
+        } else {
+            existingWrapper.isNull(LintFindingDO::getAssetId);
+        }
+        LintFindingDO existing = lintFindingMapper.selectOne(existingWrapper);
         if (existing != null) {
             existing.setTitle(title);
             existing.setDetail(detail);
@@ -90,15 +97,17 @@ public class LintFindingService {
             log.debug("Updated existing lint_finding id={}, type={}", existing.getId(), findingType);
             return existing.getId();
         }
-        LintFindingDO dismissed = lintFindingMapper.selectOne(
-            new LambdaQueryWrapper<LintFindingDO>()
-                .eq(LintFindingDO::getScopeId, scopeId)
-                .eq(LintFindingDO::getFindingType, findingType)
-                .eq(LintFindingDO::getAssetId, assetId)
-                .eq(LintFindingDO::getStatus, "dismissed")
-                .orderByDesc(LintFindingDO::getId)
-                .last("LIMIT 1")
-        );
+        LambdaQueryWrapper<LintFindingDO> dismissedWrapper = new LambdaQueryWrapper<LintFindingDO>()
+            .eq(LintFindingDO::getScopeId, scopeId)
+            .eq(LintFindingDO::getFindingType, findingType)
+            .eq(LintFindingDO::getStatus, "dismissed");
+        if (assetId != null) {
+            dismissedWrapper.eq(LintFindingDO::getAssetId, assetId);
+        } else {
+            dismissedWrapper.isNull(LintFindingDO::getAssetId);
+        }
+        dismissedWrapper.orderByDesc(LintFindingDO::getId).last("LIMIT 1");
+        LintFindingDO dismissed = lintFindingMapper.selectOne(dismissedWrapper);
         if (dismissed != null && !isRevivalAllowed(dismissed, assetId)) {
             log.debug("Skip creating finding type={}, assetId={}: user dismissed and page unchanged",
                 findingType, assetId);
@@ -153,11 +162,168 @@ public class LintFindingService {
         return contentUpdatedAt != null && contentUpdatedAt.isAfter(dismissedAt);
     }
 
+    public enum ConflictMatchType { SAME, REVERSED, NONE }
+
+    public record ConflictCard(String title, String detail, String priority,
+                               String fromPagePath, Long fromPageId, String fromPageTitle,
+                               String relatedPagePath, Long relatedPageId, String relatedPageTitle,
+                               String conflictType, String claimA, String claimB, String source) {}
+
+    public Long upsertConflictFinding(Long scopeId, Long executionId, ConflictCard card) {
+        List<LintFindingDO> candidates = lintFindingMapper.selectList(
+            new LambdaQueryWrapper<LintFindingDO>()
+                .eq(LintFindingDO::getScopeId, scopeId)
+                .eq(LintFindingDO::getFindingType, "conflict")
+                .in(LintFindingDO::getStatus, "open", "repairing", "awaiting_approval"));
+
+        for (LintFindingDO candidate : candidates) {
+            if (matchConflictCandidate(candidate, card) == ConflictMatchType.NONE) {
+                continue;
+            }
+            candidate.setTitle(card.title());
+            candidate.setDetail(card.detail());
+            candidate.setPriority(card.priority());
+            candidate.setExecutionId(executionId);
+            candidate.setPagePath(card.fromPagePath());
+            candidate.setAssetId(card.fromPageId());
+            candidate.setExtra(writeConflictExtra(card));
+            lintFindingMapper.updateById(candidate);
+            log.debug("Updated conflict finding id={} for {} ↔ {}", candidate.getId(),
+                card.fromPagePath(), card.relatedPagePath());
+            return candidate.getId();
+        }
+
+        LambdaQueryWrapper<LintFindingDO> dismissedWrapper = new LambdaQueryWrapper<LintFindingDO>()
+            .eq(LintFindingDO::getScopeId, scopeId)
+            .eq(LintFindingDO::getFindingType, "conflict")
+            .eq(LintFindingDO::getStatus, "dismissed");
+        if (card.fromPageId() != null) {
+            dismissedWrapper.eq(LintFindingDO::getAssetId, card.fromPageId());
+        } else if (card.fromPagePath() != null) {
+            dismissedWrapper.eq(LintFindingDO::getPagePath, card.fromPagePath());
+        } else {
+            dismissedWrapper.isNull(LintFindingDO::getAssetId);
+        }
+        dismissedWrapper.orderByDesc(LintFindingDO::getId).last("LIMIT 1");
+        LintFindingDO dismissed = lintFindingMapper.selectOne(dismissedWrapper);
+        if (dismissed != null && !isRevivalAllowed(dismissed, card.fromPageId())) {
+            log.debug("Skip conflict card {} ↔ {}: dismissed and page unchanged",
+                card.fromPagePath(), card.relatedPagePath());
+            return null;
+        }
+
+        LintFindingDO finding = new LintFindingDO();
+        finding.setScopeId(scopeId);
+        finding.setExecutionId(executionId);
+        finding.setFindingType("conflict");
+        finding.setPriority(card.priority());
+        finding.setTitle(card.title());
+        finding.setDetail(card.detail());
+        finding.setPagePath(card.fromPagePath());
+        finding.setAssetId(card.fromPageId());
+        finding.setStatus("open");
+        finding.setHandlingMethod("ruling_brief");
+        finding.setExtra(writeConflictExtra(card));
+        lintFindingMapper.insert(finding);
+        log.debug("Created conflict finding id={} for {} ↔ {}", finding.getId(),
+            card.fromPagePath(), card.relatedPagePath());
+        return finding.getId();
+    }
+
+    private ConflictMatchType matchConflictCandidate(LintFindingDO candidate, ConflictCard card) {
+        Map<String, Object> extra = parseExtraMap(candidate.getExtra());
+        Long candidateRelatedId = asLong(extra.get("relatedPageId"));
+        String candidateRelatedPath = firstNonBlank(stringValue(extra.get("relatedPagePath")),
+            stringValue(extra.get("pagePathB")));
+        String candidateFromPath = firstNonBlank(stringValue(extra.get("fromPagePath")),
+            candidate.getPagePath());
+
+        if (candidate.getAssetId() != null && card.fromPageId() != null
+                && candidateRelatedId != null && card.relatedPageId() != null) {
+            if (candidate.getAssetId().equals(card.fromPageId())
+                    && candidateRelatedId.equals(card.relatedPageId())) {
+                return ConflictMatchType.SAME;
+            }
+            if (candidate.getAssetId().equals(card.relatedPageId())
+                    && candidateRelatedId.equals(card.fromPageId())) {
+                return ConflictMatchType.REVERSED;
+            }
+        }
+
+        if (sameText(candidateFromPath, card.fromPagePath())) {
+            if (candidateRelatedId == null && candidateRelatedPath == null) {
+                return ConflictMatchType.SAME;
+            }
+            if (sameText(candidateRelatedPath, card.relatedPagePath())) {
+                return ConflictMatchType.SAME;
+            }
+        }
+        return ConflictMatchType.NONE;
+    }
+
+    private String writeConflictExtra(ConflictCard card) {
+        Map<String, Object> extra = new java.util.LinkedHashMap<>();
+        extra.put("fromPageId", card.fromPageId());
+        extra.put("fromPagePath", card.fromPagePath());
+        extra.put("fromPageTitle", card.fromPageTitle());
+        extra.put("relatedPageId", card.relatedPageId());
+        extra.put("relatedPagePath", card.relatedPagePath());
+        extra.put("relatedPageTitle", card.relatedPageTitle());
+        extra.put("conflictType", card.conflictType());
+        extra.put("claimA", card.claimA() != null ? card.claimA() : "");
+        extra.put("claimB", card.claimB() != null ? card.claimB() : "");
+        extra.put("source", card.source());
+        try {
+            return objectMapper.writeValueAsString(extra);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to serialize conflict extra", e);
+            return "{}";
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseExtraMap(String extraJson) {
+        if (extraJson == null || extraJson.isBlank()) return java.util.Collections.emptyMap();
+        try {
+            return objectMapper.readValue(extraJson, Map.class);
+        } catch (Exception e) {
+            return java.util.Collections.emptyMap();
+        }
+    }
+
+    private Long asLong(Object value) {
+        if (value instanceof Number n) return n.longValue();
+        if (value instanceof String s && !s.isBlank()) {
+            try { return Long.parseLong(s.trim()); } catch (NumberFormatException ignored) { }
+        }
+        return null;
+    }
+
+    private String stringValue(Object value) {
+        return value != null ? value.toString() : null;
+    }
+
+    private String firstNonBlank(String first, String second) {
+        return (first != null && !first.isBlank()) ? first : second;
+    }
+
+    private boolean sameText(String a, String b) {
+        return a != null && !a.isBlank() && a.equals(b);
+    }
+
+    public void updateExtraAndAsset(Long findingId, String extraJson, Long assetId) {
+        lintFindingMapper.update(null,
+            new LambdaUpdateWrapper<LintFindingDO>()
+                .eq(LintFindingDO::getId, findingId)
+                .set(LintFindingDO::getExtra, extraJson)
+                .set(assetId != null, LintFindingDO::getAssetId, assetId));
+    }
+
     @Transactional
     public int autoArchiveSupersededFindings(Long scopeId, Long currentExecutionId, Set<Long> touchedFindingIds) {
         LambdaQueryWrapper<LintFindingDO> queryWrapper = new LambdaQueryWrapper<LintFindingDO>()
             .eq(LintFindingDO::getScopeId, scopeId)
-            .in(LintFindingDO::getStatus, "open", "awaiting_approval", "auto_resolved")
+            .in(LintFindingDO::getStatus, "open", "awaiting_approval", "auto_resolved", "failed")
             .isNull(LintFindingDO::getArchivedAt);
         if (currentExecutionId != null) {
             queryWrapper.ne(LintFindingDO::getExecutionId, currentExecutionId);
@@ -249,14 +415,20 @@ public class LintFindingService {
         );
     }
 
+    private static final Set<String> VALID_FINDING_STATUSES = Set.of(
+        "open", "awaiting_approval", "repairing", "deferred",
+        "auto_resolved", "resolved", "dismissed", "rolled_back", "failed");
+
     public void updateStatus(Long findingId, String status) {
         LintFindingDO finding = lintFindingMapper.selectById(findingId);
         if (finding == null) {
-            return;
+            throw new BusinessException(ErrorCode.LINT_FINDING_NOT_FOUND, findingId);
         }
-        if (!isValidStatusTransition(finding.getStatus(), status)) {
-            log.warn("Invalid status transition: {} -> {} for finding id={}", finding.getStatus(), status, findingId);
-            return;
+        if (status == null || !VALID_FINDING_STATUSES.contains(status)
+                || !isValidStatusTransition(finding.getStatus(), status)) {
+            throw new BusinessException(ErrorCode.LINT_INVALID_STATUS_TRANSITION,
+                finding.getStatus() != null ? finding.getStatus() : "null",
+                status != null ? status : "null");
         }
         Set<String> terminalStatuses = Set.of("resolved", "dismissed", "rolled_back");
         boolean isTerminal = terminalStatuses.contains(status);
@@ -276,7 +448,7 @@ public class LintFindingService {
         List<Map<String, Object>> results = lintFindingMapper.selectMaps(
             new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<LintFindingDO>()
                 .eq("scope_id", scopeId)
-                .in("status", "open", "awaiting_approval", "repairing", "deferred")
+                .in("status", "open", "awaiting_approval", "repairing", "deferred", "failed")
                 .isNull("archived_at")
                 .ne("finding_type", "schema_violation")
                 .groupBy("priority")
@@ -410,7 +582,7 @@ public class LintFindingService {
     @Transactional
     public void autoResolve(Long findingId, String handlingMethod) {
         LintFindingDO finding = lintFindingMapper.selectById(findingId);
-        if (finding == null || !Set.of("open", "awaiting_approval").contains(finding.getStatus())) return;
+        if (finding == null || !Set.of("open", "awaiting_approval", "deferred").contains(finding.getStatus())) return;
         LocalDateTime now = LocalDateTime.now();
         lintFindingMapper.update(null,
             new LambdaUpdateWrapper<LintFindingDO>()
@@ -503,7 +675,11 @@ public class LintFindingService {
                 .eq(LintFindingDO::getId, findingId)
                 .set(LintFindingDO::getStatus, "dismissed")
                 .set(LintFindingDO::getExtra, extra)
+                .set(LintFindingDO::getArchivedAt, LocalDateTime.now())
         );
+        if (finding.getAssetId() != null) {
+            wikiFileService.recalcPageHealthStatus(finding.getScopeId(), finding.getAssetId());
+        }
         log.info("Dismissed lint_finding id={}, type={}, reason=AI rejected", findingId, finding.getFindingType());
     }
 
@@ -680,55 +856,6 @@ public class LintFindingService {
         } catch (Exception e) {
             log.error("Failed to approve link for finding id={}", findingId, e);
             throw new RuntimeException("批准链接失败: " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Phase 2 新增：用户确认创建交叉引用
-     */
-    @Transactional
-    public void approveLink(Long findingId, String sourceTitle, String targetTitle) {
-        LintFindingDO finding = lintFindingMapper.selectById(findingId);
-        if (finding == null || !"open".equals(finding.getStatus())) {
-            log.warn("Cannot approve link for finding id={}, status={}", findingId, finding != null ? finding.getStatus() : "not_found");
-            return;
-        }
-
-        try {
-            // 查找源页面和目标页面
-            WikiPageDO sourcePage = wikiPageMapper.selectOne(
-                new LambdaQueryWrapper<WikiPageDO>()
-                    .eq(WikiPageDO::getScopeId, finding.getScopeId())
-                    .eq(WikiPageDO::getTitle, sourceTitle)
-            );
-            WikiPageDO targetPage = wikiPageMapper.selectOne(
-                new LambdaQueryWrapper<WikiPageDO>()
-                    .eq(WikiPageDO::getScopeId, finding.getScopeId())
-                    .eq(WikiPageDO::getTitle, targetTitle)
-            );
-
-            if (sourcePage == null || targetPage == null) {
-                log.warn("Cannot find source or target page for link approval: {} -> {}", sourceTitle, targetTitle);
-                return;
-            }
-
-            // 创建链接记录（使用 LinkWritingService）
-            LinkWritingService.LinkSuggestion suggestion = new LinkWritingService.LinkSuggestion(
-                sourceTitle, targetTitle, "related",
-                "用户确认的交叉引用", 1.0, "manual", null
-            );
-            linkWritingService.upsertLinkRecord(finding.getScopeId(), suggestion);
-
-            // 标记 finding 为 resolved
-            autoResolve(findingId, "manual_approve");
-            
-            // 记录用户反馈
-            recordFeedback(findingId, "accepted");
-
-            log.info("Approved link for finding id={}: {} -> {}", findingId, sourceTitle, targetTitle);
-        } catch (Exception e) {
-            log.error("Failed to approve link for finding id={}", findingId, e);
-            throw e;
         }
     }
 
@@ -1019,7 +1146,7 @@ public class LintFindingService {
                 .eq(LintFindingDO::getAssetId, pageId)
                 .in(LintFindingDO::getStatus, "open", "awaiting_approval", "repairing", "failed")
         );
-        for (LintFindingDO f : otherOpenFindings) {
+        if (!otherOpenFindings.isEmpty()) {
             try {
                 wikiFileService.recalcPageHealthStatus(scopeId, pageId);
             } catch (Exception e) {
@@ -1058,6 +1185,48 @@ public class LintFindingService {
                 f.getId(), pageId, prevStatus);
         }
         wikiFileService.recalcPageHealthStatus(scopeId, pageId);
+    }
+
+    @Transactional
+    public void resolveSourceFindingsOnUndeprecate(Long scopeId, Long sourceId) {
+        List<WikiPageSourceDO> links = wikiPageSourceMapper.selectList(
+            new LambdaQueryWrapper<WikiPageSourceDO>()
+                .eq(WikiPageSourceDO::getScopeId, scopeId)
+                .eq(WikiPageSourceDO::getSourceId, sourceId)
+        );
+        if (links.isEmpty()) {
+            return;
+        }
+        Set<Long> pageIds = links.stream()
+            .map(WikiPageSourceDO::getPageId)
+            .collect(Collectors.toSet());
+        List<LintFindingDO> findings = lintFindingMapper.selectList(
+            new LambdaQueryWrapper<LintFindingDO>()
+                .eq(LintFindingDO::getScopeId, scopeId)
+                .eq(LintFindingDO::getFindingType, "deprecated_source")
+                .in(LintFindingDO::getAssetId, pageIds)
+                .in(LintFindingDO::getStatus, "open", "repairing")
+        );
+        if (findings.isEmpty()) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        for (LintFindingDO f : findings) {
+            lintFindingMapper.update(null,
+                new LambdaUpdateWrapper<LintFindingDO>()
+                    .eq(LintFindingDO::getId, f.getId())
+                    .set(LintFindingDO::getStatus, "auto_resolved")
+                    .set(LintFindingDO::getAutoResolvedAt, now)
+                    .set(LintFindingDO::getHandlingMethod, "source_restored")
+                    .set(LintFindingDO::getRepairExecutionId, null)
+                    .set(LintFindingDO::getArchivedAt, now)
+            );
+            log.info("Undeprecate auto-resolved deprecated_source finding id={}, pageId={}, sourceId={}",
+                f.getId(), f.getAssetId(), sourceId);
+        }
+        for (Long pageId : pageIds) {
+            wikiFileService.recalcPageHealthStatus(scopeId, pageId);
+        }
     }
 
     public IPage<LintFindingDO> listFindingsPaged(Long scopeId, String findingType, String status,
@@ -1109,7 +1278,7 @@ public class LintFindingService {
         List<Map<String, Object>> results = lintFindingMapper.selectMaps(
             new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<LintFindingDO>()
                 .eq("scope_id", scopeId)
-                .in("status", "open", "awaiting_approval", "repairing", "deferred")
+                .in("status", "open", "awaiting_approval", "repairing", "deferred", "failed")
                 .isNull("archived_at")
                 .ne("finding_type", "schema_violation")
                 .groupBy("finding_type")
@@ -1124,6 +1293,24 @@ public class LintFindingService {
         return counts;
     }
 
+    public Map<String, Long> countDismissedOrIgnoredByType(Long scopeId) {
+        List<Map<String, Object>> results = lintFindingMapper.selectMaps(
+            new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<LintFindingDO>()
+                .eq("scope_id", scopeId)
+                .and(w -> w.eq("status", "dismissed").or().eq("user_feedback", "ignored"))
+                .groupBy("finding_type")
+                .select("finding_type", "COUNT(*) AS cnt")
+        );
+        Map<String, Long> counts = new java.util.HashMap<>();
+        for (Map<String, Object> row : results) {
+            String type = (String) row.get("finding_type");
+            if (type == null) continue;
+            long count = ((Number) row.get("cnt")).longValue();
+            counts.put(type, count);
+        }
+        return counts;
+    }
+
     public long getTotalPages(Long scopeId) {
         return wikiPageMapper.selectCount(
             new LambdaQueryWrapper<WikiPageDO>()
@@ -1132,16 +1319,7 @@ public class LintFindingService {
     }
 
     public LocalDateTime getLastLintTime(Long scopeId) {
-        List<Map<String, Object>> results = lintFindingMapper.selectMaps(
-            new LambdaQueryWrapper<LintFindingDO>()
-                .eq(LintFindingDO::getScopeId, scopeId)
-                .orderByDesc(LintFindingDO::getCreatedAt)
-                .select(LintFindingDO::getCreatedAt)
-                .last("LIMIT 1")
-        );
-        if (results.isEmpty()) return null;
-        Object val = results.get(0).get("created_at");
-        return val instanceof LocalDateTime ? (LocalDateTime) val : null;
+        return executionHistoryService.findLastCompletedAt(scopeId, "lint");
     }
 
     public List<LintFindingDO> getTopFindings(Long scopeId, int limit) {
@@ -1150,7 +1328,7 @@ public class LintFindingService {
                 .eq(LintFindingDO::getScopeId, scopeId)
                 .isNull(LintFindingDO::getArchivedAt)
                 .ne(LintFindingDO::getFindingType, "schema_violation")
-                .in(LintFindingDO::getStatus, "open", "awaiting_approval", "repairing", "deferred")
+                .in(LintFindingDO::getStatus, "open", "awaiting_approval", "repairing", "deferred", "failed")
                 .orderByAsc(LintFindingDO::getPriority)
                 .orderByDesc(LintFindingDO::getCreatedAt)
                 .last("LIMIT " + limit)
@@ -1180,7 +1358,7 @@ public class LintFindingService {
 
     /**
      * 检查某页面的某类型诊断结果是否仍然有效（缓存命中）。
-     * 有效条件：存在 open/repairing 状态的 finding，且 finding.created_at >= page.content_updated_at。
+     * 有效条件：存在 open/repairing/dismissed 状态的 finding，且 finding.created_at >= page.content_updated_at。
      * orphan 类型额外有 7 天有效期限制。
      */
     public boolean isCacheValid(Long scopeId, Long pageId, String findingType) {
@@ -1193,8 +1371,7 @@ public class LintFindingService {
                 .eq(LintFindingDO::getScopeId, scopeId)
                 .eq(LintFindingDO::getAssetId, pageId)
                 .eq(LintFindingDO::getFindingType, findingType)
-                .in(LintFindingDO::getStatus, "open", "repairing")
-                .isNull(LintFindingDO::getArchivedAt)
+                .in(LintFindingDO::getStatus, "open", "repairing", "dismissed")
                 .orderByDesc(LintFindingDO::getCreatedAt)
                 .last("LIMIT 1")
         );

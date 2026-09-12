@@ -57,7 +57,7 @@ public class ExecutionRecoveryService {
                 NO_STEP_GRACE.toMinutes(), NO_HEARTBEAT_GRACE.toMinutes());
             executionTracker.failExecution(exec.getId(), reason);
             // 僵尸可能持有过本地信号量许可（pipeline 中途死亡时 finally 不执行）；
-            // 多 release 一次只会使 permit 变多，而 DB 层 countActiveExecutions 仍是硬约束，不会破坏并发上限
+            // releaseConcurrent 内部按容量上限收敛，重复 release 不会导致 permit 超发，仅回收泄漏的许可
             rateLimitService.releaseConcurrent(exec.getScopeId());
             recovered++;
         }

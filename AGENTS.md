@@ -39,7 +39,7 @@ LLM Wiki 对知识的处理本质上是 AI 对知识的一次"编译"。以下�
 1. **编译器必须完整** — Ingest 必须实现增量编译（更新已有页面，而非只创建新页面），必须维护来源-页面追踪（`wiki_page_source`）；Query 保存到知识库也必须走完整编译 Pipeline，禁止绕过分层直接调 DB/FS/ES
 2. **项目隔离必须严格** — 所有数据表（含关系表）必须有 `scope_id`，文件系统路径必须包含 `scopeId`，`raw/` 目录绝对不可写
 3. **准确性优先于一切** — 编译产物的准确性优先级高于展示丰富度、格式规范和视觉美观。当富元素（Mermaid 图、ECharts 图表等）需要 LLM "推断"或"构造"源文档中不存在的信息时，宁可不用也不能编造。优先级链：**准确性 > 格式规范 > 视觉美观**
-4. **编译必须可追溯** — Raw 层是 source of truth，每段编译产物必须能回溯到原文。Wiki 层包含三种页面类型：摘要页（`summary`，跨源综合）、实体页（`entity`，跨源综合）、参考页（`reference`，单源高保真，只读锁定——不可被其他文档 Ingest 的关联页更新步骤改写）。`parsed/` 是纯编译中间产物，不被 ES 索引、不被 Query 搜索
+4. **编译必须可追溯** — Raw 层是 source of truth，每段编译产物必须能回溯到原文。知识库只回答"来源说了什么"：摘要页（`summary`，来源编译页，每源恰好一次编译，被其他来源摄入锁定）、实体页（`entity`，零断言汇集台——条目 = 陈述 + 来源标注，冲突并列不裁决）、参考页（`reference`，来源编译页，单源高保真，只读锁定——不可被其他文档 Ingest 的关联页更新步骤改写）。`parsed/` 是纯编译中间产物，不被 ES 索引、不被 Query 搜索
 
 ## Schema 共治宪法（编码约束摘要）
 
@@ -106,7 +106,7 @@ llmwiki/                         # 后端（DDD 分层 Maven 多模块）
 ├── app/test/                    # 测试模块
 └── wiki-data/                   # 运行时文件存储（不入源码控制）
     └── {scopeId}/
-        ├── raw/                 # 原始来源文件【不可变】，{uuid}-{filename}
+        ├── raw/                 # 原始来源文件【不可变】，CAS: raw/{h2}/{h2}/{sha256}
         ├── parsed/              # 解析产物（可重建缓存）
         ├── wiki/pages/          # LLM 编译生成的 Wiki 页面
         ├── assets/              # 图片与媒体
@@ -181,7 +181,7 @@ npm run lint
 - **数据库**：MyBatis-Plus 负责 CRUD，`LambdaQueryWrapper` 类型安全查询，`Page<T>` 分页；复杂查询用 XML mapper
 - **Spring AI 集成**：通过 OpenAI 兼容协议接入任意 Provider（`AiProviderRegistry` + `AiSlotRouter` + `LlmClient`），工具用 `@Tool` 注解注册。绝不直接调用 LLM API，始终走 Spring AI 抽象层
 - **数据隔离（红线）**：所有数据表必须含 `scope_id`，关系表（`wiki_page_tag` / `wiki_page_keyword` / `wiki_page_link` / `wiki_page_source`）也不例外——不依赖 JOIN 的隔离是不可靠的。所有查询强制 `WHERE scope_id = ?`，禁止暴露无 scope 过滤的方法。文件路径必须含 `scopeId`，不允许路径遍历
-- **文件职责红线**：`raw/` 写入后绝对不可再写，`WriteFileTool` / `WikiFileService` 命中 `raw/` 直接抛 `BusinessException`；所有 AI 写入集中在 `wiki/`；健康状态是 `wiki_page.health_status` 字段，不得生成游离的 `health-report.md`
+- **文件职责红线**：`raw/` 写入后绝对不可再写，`WriteFileTool` / `WikiFileService` 命中 `raw/` 直接抛 `BusinessException`；raw 布局为 CAS 内容寻址 `raw/{h2}/{h2}/{sha256}`，唯一写入入口是 `SourceService`（两阶段原子写 `raw/.tmp/` → move 落位），已入库来源禁止物理删除仅可废弃；所有 AI 写入集中在 `wiki/`；健康状态是 `wiki_page.health_status` 字段，不得生成游离的 `health-report.md`
 - **存储层**：文件操作一律通过 `StorageProvider` 接口（Local / NAS / S3 三种实现），禁止直接使用 `java.nio.file.Files`，切换只改配置 `llmwiki.storage.provider`
 - **Ingest 参数动态化**：Ingest 策略参数（分析上限、裁剪阈值等）一律从 `ExecutionStrategy` 获取（由 `IngestionStrategyAdvisor` 按文档特征选档），禁止在业务代码中硬编码
 - **交叉引用一致性**：`wiki_page_link` 的 `from_page_id` / `to_page_id` 必须引用已存在的 `wiki_page.id`，链接在页面写入完成（文件 + DB）之后才生成

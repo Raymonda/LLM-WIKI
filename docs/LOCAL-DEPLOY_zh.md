@@ -245,3 +245,33 @@ sudo sysctl -w vm.max_map_count=262144
 4. 使用外部 MySQL/ES 实例或托管服务
 5. 设置 `STORAGE_PROVIDER=s3` 配合真实 S3/MinIO 端点实现共享存储
 6. 前置 nginx/Traefik 做 TLS 终止
+
+---
+
+## 数据保真与备份（运维要求）
+
+raw/ 层（`wiki-data/{scopeId}/raw/`）是系统可信根——原始导入文件的唯一真相来源。其数据完整性（防介质损坏、防丢失、可恢复）由**存储/运维侧**负责：应用层信任存储层，读取成功即视为数据正确，**不做巡检任务、校验 API 与完整性状态字段**。
+
+### 应用侧留存的对账锚点
+
+- `source` 表 `content_hash`（SHA-256，上传时计算）：作为"期望指纹"供运维对照核验
+- CAS 路径即校验和：raw 文件路径为 `raw/{hash前2位}/{hash次2位}/{sha256}`，路径与内容可直接互验
+- 批量导出（DB 侧执行，导出清单交给存储侧校验）：
+
+```sql
+SELECT file_path, content_hash FROM source WHERE scope_id = ?;
+```
+
+### 运维职责清单
+
+| 项 | 要求 |
+|----|------|
+| 完整性校验 | NAS 启用定期数据校验（ZFS/Btrfs scrub 或厂商等效机制） |
+| 快照 | 周期快照 + 保留时长策略（NAS 侧配置） |
+| 异地备份 | 定期异地复制 |
+| 恢复演练 | 定期演练；恢复后以导出的 `(file_path, content_hash)` 清单核对（如 `sha256sum -c`） |
+| DB 备份 | 必须与 NAS 文件同步备份：MySQL 元数据（`source` / `wiki_page_source`）是溯源链的另一半，仅恢复文件无法完成溯源 |
+
+### 删除语义
+
+已入库来源**禁止物理删除**：`DELETE /api/source/{id}` 一律拒绝，仅可"废弃"（`lifecycle_status=DEPRECATED`，文件、页面关系与审计记录永久保留）。恢复（undeprecate）为误操作纠错路径；应用不提供物理销毁通道。

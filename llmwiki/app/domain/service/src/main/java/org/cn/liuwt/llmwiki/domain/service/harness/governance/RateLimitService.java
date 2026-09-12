@@ -74,15 +74,26 @@ public class RateLimitService {
 
     public void releaseConcurrent(Long scopeId) {
         SemaphoreSlot slot = concurrentSemaphores.get(scopeId);
-        if (slot != null) {
-            slot.semaphore().release();
+        if (slot == null) {
+            return;
+        }
+        synchronized (slot) {
+            if (slot.semaphore().availablePermits() < slot.capacity()) {
+                slot.semaphore().release();
+            }
         }
     }
 
     public void releaseAllConcurrent(Long scopeId, int count) {
         SemaphoreSlot slot = concurrentSemaphores.get(scopeId);
-        if (slot != null) {
+        if (slot == null) {
+            return;
+        }
+        synchronized (slot) {
             for (int i = 0; i < count; i++) {
+                if (slot.semaphore().availablePermits() >= slot.capacity()) {
+                    return;
+                }
                 slot.semaphore().release();
             }
         }

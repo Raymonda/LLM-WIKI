@@ -20,8 +20,14 @@ import org.springframework.stereotype.Component;
 
 import org.cn.liuwt.llmwiki.domain.service.harness.ParsedSourceIndex;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Comparator;
 import java.util.List;
+import java.util.stream.Stream;
 
 @Component
 public class ParserAgent {
@@ -95,7 +101,31 @@ public class ParserAgent {
                 || "pdf".equalsIgnoreCase(format) || "docx".equalsIgnoreCase(format)
                 || "doc".equalsIgnoreCase(format) || "pptx".equalsIgnoreCase(format)
                 || "ppt".equalsIgnoreCase(format);
-            String assetsDir = needsAssets ? getStorageAbsolutePath(scopeIdStr, "assets") : null;
+            String storageUrl = getStorageAbsolutePath(scopeIdStr, sourceDO.getFilePath());
+            boolean localStorage = isExistingLocalPath(storageUrl);
+
+            Path tempInput = null;
+            Path tempAssetsDir = null;
+            String filePath;
+            String assetsDir;
+            try {
+                if (localStorage) {
+                    filePath = storageUrl;
+                    assetsDir = needsAssets ? getStorageAbsolutePath(scopeIdStr, "assets") : null;
+                } else {
+                    tempInput = Files.createTempFile("llmwiki-parse-", "." + format);
+                    Files.write(tempInput, fileBytes);
+                    filePath = tempInput.toAbsolutePath().toString();
+                    if (needsAssets) {
+                        tempAssetsDir = Files.createTempDirectory("llmwiki-assets-");
+                        assetsDir = tempAssetsDir.toAbsolutePath().toString();
+                    } else {
+                        assetsDir = null;
+                    }
+                }
+            } catch (IOException e) {
+                throw new RuntimeException("准备本地解析临时文件失败: " + e.getMessage(), e);
+            }
             String diagramApiKey = diagramProperties.getApiKey();
             if (diagramApiKey == null || diagramApiKey.isBlank()) {
                 diagramApiKey = apiKey;
@@ -107,15 +137,23 @@ public class ParserAgent {
             AiSlotRouter.Endpoint diagramEndpoint = slotRouter.getEndpoint("diagram");
             runner.setOcrBaseUrl(ocrEndpoint.baseUrl());
             runner.setDiagramBaseUrl(diagramEndpoint.baseUrl());
-            String filePath = getStorageAbsolutePath(scopeIdStr, sourceDO.getFilePath());
 
-            String jsonOutput = runner.run(filePath, format, ocrEnable, apiKey, ocrModel,
-                ocrProperties.getMaxPages(), ocrProperties.getScanThreshold(), multimodalMain, assetsDir,
-                diagramEnable, diagramApiKey, diagramProperties.getModel(), diagramProperties.getMaxImages(),
-                diagramProperties.getDpi(), diagramProperties.getJpegQuality(), diagramProperties.getConcurrency(),
-                diagramProperties.getScoreThreshold(), diagramProperties.getLargeDrawingRatio(),
-                diagramProperties.getSignificantImageRatio(), diagramProperties.getPayloadGateMb(),
-                multimodalModelName);
+            String jsonOutput;
+            try {
+                jsonOutput = runner.run(filePath, format, ocrEnable, apiKey, ocrModel,
+                    ocrProperties.getMaxPages(), ocrProperties.getScanThreshold(), multimodalMain, assetsDir,
+                    diagramEnable, diagramApiKey, diagramProperties.getModel(), diagramProperties.getMaxImages(),
+                    diagramProperties.getDpi(), diagramProperties.getJpegQuality(), diagramProperties.getConcurrency(),
+                    diagramProperties.getScoreThreshold(), diagramProperties.getLargeDrawingRatio(),
+                    diagramProperties.getSignificantImageRatio(), diagramProperties.getPayloadGateMb(),
+                    multimodalModelName);
+                if (tempAssetsDir != null) {
+                    uploadAssetsToStorage(scopeIdStr, tempAssetsDir);
+                }
+            } finally {
+                deleteQuietly(tempInput);
+                deleteRecursivelyQuietly(tempAssetsDir);
+            }
 
             try {
                 com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
@@ -325,6 +363,53 @@ public class ParserAgent {
 
     private String getStorageAbsolutePath(String scopeIdStr, String relativePath) {
         return storageProvider.getUrl(scopeIdStr, relativePath);
+    }
+
+    private boolean isExistingLocalPath(String url) {
+        if (url == null || url.isBlank()) return false;
+        try {
+            return Files.exists(Paths.get(url));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void uploadAssetsToStorage(String scopeIdStr, Path assetsDir) {
+        try (Stream<Path> walk = Files.walk(assetsDir)) {
+            List<Path> files = walk.filter(Files::isRegularFile).toList();
+            for (Path file : files) {
+                String relative = assetsDir.relativize(file).toString().replace('\\', '/');
+                storageProvider.write(scopeIdStr, "assets/" + relative, Files.readAllBytes(file));
+            }
+            if (!files.isEmpty()) {
+                log.info("Uploaded {} parsed asset files from temp dir to storage for scopeId={}", files.size(), scopeIdStr);
+            }
+        } catch (IOException e) {
+            throw new RuntimeException("回传解析产物到存储失败: " + e.getMessage(), e);
+        }
+    }
+
+    private void deleteQuietly(Path path) {
+        if (path == null) return;
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException e) {
+            log.warn("Failed to delete temp parse file {}: {}", path, e.getMessage());
+        }
+    }
+
+    private void deleteRecursivelyQuietly(Path dir) {
+        if (dir == null) return;
+        try (Stream<Path> walk = Files.walk(dir)) {
+            walk.sorted(Comparator.reverseOrder()).forEach(p -> {
+                try {
+                    Files.deleteIfExists(p);
+                } catch (IOException ignored) {
+                }
+            });
+        } catch (IOException e) {
+            log.warn("Failed to delete temp assets dir {}: {}", dir, e.getMessage());
+        }
     }
 
     /**

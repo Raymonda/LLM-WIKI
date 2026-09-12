@@ -72,8 +72,8 @@ public record EntityDossier(
             sb.append("【关联实体】\n");
             for (String related : relatedEntities) {
                 String hint = relationshipHints != null ? relationshipHints.get(related) : null;
-                if (hint != null) {
-                    sb.append("- [[ ").append(related).append(" ]]（").append(hint).append("）\n");
+                if (hint != null && !hint.isBlank()) {
+                    sb.append("- [[ ").append(related).append(" ]]：").append(hint).append("\n");
                 } else {
                     sb.append("- [[ ").append(related).append(" ]]\n");
                 }

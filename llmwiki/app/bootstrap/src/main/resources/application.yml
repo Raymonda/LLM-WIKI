@@ -101,6 +101,9 @@ llmwiki:
     admin-usernames: ${ADMIN_USERNAMES:admin}
   rocketmq:
     enabled: ${ROCKETMQ_ENABLED:false}
+  ingest:
+    batch:
+      max-size: ${INGEST_BATCH_MAX_SIZE:50}
 
 rocketmq:
   name-server: ${ROCKETMQ_NAME_SERVER:}

@@ -40,7 +40,6 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
-import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
 public class LintService {
@@ -137,10 +136,6 @@ public class LintService {
     public ExecutionModel createLintExecution(Long scopeId) {
         if (isLintRunning(scopeId)) {
             throw new BusinessException(ErrorCode.LINT_ALREADY_RUNNING);
-        }
-        int supersededCount = lintFindingService.autoArchiveSupersededFindings(scopeId, null, null);
-        if (supersededCount > 0) {
-            log.info("Pre-archived {} superseded findings before new Lint for scopeId={}", supersededCount, scopeId);
         }
         ExecutionModel execution = executionTracker.createExecution("lint", scopeId, null, null);
         executionTracker.updateExecutionStatus(execution.getId(), "running");
@@ -256,40 +251,32 @@ public class LintService {
         log.info("Scheduled lint ({}) eligible={}, concurrency={}",
             scopeType, scopes.size(), scheduledConcurrency);
 
-        AtomicInteger completed = new AtomicInteger(0);
-        AtomicInteger failed = new AtomicInteger(0);
-        AtomicInteger skipped = new AtomicInteger(0);
-
         for (ScopeDO scope : scopes) {
             lintSchedulerPool.submit(() -> {
                 try {
                     if (!scopeConcurrencySemaphore.tryAcquire(5_000)) {
                         log.warn("Scheduled lint scope concurrency timeout: scopeId={}", scope.getId());
-                        skipped.incrementAndGet();
                         return;
                     }
                     try {
                         if (isLintRunning(scope.getId())) {
                             log.info("Scheduled lint skipped: scopeId={}, lint already running", scope.getId());
-                            skipped.incrementAndGet();
                             return;
                         }
                         ExecutionModel execution = harnessEngine.executeLint(scope.getId(), false);
-                        completed.incrementAndGet();
                         log.info("Scheduled lint completed: scopeId={}, executionId={}, status={}",
                             scope.getId(), execution.getId(), execution.getStatus());
                     } finally {
                         scopeConcurrencySemaphore.release();
                     }
                 } catch (Exception e) {
-                    failed.incrementAndGet();
                     log.warn("Scheduled lint failed for scopeId={}: {}", scope.getId(), e.getMessage());
                 }
             });
         }
 
-        log.info("Scheduled lint ({}) batch dispatched: scopes={}, completed={}, failed={}, skipped={}",
-            scopeType, scopes.size(), completed.get(), failed.get(), skipped.get());
+        log.info("Scheduled lint ({}) batch dispatched: scopes={}, concurrency={}",
+            scopeType, scopes.size(), scheduledConcurrency);
     }
 
     public Map<String, Object> triggerStaleRepair(Long scopeId, Long findingId) {
@@ -337,8 +324,8 @@ public class LintService {
                 continue;
             }
 
-            if (processedPageIds.contains(f.getAssetId())) {
-                plansGenerated++;
+            if (f.getAssetId() != null && processedPageIds.contains(f.getAssetId())) {
+                skipped++;
                 continue;
             }
 
@@ -351,7 +338,9 @@ public class LintService {
 
             lintFindingService.generatePlanForApproval(f.getId(), "auto_refresh",
                 "AI 将基于最新源文件刷新该页面内容，请审批后执行");
-            processedPageIds.add(f.getAssetId());
+            if (f.getAssetId() != null) {
+                processedPageIds.add(f.getAssetId());
+            }
             plansGenerated++;
         }
 
@@ -380,12 +369,13 @@ public class LintService {
             throw new RuntimeException("Only awaiting_approval findings can be approved: id=" + findingId + " status=" + finding.getStatus());
         }
 
+        Long effectiveScopeId = finding.getScopeId() != null ? finding.getScopeId() : scopeId;
         if ("conflict".equals(finding.getFindingType())) {
-            return approveConflictFinding(scopeId, findingId, finding);
+            return approveConflictFinding(effectiveScopeId, findingId, finding);
         }
 
         if ("stale".equals(finding.getFindingType()) && "auto_refresh".equals(finding.getHandlingMethod())) {
-            List<Long> sourceIds = lintFindingService.findSourceIdsForPage(scopeId, finding.getAssetId());
+            List<Long> sourceIds = lintFindingService.findSourceIdsForPage(effectiveScopeId, finding.getAssetId());
             if (sourceIds.isEmpty()) {
                 lintFindingService.updateStatus(findingId, "open");
                 throw new RuntimeException("No source found for stale page: pageId=" + finding.getAssetId() + ". Cannot trigger repair for orphan page.");

@@ -96,6 +96,17 @@ public enum ErrorCode {
     INGEST_CANCELLED_CANNOT_RESUME("INGEST_008", "Cancelled execution cannot be resumed, please start a new ingest"),
     INGEST_INVALID_STATUS_RESUME("INGEST_009", "Only failed or paused executions can be resumed, current status: {0}"),
     INGEST_EXECUTION_NOT_FOUND("INGEST_010", "Execution record not found"),
+    INGEST_BATCH_EMPTY("INGEST_011", "No valid sources in batch"),
+    INGEST_BATCH_TOO_LARGE("INGEST_012", "Batch size exceeds limit: {0}"),
+    INGEST_BATCH_NOT_FOUND("INGEST_013", "Batch not found"),
+    INGEST_BATCH_INVALID_STATUS("INGEST_014", "Batch is not in the required state for this operation"),
+
+    // Source lifecycle
+    SOURCE_DELETE_FORBIDDEN("SOURCE_001", "Source deletion is not allowed, use deprecation instead"),
+    SOURCE_DEPRECATE_WHILE_PROCESSING("SOURCE_002", "Source is being processed, cancel the running ingest execution first"),
+    SOURCE_ALREADY_DEPRECATED("SOURCE_003", "Source is already deprecated"),
+    SOURCE_NOT_DEPRECATED("SOURCE_004", "Source is not deprecated"),
+    SOURCE_DEPRECATED_CANNOT_INGEST("SOURCE_005", "Source is deprecated, restore it before starting ingest"),
 
     // Scope additional
     SCOPE_REQUEST_NOT_FOUND("SCOPE_120", "Join request not found"),
@@ -110,6 +121,9 @@ public enum ErrorCode {
     LINT_SUPPLEMENT_REQUIRED("LINT_002", "Supplement content is required"),
     LINT_APPROVE_LINK_FAILED("LINT_003", "Failed to approve link: {0}"),
     LINT_MISSING_PARAMS("LINT_004", "Missing required parameters: sourceTitle and targetTitle"),
+    LINT_FINDING_NOT_FOUND("LINT_005", "Finding not found: {0}"),
+    LINT_INVALID_STATUS_TRANSITION("LINT_006", "Invalid finding status transition: {0} -> {1}"),
+    LINT_EXECUTION_NOT_FOUND("LINT_007", "Lint execution not found: {0}"),
 
     // Bootstrap additional
     BOOTSTRAP_INVALID_CAPABILITIES("BOOT_007", "No valid capability domains found"),

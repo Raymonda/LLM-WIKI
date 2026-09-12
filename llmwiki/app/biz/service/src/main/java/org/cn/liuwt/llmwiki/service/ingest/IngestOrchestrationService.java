@@ -2,6 +2,8 @@ package org.cn.liuwt.llmwiki.service.ingest;
 
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
+import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
+import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel;
 import org.cn.liuwt.llmwiki.domain.service.wiki.SourceService;
@@ -15,6 +17,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Service
 public class IngestOrchestrationService {
@@ -50,6 +53,9 @@ public class IngestOrchestrationService {
         if (source == null) {
             throw new IllegalArgumentException("ingest source not found: " + sourceId);
         }
+        if ("DEPRECATED".equals(source.getLifecycleStatus())) {
+            throw new BusinessException(ErrorCode.SOURCE_DEPRECATED_CANNOT_INGEST);
+        }
         ExecutionModel execution = ingestService.createExecution(scopeId, sourceId);
         setNodeOwnership(execution.getId());
         dispatchToMqOrLocal(execution.getId(), scopeId, sourceId, guidance,
@@ -69,14 +75,22 @@ public class IngestOrchestrationService {
     }
 
     private void submitLocalTask(Long executionId, Runnable task) {
+        AtomicReference<Future<?>> futureRef = new AtomicReference<>();
         Future<?> future = registry.submitTask(() -> {
             try {
                 task.run();
             } finally {
-                registry.removeFuture(executionId);
+                Future<?> self = futureRef.get();
+                if (self != null) {
+                    registry.removeFutureIfSame(executionId, self);
+                }
             }
         });
+        futureRef.set(future);
         registry.putFuture(executionId, future);
+        if (future.isDone()) {
+            registry.removeFutureIfSame(executionId, future);
+        }
     }
 
     private void dispatchToMqOrLocal(Long executionId, Long scopeId, Long sourceId, String guidance,

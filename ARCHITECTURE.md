@@ -77,9 +77,11 @@ LLM Wiki 对知识的处理，本质上是让 AI 对知识进行一次"编译"�
 
 ### raw/ — 原始来源（不可变）
 
-- 用户上传的源文档，系统绝不修改。文件名格式 `{uuid}-{originalName}` 避免冲突
-- 元数据真相来源：MySQL `source` 表
-- **不可变性约束**：任何写操作（WriteFileTool / StorageProvider）命中 `raw/` 直接拒绝；来源删除是逻辑删除，文件保留供溯源
+- 用户上传的源文档，系统绝不修改。存储布局为 CAS 内容寻址：`raw/{hash[0:2]}/{hash[2:4]}/{sha256}`（两级 256 分桶 + 物理去重，同内容多来源共享同一物理文件）
+- 上传采用两阶段原子写：`raw/.tmp/{uuid}` 流式暂存（边写边算 SHA-256）→ move 落位 CAS 路径；超过 24h 的 tmp 残留由上传入口惰性清理
+- 元数据真相来源：MySQL `source` 表；`content_hash` 为运维对账锚点，`(file_path, content_hash)` 可导出供存储侧校验
+- **不可变性约束**：任何写操作（WriteFileTool / StorageProvider）命中 `raw/` 直接拒绝；已入库来源**禁止物理删除**（DELETE 接口一律拒绝），仅可废弃（`lifecycle_status=DEPRECATED`，文件与 `wiki_page_source` 关系永久保留）
+- **数据保真边界**：完整性由存储/运维侧保障（NAS scrub / 快照 / 恢复演练），应用层不做巡检
 
 ### parsed/ — 结构化源层（编译中间产物）
 
@@ -92,9 +94,9 @@ Harness 生成和维护的 Markdown 页面，随时间复利增长。三种页�
 
 | 类型 | 说明 |
 |------|------|
-| `summary` 摘要页 | 跨源综合，高度浓缩，每个来源一份 |
-| `entity` 实体页 | 跨源综合，围绕一个实体/概念 |
-| `reference` 参考页 | 单源高保真（LLM 结构化摘要 + 原文引用），为结构化文档按章节生成；**只读锁定**，不被其他文档的关联更新触碰 |
+| `summary` 摘要页 | **来源编译页**（叙事文档形态）：每份来源恰好编译一次，结构地图 + 关键陈述（带来源标注）+ 原文引用；被其他来源的摄入锁定 |
+| `entity` 实体页 | **零断言汇集台**：条目 = 陈述 + `（来源：<来源名>）` 标注，跨源积累；冲突并列呈现，不做裁决（裁决走 `conflict_review`） |
+| `reference` 参考页 | **来源编译页**（结构化文档形态）：单源高保真（LLM 结构化摘要 + 原文引用），为结构化文档按章节生成；**只读锁定**，不被其他文档的关联更新触碰 |
 
 - 元数据真相来源：MySQL `wiki_page` 表；标签/关键词/链接/来源关联各有独立关系表（均含 `scope_id`）
 - 链接类型：`related`（关联）、`cross-ref`(交叉引用)、`contradiction`（矛盾）、`query-save`（问答保存）
@@ -127,6 +129,7 @@ Harness 编排所有 LLM 驱动的操作。核心组成：
 - **Wiki 工具集**：readFile、writeFile、searchWiki、listPages、getRelatedPages、updateLinks 等，供 Agent 工具调用
 - **治理与追踪**：ApprovalService（审批）、ExecutionTracker（执行记录）、SchemaManager / SchemaInjector（Schema 注入与补丁）
 - **并发控制**：`LlmConcurrencyBarrier` 全局信号量约束 LLM 并发，避免 Provider 限流
+- **批次调度**：`IngestBatchScheduler` 把持 Ingest 执行闸门——同一时刻至多 1 份资料运行 Pipeline，多份资料按批次串行推进
 - **多 Provider 路由**：`AiProviderRegistry` + Slot 路由，不同任务（分析 / OCR / 图表识别）可路由到不同 Provider
 
 ### 6.1 Ingest — 摄入流水线（编译 + 链接）
@@ -158,6 +161,8 @@ IndexerAgent（索引）
 - **来源追踪**：所有写入同步建立 `wiki_page_source` 关联，汇聚后补偿校验
 - **准确性约束**：STRUCTURED（权威性）文档的实体/摘要页中，规则条款与量化指标必须 blockquote 引用原文并标注章节
 - **实时进度**：全程 SSE 推送步骤级进度，支持暂停 / 取消
+- **批次调度**：≥2 份资料以 `ingest_batch` 聚合提交，由 `IngestBatchScheduler` 串行推进（分析 / 写入共用同一闸门）；分析完成的资料停留在 `awaiting_confirmation`（收件箱待审阅），用户确认后置 `confirmed` 重新入队，调度器按序推进 Phase 2
+- **批次状态分离**：批次状态（`active/paused/completed/cancelled`）与逐份 execution 状态独立；批次通知在首批待审阅 / 全部分析完成 / 全部处理完成三节点发出，批次内逐份通知被抑制（`IngestOrchestrator`：`ingest_started` / `ingest_completed` / `ingest_awaiting_confirmation` 三类；单项失败保留逐条通知，异常需可达）
 
 ### 6.2 Query — 查询问答（运行时）
 

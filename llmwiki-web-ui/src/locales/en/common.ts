@@ -62,6 +62,9 @@ export default {
   pulseTypeBudgetExceeded: 'Budget Exceeded',
   pulseTypeAwaitingExpired: 'Ruling Expired',
   pulseTypePageRecalled: 'Page Recalled',
+  pulseTypeIngestBatchAwaiting: 'Batch awaiting review',
+  pulseTypeIngestBatchAnalyzed: 'Batch analysis done',
+  pulseTypeIngestBatchCompleted: 'Batch all completed',
   // AiAssistantPanel
   reject: 'Reject',
   executionTrace: 'Execution Trace',

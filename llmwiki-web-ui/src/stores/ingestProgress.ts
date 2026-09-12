@@ -6,6 +6,8 @@ import {
   createIngestSSE,
   cancelIngest,
   deleteIngest,
+  executeIngest,
+  reanalyzeIngest,
   pauseIngest,
   resumeIngest,
   listActiveIngest,
@@ -31,8 +33,8 @@ const MAX_SSE_RETRIES = 5
 const SSE_BASE_RETRY_MS = 3000
 const SSE_STALE_TIMEOUT_MS = 5 * 60 * 1000
 
-export type IngestFloatingPhase = 'analyzing' | 'executing' | 'done' | 'failed' | 'cancelled' | 'paused'
-export type PageFlow = 'upload' | 'analyzing' | 'executing' | 'done' | 'paused'
+export type IngestFloatingPhase = 'analyzing' | 'review' | 'executing' | 'done' | 'failed' | 'cancelled' | 'paused'
+export type PageFlow = 'upload' | 'analyzing' | 'review' | 'executing' | 'done' | 'paused'
 
 export interface AffectedPage {
   title: string
@@ -324,6 +326,7 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
     if (currentTask.value?.executionStatus === 'paused') return 'paused'
     if (pipelineError.value) return 'failed'
     if (currentStep.value === 'done') return 'done'
+    if (currentStep.value === 'review') return 'review'
     if (currentStep.value === 'executing') return 'executing'
     return 'analyzing'
   })
@@ -339,10 +342,11 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
   const errorMessage = computed(() => pipelineError.value)
   const sourceName = computed(() => uploadedFile.value?.name || '')
 
-  const progressBarStatus = computed<'running' | 'done' | 'failed' | 'paused'>(() => {
+  const progressBarStatus = computed<'running' | 'waiting' | 'done' | 'failed' | 'paused'>(() => {
     if (pipelineError.value) return 'failed'
     if (currentTask.value?.executionStatus === 'paused') return 'paused'
     if (currentStep.value === 'done') return 'done'
+    if (currentStep.value === 'review') return 'waiting'
     return 'running'
   })
 
@@ -468,6 +472,14 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
         if (data.status === 'budget_exhausted') {
           task.pipelineError = 'Token 用量已达月度参考值，操作不受限制'
         }
+      } else if (data.status === 'paused') {
+        task.isPhaseRunning = false
+        task.currentStep = 'paused'
+        stopTaskTick(task)
+      } else if (data.status === 'awaiting_confirmation' || data.status === 'awaiting_review') {
+        task.isPhaseRunning = false
+        task.currentStep = 'review'
+        stopTaskTick(task)
       } else if (data.status === 'running') {
         task.isPhaseRunning = true
         task.currentStep = isPhase1Completed(task) ? 'executing' : 'analyzing'
@@ -676,9 +688,18 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
         }
       }
 
-      if (task.currentStep === 'analyzing' && task.isPhaseRunning && isPhase1Completed(task)) {
-        task.currentStep = 'executing'
-      }
+    })
+
+    es.addEventListener('phase1_done', (e: MessageEvent) => {
+      task.lastEventMs = Date.now()
+      task.retryCount = 0
+      const data = JSON.parse(e.data) as ExecutionInfo
+      task.executionStatus = data.status || 'awaiting_confirmation'
+      task.totalTokens = data.totalTokens || task.totalTokens
+      task.isPhaseRunning = false
+      task.currentStep = 'review'
+      stopTaskTick(task)
+      task.floatingDismissed = false
     })
 
     es.addEventListener('done', (e: MessageEvent) => {
@@ -755,7 +776,7 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
 
     es.onerror = () => {
       closeTaskSSE(task)
-      if (task.currentStep === 'done' || task.currentStep === 'upload') {
+      if (task.currentStep === 'done' || task.currentStep === 'upload' || task.currentStep === 'review') {
         stopTaskTick(task)
         return
       }
@@ -919,25 +940,33 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
         } else if (execInfo.status === 'failed') {
           task.pipelineError = execInfo.errorMessage || '处理失败，请重试'
           task.isPhaseRunning = false
+        } else if (execInfo.status === 'awaiting_confirmation' || execInfo.status === 'awaiting_review') {
+          task.executionStatus = execInfo.status
+          task.currentStep = 'review'
+          task.isPhaseRunning = false
+          connectTaskSSE(task)
         } else if (execInfo.status === 'paused') {
-          task.currentStep = isPhase1Completed(task) ? 'paused' : 'paused'
+          task.executionStatus = 'paused'
+          task.currentStep = 'paused'
           task.isPhaseRunning = false
         }
       }
 
       if (activeTaskId.value == null) {
         const runningTask = activeList.find(e => e.status === 'running')
+        const reviewTask = activeList.find(e => e.status === 'awaiting_confirmation' || e.status === 'awaiting_review')
         const completedTask = activeList.find(e => e.status === 'completed' || e.status === 'budget_exhausted')
         const pendingTask = activeList.find(e => e.status === 'pending')
-        const target = runningTask || completedTask || pendingTask
+        const target = runningTask || reviewTask || completedTask || pendingTask
         if (target) setActiveTask(target.executionId)
       } else {
         const current = tasks.value.get(activeTaskId.value)
         if (!current || current.currentStep === 'upload' && current.executionId === 0) {
           const runningTask = activeList.find(e => e.status === 'running')
+          const reviewTask = activeList.find(e => e.status === 'awaiting_confirmation' || e.status === 'awaiting_review')
           const completedTask = activeList.find(e => e.status === 'completed' || e.status === 'budget_exhausted')
           const pendingTask = activeList.find(e => e.status === 'pending')
-          const target = runningTask || completedTask || pendingTask
+          const target = runningTask || reviewTask || completedTask || pendingTask
           if (target) setActiveTask(target.executionId)
         }
       }
@@ -1011,10 +1040,7 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
     task.hasReceivedEvent = false
     task.chunkPreviews = []
 
-    const phase1KeySteps = task.stepStates.filter(s =>
-      s.name === 'UPLOAD' || s.name === 'ANALYZE'
-    )
-    const phase1Completed = phase1KeySteps.length > 0 && phase1KeySteps.every(s => s.status === 'completed' || s.status === 'paused')
+    const phase1Completed = isPhase1Completed(task)
 
     for (const s of task.stepStates) {
       if (s.status === 'failed' || s.status === 'paused' || s.status === 'running') {
@@ -1038,6 +1064,65 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
     } catch (e: any) {
       task.pipelineError = e.message || '断点续传失败'
       task.isPhaseRunning = false
+    }
+  }
+
+  async function confirmExecution(guidance?: string) {
+    const task = currentTask.value
+    if (!task || !task.executionId) return
+    if (guidance != null) task.userGuidance = guidance
+    task.pipelineError = ''
+    task.isPhaseRunning = true
+    task.nowMs = Date.now()
+    task.retryCount = 0
+    task.lastEventMs = Date.now()
+    task.hasReceivedEvent = false
+    task.currentStep = 'executing'
+    startTaskTick(task)
+    try {
+      await executeIngest(task.executionId, task.userGuidance || undefined)
+      task.executionStatus = 'running'
+      if (!task.eventSource) connectTaskSSE(task)
+    } catch (e: any) {
+      task.pipelineError = e.message || '启动写入失败'
+      task.isPhaseRunning = false
+      task.currentStep = 'review'
+      stopTaskTick(task)
+    }
+  }
+
+  async function requestReanalysis(guidance?: string) {
+    const task = currentTask.value
+    if (!task || !task.executionId) return
+    if (guidance != null) task.userGuidance = guidance
+    task.pipelineError = ''
+    task.isPhaseRunning = true
+    task.nowMs = Date.now()
+    task.retryCount = 0
+    task.lastEventMs = Date.now()
+    task.hasReceivedEvent = false
+    task.chunkPreviews = []
+    for (const s of task.stepStates) {
+      if (s.name === 'ANALYZE') {
+        s.status = 'pending'
+        s.startedAtMs = undefined
+        s.completedAtMs = undefined
+        s.current = undefined
+        s.total = undefined
+        s.avgMsPerUnit = undefined
+      }
+    }
+    task.currentStep = 'analyzing'
+    startTaskTick(task)
+    try {
+      await reanalyzeIngest(task.executionId, task.userGuidance || undefined)
+      task.executionStatus = 'running'
+      if (!task.eventSource) connectTaskSSE(task)
+    } catch (e: any) {
+      task.pipelineError = e.message || '重新分析失败'
+      task.isPhaseRunning = false
+      task.currentStep = 'review'
+      stopTaskTick(task)
     }
   }
 
@@ -1204,6 +1289,8 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
     deleteExecution,
     cancelExecution,
     resumeIngestExecution,
+    confirmExecution,
+    requestReanalysis,
     goBackToUpload,
     startNewSource,
     closeEventSource,

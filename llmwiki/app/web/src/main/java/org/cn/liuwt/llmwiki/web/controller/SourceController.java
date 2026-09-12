@@ -3,6 +3,7 @@ package org.cn.liuwt.llmwiki.web.controller;
 import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.common.util.result.Result;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.RateLimitService;
+import org.cn.liuwt.llmwiki.facade.model.DeprecateSourceRequest;
 import org.cn.liuwt.llmwiki.facade.model.SourceInfo;
 import org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel;
 import org.cn.liuwt.llmwiki.domain.service.wiki.SourceService;
@@ -32,6 +33,9 @@ public class SourceController {
 
     @Autowired
     private RateLimitService rateLimitService;
+
+    @Autowired
+    private org.cn.liuwt.llmwiki.domain.service.system.ScopeService scopeService;
 
     @PostMapping("/upload")
     public Result<SourceInfo> uploadSource(@RequestParam("file") MultipartFile file) {
@@ -76,6 +80,30 @@ public class SourceController {
         Long scopeId = jwtTokenProvider.getCurrentScopeId();
         sourceService.deleteSource(id, scopeId);
         return Result.success();
+    }
+
+    @PostMapping("/{id}/deprecate")
+    public Result<SourceInfo> deprecateSource(@PathVariable Long id,
+                                              @RequestBody DeprecateSourceRequest request) {
+        Long scopeId = jwtTokenProvider.getCurrentScopeId();
+        Long userId = jwtTokenProvider.getCurrentUserId();
+        if (!scopeService.isOwnerOrAdmin(scopeId, userId)) {
+            return Result.failed(ErrorCode.AUTH_SCOPE_FORBIDDEN);
+        }
+        SourceModel source = sourceService.deprecateSource(id, scopeId, userId,
+            request.getCategory(), request.getReason());
+        return Result.success(toInfo(source));
+    }
+
+    @PostMapping("/{id}/undeprecate")
+    public Result<SourceInfo> undeprecateSource(@PathVariable Long id) {
+        Long scopeId = jwtTokenProvider.getCurrentScopeId();
+        Long userId = jwtTokenProvider.getCurrentUserId();
+        if (!scopeService.isOwnerOrAdmin(scopeId, userId)) {
+            return Result.failed(ErrorCode.AUTH_SCOPE_FORBIDDEN);
+        }
+        SourceModel source = sourceService.undeprecateSource(id, scopeId, userId);
+        return Result.success(toInfo(source));
     }
 
     @GetMapping("/{id}/download")
@@ -208,6 +236,11 @@ public class SourceController {
         info.setCreatedAt(model.getCreatedAt());
         info.setFileModifiedAt(model.getFileModifiedAt());
         info.setContentHash(model.getContentHash());
+        info.setLifecycleStatus(model.getLifecycleStatus());
+        info.setDeprecatedAt(model.getDeprecatedAt());
+        info.setDeprecatedCategory(model.getDeprecatedCategory());
+        info.setDeprecatedReason(model.getDeprecatedReason());
+        info.setDeprecatedBy(model.getDeprecatedBy());
         info.setDuplicateInfo(model.getDuplicateInfo());
         return info;
     }

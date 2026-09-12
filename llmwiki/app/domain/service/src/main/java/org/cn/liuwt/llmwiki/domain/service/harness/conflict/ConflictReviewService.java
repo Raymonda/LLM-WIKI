@@ -136,12 +136,23 @@ public class ConflictReviewService {
         review.setDecidedBy(userId);
         review.setDecidedAt(LocalDateTime.now());
 
-        switch (action) {
-            case "merge" -> executeMerge(review);
-            case "coexist" -> executeCoexist(review);
-            case "choose_a" -> executeChoose(review, review.getFromPageId(), review.getToPageId());
-            case "choose_b" -> executeChoose(review, review.getToPageId(), review.getFromPageId());
-            default -> throw new BusinessException(ErrorCode.CONFLICT_UNSUPPORTED_ACTION, action);
+        boolean samePagePair = review.getFromPageId() != null
+            && review.getFromPageId().equals(review.getToPageId());
+        if (samePagePair && ("merge".equals(action) || action.startsWith("choose_"))) {
+            log.warn("Same-page conflict ruling '{}' downgraded to coexist (reviewId={}, pageId={})",
+                action, reviewId, review.getFromPageId());
+            review.setRulingAction("coexist");
+            review.setRulingDetail((detail == null || detail.isBlank() ? "" : detail + " ")
+                + "[同页冲突：仅收敛诊断，页面保持双侧并列]");
+            executeCoexist(review);
+        } else {
+            switch (action) {
+                case "merge" -> executeMerge(review);
+                case "coexist" -> executeCoexist(review);
+                case "choose_a" -> executeChoose(review, review.getFromPageId(), review.getToPageId());
+                case "choose_b" -> executeChoose(review, review.getToPageId(), review.getFromPageId());
+                default -> throw new BusinessException(ErrorCode.CONFLICT_UNSUPPORTED_ACTION, action);
+            }
         }
 
         if (review.getExecutionError() != null && !review.getExecutionError().isBlank()) {

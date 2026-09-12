@@ -62,6 +62,9 @@ export default {
   pulseTypeBudgetExceeded: '用量超额',
   pulseTypeAwaitingExpired: '裁决过期',
   pulseTypePageRecalled: '页面变动',
+  pulseTypeIngestBatchAwaiting: '批次待审阅',
+  pulseTypeIngestBatchAnalyzed: '批次分析完成',
+  pulseTypeIngestBatchCompleted: '批次全部完成',
   // AiAssistantPanel
   reject: '拒绝',
   executionTrace: '执行追踪',

@@ -19,6 +19,8 @@ public class ExecutionModel {
     private Integer totalTokens;
     private String errorMessage;
     private String nodeId;
+    private Long batchId;
+    private String guidance;
     private List<ExecutionStepModel> steps;
 
     @Data

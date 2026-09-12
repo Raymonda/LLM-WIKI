@@ -30,7 +30,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -39,7 +38,9 @@ public class MergeService {
 
     private static final Logger log = LoggerFactory.getLogger(MergeService.class);
 
-    private final Set<String> inFlightMerges = ConcurrentHashMap.newKeySet();
+    private static final long MERGE_LOCK_TTL_MS = 30 * 60 * 1000L;
+
+    private final Map<String, Long> inFlightMerges = new ConcurrentHashMap<>();
 
     @Autowired
     private WikiPageMapper wikiPageMapper;
@@ -85,13 +86,6 @@ public class MergeService {
     private ExecutionNodeRegistry registry;
 
     public Map<String, Object> executeMerge(Long scopeId, Long userId, List<Long> pageIds, String targetTitle, String instruction) {
-        List<Long> sortedIds = pageIds.stream().sorted().collect(Collectors.toList());
-        String mergeKey = sortedIds.toString();
-        if (!inFlightMerges.add(mergeKey)) {
-            throw new RuntimeException("该组合的合并任务正在执行中，请勿重复提交");
-        }
-
-        try {
         List<WikiPageDO> pages = wikiPageMapper.selectBatchIds(pageIds);
         pages = pages.stream()
             .filter(p -> PageLifecycle.ACTIVE.name().equals(p.getLifecycleStatus()))
@@ -101,52 +95,56 @@ public class MergeService {
         }
 
         List<Long> activePageIds = pages.stream().map(WikiPageDO::getId).collect(Collectors.toList());
+        String mergeKey = computeMergeKey(activePageIds);
+        acquireMergeLock(mergeKey);
 
-        for (WikiPageDO page : pages) {
-            page.setLifecycleStatus(PageLifecycle.MERGING.name());
-            wikiPageMapper.updateById(page);
-        }
+        try {
+            for (WikiPageDO page : pages) {
+                page.setLifecycleStatus(PageLifecycle.MERGING.name());
+                wikiPageMapper.updateById(page);
+            }
 
-        String mergedContent = buildMergedContent(pages, scopeId);
-        String sourceName = "合并: " + pages.stream().map(WikiPageDO::getTitle).collect(Collectors.joining(" + "));
-        if (targetTitle != null && !targetTitle.isBlank()) {
-            sourceName = "合并至: " + targetTitle;
-        }
+            String mergedContent = buildMergedContent(pages, scopeId);
+            String sourceName = "合并: " + pages.stream().map(WikiPageDO::getTitle).collect(Collectors.joining(" + "));
+            if (targetTitle != null && !targetTitle.isBlank()) {
+                sourceName = "合并至: " + targetTitle;
+            }
 
-        SourceDO sourceDO = new SourceDO();
-        sourceDO.setName(sourceName);
-        sourceDO.setFormat("USER_MERGE");
-        sourceDO.setFilePath("");
-        sourceDO.setSize((long) mergedContent.getBytes(StandardCharsets.UTF_8).length);
-        sourceDO.setStatus("processed");
-        sourceDO.setScopeId(scopeId);
-        sourceDO.setUploadUserId(userId);
-        sourceDO.setCreatedAt(LocalDateTime.now());
-        sourceMapper.insert(sourceDO);
+            SourceDO sourceDO = new SourceDO();
+            sourceDO.setName(sourceName);
+            sourceDO.setFormat("USER_MERGE");
+            sourceDO.setFilePath("");
+            sourceDO.setSize((long) mergedContent.getBytes(StandardCharsets.UTF_8).length);
+            sourceDO.setStatus("processed");
+            sourceDO.setScopeId(scopeId);
+            sourceDO.setUploadUserId(userId);
+            sourceDO.setCreatedAt(LocalDateTime.now());
+            sourceMapper.insert(sourceDO);
 
-        String scopeIdStr = String.valueOf(scopeId);
-        String parsedPath = "parsed/" + sourceDO.getId() + ".parsed.md";
-        storageProvider.write(scopeIdStr, parsedPath, mergedContent.getBytes(StandardCharsets.UTF_8));
+            String scopeIdStr = String.valueOf(scopeId);
+            String parsedPath = "parsed/" + sourceDO.getId() + ".parsed.md";
+            storageProvider.write(scopeIdStr, parsedPath, mergedContent.getBytes(StandardCharsets.UTF_8));
 
-        ExecutionModel execution = executionTracker.createExecution("page_merge", scopeId, sourceDO.getId(), null);
-        executionTracker.updateExecutionStatus(execution.getId(), "running");
+            ExecutionModel execution = executionTracker.createExecution("page_merge", scopeId, sourceDO.getId(), null);
+            executionTracker.updateExecutionStatus(execution.getId(), "running");
 
-        String guidance = buildMergeGuidance(pages, targetTitle, instruction);
+            String guidance = buildMergeGuidance(pages, targetTitle, instruction);
 
-        if (isMqAvailable()) {
-            sendMergeTask(execution.getId(), scopeId, sourceDO.getId(), guidance, activePageIds);
-        } else {
-            submitLocalMergeTask(execution.getId(), scopeId, sourceDO.getId(), guidance, activePageIds);
-        }
+            if (isMqAvailable()) {
+                sendMergeTask(execution.getId(), scopeId, sourceDO.getId(), guidance, activePageIds);
+            } else {
+                submitLocalMergeTask(execution.getId(), scopeId, sourceDO.getId(), guidance, activePageIds);
+            }
 
-        Map<String, Object> result = new HashMap<>();
-        result.put("executionId", execution.getId());
-        result.put("sourceId", sourceDO.getId());
-        result.put("status", "running");
-        result.put("mergedPageIds", activePageIds);
-        return result;
+            Map<String, Object> result = new HashMap<>();
+            result.put("executionId", execution.getId());
+            result.put("sourceId", sourceDO.getId());
+            result.put("status", "running");
+            result.put("mergedPageIds", activePageIds);
+            return result;
 
         } catch (RuntimeException e) {
+            restoreMergingPages(scopeId, activePageIds);
             inFlightMerges.remove(mergeKey);
             throw e;
         }
@@ -154,7 +152,7 @@ public class MergeService {
 
     public void runMergePipeline(Long executionId, Long scopeId, Long sourceId,
                                   String guidance, List<Long> originalPageIds) {
-        String mergeKey = originalPageIds.stream().sorted().collect(Collectors.toList()).toString();
+        String mergeKey = computeMergeKey(originalPageIds);
         try {
             ingestOrchestrator.runIngestPipelineWithExecution(executionId, scopeId, sourceId, guidance, true);
             postMergeCleanup(scopeId, originalPageIds, sourceId, executionId);
@@ -183,6 +181,19 @@ public class MergeService {
         } catch (Exception e) {
             log.error("Failed to restore MERGING pages to ACTIVE: scopeId={}, pageIds={}", scopeId, pageIds, e);
         }
+    }
+
+    private void acquireMergeLock(String mergeKey) {
+        long now = System.currentTimeMillis();
+        Long existing = inFlightMerges.putIfAbsent(mergeKey, now);
+        if (existing == null) return;
+        boolean expired = now - existing >= MERGE_LOCK_TTL_MS;
+        if (expired && inFlightMerges.replace(mergeKey, existing, now)) return;
+        throw new RuntimeException("该组合的合并任务正在执行中，请勿重复提交");
+    }
+
+    private static String computeMergeKey(List<Long> pageIds) {
+        return pageIds.stream().sorted().collect(Collectors.toList()).toString();
     }
 
     private void sendMergeTask(Long executionId, Long scopeId, Long sourceId, String guidance, List<Long> originalPageIds) {
@@ -255,6 +266,7 @@ public class MergeService {
 
         if (pipelinePageIds.isEmpty()) {
             log.warn("Merge pipeline produced no wiki_page_source records: scopeId={}, sourceId={}", scopeId, sourceId);
+            restoreMergingPages(scopeId, originalPageIds);
             return;
         }
 

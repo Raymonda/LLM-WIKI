@@ -8,4 +8,6 @@ public class DuplicateInfo {
     private String existingSourceName;
     private String existingSourceStatus;
     private String message;
+    private String existingSourceLifecycleStatus;
+    private String existingSourceDeprecatedReason;
 }

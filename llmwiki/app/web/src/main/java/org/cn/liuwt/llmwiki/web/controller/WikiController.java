@@ -697,6 +697,11 @@ public class WikiController {
         info.setSize(sourceDO.getSize());
         info.setStatus(sourceDO.getStatus());
         info.setCreatedAt(sourceDO.getCreatedAt());
+        info.setLifecycleStatus(sourceDO.getLifecycleStatus());
+        info.setDeprecatedAt(sourceDO.getDeprecatedAt());
+        info.setDeprecatedCategory(sourceDO.getDeprecatedCategory());
+        info.setDeprecatedReason(sourceDO.getDeprecatedReason());
+        info.setDeprecatedBy(sourceDO.getDeprecatedBy());
         return info;
     }
 

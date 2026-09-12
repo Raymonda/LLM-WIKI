@@ -8,6 +8,7 @@ export interface NotificationInfo {
   scopeId: number | null
   relatedPageId: number | null
   executionId: number | null
+  batchId?: number | null
   isRead: number          // 0 = 未读, 1 = 已读
   createdAt: string
 }

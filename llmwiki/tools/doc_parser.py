@@ -2398,7 +2398,7 @@ def _extract_text_pandoc_docx(file_path):
     import subprocess
     try:
         result = subprocess.run(
-            ["pandoc", file_path, "-t", "markdown", "--wrap=none"],
+            ["pandoc", "-f", "docx", file_path, "-t", "markdown", "--wrap=none"],
             capture_output=True, text=True, encoding="utf-8", timeout=60
         )
         if result.returncode != 0:
@@ -3058,7 +3058,7 @@ def _extract_text_pandoc_pptx(file_path):
     import subprocess
     try:
         result = subprocess.run(
-            ["pandoc", file_path, "-t", "markdown", "--wrap=none"],
+            ["pandoc", "-f", "pptx", file_path, "-t", "markdown", "--wrap=none"],
             capture_output=True, text=True, encoding="utf-8", timeout=60
         )
         if result.returncode != 0:

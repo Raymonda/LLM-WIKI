@@ -77,7 +77,7 @@ public class LintProbeService {
         String previousFindingsSummary = buildPreviousFindingsSummary(previousFindings, rulesConfig);
         String previousHealthSummary = buildPreviousHealthSummary(healthDistribution);
 
-        Set<String> downgradedTypes = computeDowngradedTypes(previousFindings, rulesConfig);
+        Set<String> downgradedTypes = computeDowngradedTypes(scopeId, rulesConfig);
 
         // 增量模式下，利用诊断缓存过滤未变更页面
         List<WikiPageDO> effectiveFocusPages = focusPages;
@@ -118,30 +118,33 @@ public class LintProbeService {
             () -> detectConflictsBySql(scopeId, rulesConfig), probeExecutor);
         CompletableFuture<List<SafetyNetFinding>> refConflictFuture = CompletableFuture.supplyAsync(
             () -> detectReferenceConflictsBySql(scopeId, rulesConfig), probeExecutor);
+        CompletableFuture<List<SafetyNetFinding>> deprecatedSourceFuture = CompletableFuture.supplyAsync(
+            () -> detectDeprecatedSourceRefsBySql(scopeId), probeExecutor);
         CompletableFuture<List<ContentDuplicateDetector.DuplicatePair>> contentDupFuture = CompletableFuture.supplyAsync(
             () -> contentDuplicateDetector.detectAll(scopeId),
             probeExecutor);
 
         ProbeResult aiResult;
-        List<SafetyNetFinding> sqlOrphans, sqlStale, sqlConflicts, sqlRefConflicts;
+        List<SafetyNetFinding> sqlOrphans, sqlStale, sqlConflicts, sqlRefConflicts, sqlDeprecatedSource;
         List<ContentDuplicateDetector.DuplicatePair> contentDuplicates;
         int probeSize = probeFocusPages != null ? probeFocusPages.size()
             : (allPagesForStats != null ? allPagesForStats.size() : 0);
         int timeoutSeconds = Math.min(PROBE_TIMEOUT_BASE_SECONDS + probeSize / 2, PROBE_TIMEOUT_MAX_SECONDS);
         try {
-            CompletableFuture.allOf(aiFuture, orphanFuture, staleFuture, conflictFuture, refConflictFuture, contentDupFuture)
+            CompletableFuture.allOf(aiFuture, orphanFuture, staleFuture, conflictFuture, refConflictFuture, deprecatedSourceFuture, contentDupFuture)
                 .get(timeoutSeconds, TimeUnit.SECONDS);
             aiResult = aiFuture.get();
             sqlOrphans = orphanFuture.get();
             sqlStale = staleFuture.get();
             sqlConflicts = conflictFuture.get();
             sqlRefConflicts = refConflictFuture.get();
+            sqlDeprecatedSource = deprecatedSourceFuture.get();
             contentDuplicates = contentDupFuture.get();
         } catch (Exception e) {
             log.warn("Parallel probe failed after {}s, harvesting completed futures and cancelling the rest: {}",
                 timeoutSeconds, e.getMessage());
             boolean aiTimedOut = !aiFuture.isDone();
-            for (CompletableFuture<?> f : List.of(aiFuture, orphanFuture, staleFuture, conflictFuture, refConflictFuture, contentDupFuture)) {
+            for (CompletableFuture<?> f : List.of(aiFuture, orphanFuture, staleFuture, conflictFuture, refConflictFuture, deprecatedSourceFuture, contentDupFuture)) {
                 if (!f.isDone()) f.cancel(true);
             }
             aiResult = aiFuture.isDone() && !aiFuture.isCancelled()
@@ -151,6 +154,7 @@ public class LintProbeService {
             sqlStale = staleFuture.isDone() ? staleFuture.getNow(Collections.emptyList()) : Collections.emptyList();
             sqlConflicts = conflictFuture.isDone() ? conflictFuture.getNow(Collections.emptyList()) : Collections.emptyList();
             sqlRefConflicts = refConflictFuture.isDone() ? refConflictFuture.getNow(Collections.emptyList()) : Collections.emptyList();
+            sqlDeprecatedSource = deprecatedSourceFuture.isDone() ? deprecatedSourceFuture.getNow(Collections.emptyList()) : Collections.emptyList();
             contentDuplicates = contentDupFuture.isDone() ? contentDupFuture.getNow(Collections.emptyList()) : Collections.emptyList();
         }
 
@@ -165,7 +169,7 @@ public class LintProbeService {
             filePathToId = Collections.emptyMap();
         }
 
-        List<MergedFinding> merged = mergeFindings(aiResult, sqlOrphans, sqlStale, sqlConflicts, sqlRefConflicts, filePathToId, rulesConfig);
+        List<MergedFinding> merged = mergeFindings(aiResult, sqlOrphans, sqlStale, sqlConflicts, sqlRefConflicts, sqlDeprecatedSource, filePathToId, rulesConfig);
         merged = validateAiFindings(scopeId, merged, filePathToId);
         merged = appendContentDuplicateFindings(merged, contentDuplicates);
         merged = applyDowngradeFilter(merged, downgradedTypes, rulesConfig);
@@ -318,6 +322,59 @@ public class LintProbeService {
         return results;
     }
 
+    List<SafetyNetFinding> detectDeprecatedSourceRefsBySql(Long scopeId) {
+        List<Map<String, Object>> rows = wikiPageMapper.selectDeprecatedSourcePageRows(scopeId);
+        if (rows.isEmpty()) return Collections.emptyList();
+
+        Map<Long, List<Map<String, Object>>> byPage = new java.util.LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            Long pageId = ((Number) row.get("page_id")).longValue();
+            byPage.computeIfAbsent(pageId, k -> new ArrayList<>()).add(row);
+        }
+
+        List<SafetyNetFinding> results = new ArrayList<>();
+        for (Map.Entry<Long, List<Map<String, Object>>> entry : byPage.entrySet()) {
+            List<Map<String, Object>> refs = entry.getValue();
+            Map<String, Object> first = refs.get(0);
+            String pageType = (String) first.get("page_type");
+            String priority = "reference".equals(pageType) ? "high" : "medium";
+            String filePath = (String) first.get("file_path");
+            String pageTitle = String.valueOf(first.get("title"));
+
+            List<Long> sourceIds = new ArrayList<>();
+            List<String> sourceNames = new ArrayList<>();
+            StringBuilder detailBuilder = new StringBuilder("该页面引用的来源已废弃：");
+            for (Map<String, Object> ref : refs) {
+                String sourceName = (String) ref.get("source_name");
+                String category = (String) ref.get("deprecated_category");
+                String reason = (String) ref.get("deprecated_reason");
+                sourceIds.add(((Number) ref.get("source_id")).longValue());
+                sourceNames.add(sourceName);
+                detailBuilder.append("「").append(sourceName).append("」");
+                if (category != null && !category.isBlank()) {
+                    detailBuilder.append("（类别：").append(category).append("）");
+                }
+                if (reason != null && !reason.isBlank()) {
+                    detailBuilder.append("（原因：").append(reason).append("）");
+                }
+                detailBuilder.append("；");
+            }
+            detailBuilder.append("建议重新编译该页面以剥离废弃内容，或确认无影响后关闭。");
+
+            Map<String, Object> extra = new java.util.HashMap<>();
+            extra.put("sourceId", sourceIds.get(0));
+            extra.put("deprecatedCategory", first.get("deprecated_category"));
+            extra.put("sourceIds", sourceIds);
+            extra.put("sourceNames", sourceNames);
+            extra.put("source", "sql_safety_net");
+
+            results.add(new SafetyNetFinding("deprecated_source", priority,
+                "废弃来源引用：「" + pageTitle + "」（SQL确认）",
+                detailBuilder.toString(), filePath, entry.getKey(), extra));
+        }
+        return results;
+    }
+
     private LocalDateTime toLocalDateTime(Object value) {
         if (value == null) return null;
         if (value instanceof LocalDateTime) return (LocalDateTime) value;
@@ -330,6 +387,7 @@ public class LintProbeService {
                                                List<SafetyNetFinding> sqlStale,
                                                List<SafetyNetFinding> sqlConflicts,
                                                List<SafetyNetFinding> sqlRefConflicts,
+                                               List<SafetyNetFinding> sqlDeprecatedSource,
                                                Map<String, Long> filePathToId,
                                                LintRulesConfig rulesConfig) {
         List<MergedFinding> merged = new ArrayList<>();
@@ -406,6 +464,11 @@ public class LintProbeService {
             } else {
                 log.debug("SQL 参考页 {} 已被AI探查覆盖，跳过重复", sf.pagePath);
             }
+        }
+
+        for (SafetyNetFinding sf : sqlDeprecatedSource) {
+            merged.add(new MergedFinding(sf.type, sf.priority, sf.title, sf.detail,
+                sf.pagePath, sf.assetId, sf.extra, false));
         }
 
         return merged;
@@ -585,15 +648,12 @@ public class LintProbeService {
         return sb.toString();
     }
 
-    private Set<String> computeDowngradedTypes(List<LintFindingDO> previousFindings, LintRulesConfig rulesConfig) {
-        if (previousFindings == null || previousFindings.isEmpty()) return Collections.emptySet();
+    private Set<String> computeDowngradedTypes(Long scopeId, LintRulesConfig rulesConfig) {
         LintRulesConfig.FeedbackLearningConfig flConfig = rulesConfig.getFeedbackLearning();
         int threshold = flConfig.getDismissCountToDowngrade();
         if (threshold <= 0) return Collections.emptySet();
 
-        Map<String, Long> dismissCounts = previousFindings.stream()
-            .filter(f -> "ignored".equals(f.getUserFeedback()) || "dismissed".equals(f.getStatus()))
-            .collect(Collectors.groupingBy(LintFindingDO::getFindingType, Collectors.counting()));
+        Map<String, Long> dismissCounts = lintFindingService.countDismissedOrIgnoredByType(scopeId);
 
         Set<String> downgraded = new HashSet<>();
         dismissCounts.forEach((type, count) -> {
@@ -683,7 +743,7 @@ public class LintProbeService {
         }
     }
 
-    private static class SafetyNetFinding {
+    static class SafetyNetFinding {
         final String type;
         final String priority;
         final String title;

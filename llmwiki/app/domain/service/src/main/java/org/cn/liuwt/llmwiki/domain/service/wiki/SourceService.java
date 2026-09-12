@@ -1,9 +1,18 @@
 package org.cn.liuwt.llmwiki.domain.service.wiki;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
+import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
+import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
+import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
+import org.cn.liuwt.llmwiki.domain.model.system.AuditLogModel;
 import org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel;
+import org.cn.liuwt.llmwiki.domain.service.harness.LintFindingService;
+import org.cn.liuwt.llmwiki.domain.service.system.AuditLogService;
 import org.cn.liuwt.llmwiki.facade.model.DuplicateInfo;
 import org.cn.liuwt.llmwiki.integration.storage.StorageProvider;
 import org.slf4j.Logger;
@@ -20,7 +29,10 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -34,36 +46,54 @@ public class SourceService {
     @Autowired
     private SourceMapper sourceMapper;
 
+    private static final Set<String> DEPRECATE_BLOCKING_EXECUTION_STATUSES =
+        Set.of("pending", "running", "awaiting_confirmation", "awaiting_review", "confirmed", "paused");
+
+    private static final Set<String> VALID_DEPRECATE_CATEGORIES =
+        Set.of("OUTDATED", "SUPERSEDED", "ERRONEOUS", "OTHER");
+
+    private static final String TEMP_DIR = "raw/.tmp";
+    private static final long TEMP_FILE_TTL_HOURS = 24;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Autowired
+    private AuditLogService auditLogService;
+
+    @Autowired
+    private ExecutionMapper executionMapper;
+
+    @Autowired
+    private LintFindingService lintFindingService;
+
     public SourceModel uploadSource(MultipartFile file, Long scopeId, Long userId) {
         String originalName = file.getOriginalFilename();
         String format = extractFormat(originalName);
         String scopeIdStr = String.valueOf(scopeId);
-        String uniqueName = buildUniqueFileName(originalName);
-        String storagePath = "raw/" + uniqueName;
-
         try {
             storageProvider.ensureBucket(scopeIdStr);
+            cleanupStaleTempFiles(scopeIdStr);
 
+            String tempPath = TEMP_DIR + "/" + UUID.randomUUID().toString().replace("-", "");
             MessageDigest messageDigest = MessageDigest.getInstance("SHA-256");
-            DigestInputStream digestInputStream = new DigestInputStream(file.getInputStream(), messageDigest);
-            storageProvider.write(scopeIdStr, storagePath, digestInputStream, file.getSize());
-
-            byte[] hashBytes = messageDigest.digest();
-            String contentHash = bytesToHex(hashBytes);
+            try (InputStream in = new DigestInputStream(file.getInputStream(), messageDigest)) {
+                storageProvider.write(scopeIdStr, tempPath, in, file.getSize());
+            }
+            String contentHash = bytesToHex(messageDigest.digest());
+            String casPath = casPathOf(contentHash);
+            finalizeCasUpload(scopeIdStr, tempPath, casPath);
 
             SourceDO sourceDO = new SourceDO();
             sourceDO.setName(originalName);
-            sourceDO.setFilePath(storagePath);
+            sourceDO.setFilePath(casPath);
             sourceDO.setFormat(format);
             sourceDO.setSize(file.getSize());
             sourceDO.setStatus("uploaded");
             sourceDO.setScopeId(scopeId);
             sourceDO.setUploadUserId(userId);
             sourceDO.setContentHash(contentHash);
-
-            java.time.LocalDateTime fileModifiedTime = storageProvider.getLastModifiedTime(scopeIdStr, storagePath);
-            sourceDO.setFileModifiedAt(fileModifiedTime);
-
+            sourceDO.setLifecycleStatus("ACTIVE");
+            sourceDO.setFileModifiedAt(storageProvider.getLastModifiedTime(scopeIdStr, casPath));
             sourceMapper.insert(sourceDO);
 
             SourceModel model = toModel(sourceDO);
@@ -73,7 +103,18 @@ public class SourceService {
                 duplicateInfo.setExistingSourceId(duplicate.getId());
                 duplicateInfo.setExistingSourceName(duplicate.getName());
                 duplicateInfo.setExistingSourceStatus(duplicate.getStatus());
-                duplicateInfo.setMessage("此文件内容与已有来源「" + duplicate.getName() + "」相同（" + duplicate.getStatus() + "），AI 分析可能产出重复内容。");
+                duplicateInfo.setExistingSourceLifecycleStatus(duplicate.getLifecycleStatus());
+                duplicateInfo.setExistingSourceDeprecatedReason(duplicate.getDeprecatedReason());
+                if ("DEPRECATED".equals(duplicate.getLifecycleStatus())) {
+                    String reasonSuffix = duplicate.getDeprecatedReason() != null
+                        && !duplicate.getDeprecatedReason().isBlank()
+                        ? "（原因：" + duplicate.getDeprecatedReason() + "）" : "";
+                    duplicateInfo.setMessage("此文件内容与已废弃来源「" + duplicate.getName()
+                        + "」相同" + reasonSuffix + "，AI 分析可能产出重复内容。");
+                } else {
+                    duplicateInfo.setMessage("此文件内容与已有来源「" + duplicate.getName()
+                        + "」相同（" + duplicate.getStatus() + "），AI 分析可能产出重复内容。");
+                }
                 model.setDuplicateInfo(duplicateInfo);
             } else {
                 SourceModel processing = findProcessingSource(scopeId, contentHash);
@@ -82,7 +123,10 @@ public class SourceService {
                     duplicateInfo.setExistingSourceId(processing.getId());
                     duplicateInfo.setExistingSourceName(processing.getName());
                     duplicateInfo.setExistingSourceStatus(processing.getStatus());
-                    duplicateInfo.setMessage("此文件内容与正在处理中的来源「" + processing.getName() + "」相同，建议等待处理完成后再决定是否重新分析。");
+                    duplicateInfo.setExistingSourceLifecycleStatus(processing.getLifecycleStatus());
+                    duplicateInfo.setExistingSourceDeprecatedReason(processing.getDeprecatedReason());
+                    duplicateInfo.setMessage("此文件内容与正在处理中的来源「" + processing.getName()
+                        + "」相同，建议等待处理完成后再决定是否重新分析。");
                     model.setDuplicateInfo(duplicateInfo);
                 }
             }
@@ -101,27 +145,31 @@ public class SourceService {
         byte[] bytes = markdown.getBytes(StandardCharsets.UTF_8);
         String originalName = (title != null && title.toLowerCase().endsWith(".md")) ? title : title + ".md";
         String scopeIdStr = String.valueOf(scopeId);
-        String uniqueName = buildUniqueFileName(originalName);
-        String storagePath = "raw/" + uniqueName;
         try {
             storageProvider.ensureBucket(scopeIdStr);
+            cleanupStaleTempFiles(scopeIdStr);
+
+            String tempPath = TEMP_DIR + "/" + UUID.randomUUID().toString().replace("-", "");
             MessageDigest messageDigest = MessageDigest.getInstance("SHA-256");
             try (InputStream in = new ByteArrayInputStream(bytes)) {
                 DigestInputStream digestInputStream = new DigestInputStream(in, messageDigest);
-                storageProvider.write(scopeIdStr, storagePath, digestInputStream, (long) bytes.length);
+                storageProvider.write(scopeIdStr, tempPath, digestInputStream, (long) bytes.length);
             }
             String contentHash = bytesToHex(messageDigest.digest());
+            String casPath = casPathOf(contentHash);
+            finalizeCasUpload(scopeIdStr, tempPath, casPath);
 
             SourceDO sourceDO = new SourceDO();
             sourceDO.setName(originalName);
-            sourceDO.setFilePath(storagePath);
+            sourceDO.setFilePath(casPath);
             sourceDO.setFormat("md");
             sourceDO.setSize((long) bytes.length);
             sourceDO.setStatus("uploaded");
             sourceDO.setScopeId(scopeId);
             sourceDO.setUploadUserId(userId);
             sourceDO.setContentHash(contentHash);
-            sourceDO.setFileModifiedAt(storageProvider.getLastModifiedTime(scopeIdStr, storagePath));
+            sourceDO.setLifecycleStatus("ACTIVE");
+            sourceDO.setFileModifiedAt(storageProvider.getLastModifiedTime(scopeIdStr, casPath));
             sourceMapper.insert(sourceDO);
 
             SourceModel model = toModel(sourceDO);
@@ -134,7 +182,18 @@ public class SourceService {
                 duplicateInfo.setExistingSourceId(duplicate.getId());
                 duplicateInfo.setExistingSourceName(duplicate.getName());
                 duplicateInfo.setExistingSourceStatus(duplicate.getStatus());
-                duplicateInfo.setMessage("此内容与已有来源「" + duplicate.getName() + "」相同（" + duplicate.getStatus() + "），AI 分析可能产出重复内容。");
+                duplicateInfo.setExistingSourceLifecycleStatus(duplicate.getLifecycleStatus());
+                duplicateInfo.setExistingSourceDeprecatedReason(duplicate.getDeprecatedReason());
+                if ("DEPRECATED".equals(duplicate.getLifecycleStatus())) {
+                    String reasonSuffix = duplicate.getDeprecatedReason() != null
+                        && !duplicate.getDeprecatedReason().isBlank()
+                        ? "（原因：" + duplicate.getDeprecatedReason() + "）" : "";
+                    duplicateInfo.setMessage("此内容与已废弃来源「" + duplicate.getName()
+                        + "」相同" + reasonSuffix + "，AI 分析可能产出重复内容。");
+                } else {
+                    duplicateInfo.setMessage("此内容与已有来源「" + duplicate.getName()
+                        + "」相同（" + duplicate.getStatus() + "），AI 分析可能产出重复内容。");
+                }
                 model.setDuplicateInfo(duplicateInfo);
             }
             return model;
@@ -150,6 +209,47 @@ public class SourceService {
             sb.append(String.format("%02x", b));
         }
         return sb.toString();
+    }
+
+    private String casPathOf(String contentHash) {
+        return "raw/" + contentHash.substring(0, 2) + "/" + contentHash.substring(2, 4) + "/" + contentHash;
+    }
+
+    private void finalizeCasUpload(String scopeIdStr, String tempPath, String casPath) {
+        if (storageProvider.exists(scopeIdStr, casPath)) {
+            storageProvider.delete(scopeIdStr, tempPath);
+            log.info("CAS dedup hit, reusing existing raw object: {}", casPath);
+            return;
+        }
+        try {
+            storageProvider.move(scopeIdStr, tempPath, casPath);
+        } catch (Exception e) {
+            storageProvider.delete(scopeIdStr, tempPath);
+            if (storageProvider.exists(scopeIdStr, casPath)) {
+                log.info("CAS concurrent dedup hit, reusing existing raw object: {}", casPath);
+                return;
+            }
+            throw e;
+        }
+    }
+
+    private void cleanupStaleTempFiles(String scopeIdStr) {
+        try {
+            List<String> tempFiles = storageProvider.list(scopeIdStr, TEMP_DIR);
+            if (tempFiles.isEmpty()) {
+                return;
+            }
+            LocalDateTime cutoff = LocalDateTime.now().minusHours(TEMP_FILE_TTL_HOURS);
+            for (String tempFile : tempFiles) {
+                LocalDateTime modified = storageProvider.getLastModifiedTime(scopeIdStr, tempFile);
+                if (modified != null && modified.isBefore(cutoff)) {
+                    storageProvider.delete(scopeIdStr, tempFile);
+                    log.info("Cleaned stale temp upload file: {}", tempFile);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to clean stale temp upload files: {}", e.getMessage());
+        }
     }
 
     public SourceModel findDuplicateSource(Long scopeId, String contentHash) {
@@ -174,19 +274,6 @@ public class SourceService {
                 .last("LIMIT 1")
         );
         return processing != null ? toModel(processing) : null;
-    }
-
-    private String buildUniqueFileName(String originalName) {
-        String uuid = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
-        if (originalName == null || originalName.isBlank()) {
-            return uuid;
-        }
-        String safeName = originalName.replace('\\', '/');
-        int slashIdx = safeName.lastIndexOf('/');
-        if (slashIdx >= 0) {
-            safeName = safeName.substring(slashIdx + 1);
-        }
-        return uuid + "-" + safeName;
     }
 
     public List<SourceModel> listSources(Long scopeId) {
@@ -304,18 +391,108 @@ public class SourceService {
         return new String(content, StandardCharsets.UTF_8);
     }
 
-    public void deleteSource(Long id, Long scopeId) {
+    public SourceModel deprecateSource(Long id, Long scopeId, Long userId, String category, String reason) {
         SourceDO sourceDO = sourceMapper.selectOne(
             new LambdaQueryWrapper<SourceDO>()
                 .eq(SourceDO::getId, id)
                 .eq(SourceDO::getScopeId, scopeId)
         );
         if (sourceDO == null) {
-            return;
+            throw new BusinessException(ErrorCode.INGEST_SOURCE_NOT_FOUND);
         }
-        String scopeIdStr = String.valueOf(scopeId);
-        storageProvider.delete(scopeIdStr, sourceDO.getFilePath());
-        sourceMapper.deleteById(id);
+        if ("DEPRECATED".equals(sourceDO.getLifecycleStatus())) {
+            throw new BusinessException(ErrorCode.SOURCE_ALREADY_DEPRECATED);
+        }
+        if (category == null || !VALID_DEPRECATE_CATEGORIES.contains(category)) {
+            throw new BusinessException(ErrorCode.INVALID_PARAM, "category");
+        }
+        if ("OTHER".equals(category) && (reason == null || reason.isBlank())) {
+            throw new BusinessException(ErrorCode.INVALID_PARAM, "reason");
+        }
+        boolean inFlight = "processing".equals(sourceDO.getStatus())
+            || executionMapper.selectCount(new LambdaQueryWrapper<ExecutionDO>()
+                .eq(ExecutionDO::getType, "ingest")
+                .eq(ExecutionDO::getScopeId, scopeId)
+                .eq(ExecutionDO::getSourceId, id)
+                .in(ExecutionDO::getStatus, DEPRECATE_BLOCKING_EXECUTION_STATUSES)) > 0;
+        if (inFlight) {
+            throw new BusinessException(ErrorCode.SOURCE_DEPRECATE_WHILE_PROCESSING);
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        sourceMapper.update(null,
+            new LambdaUpdateWrapper<SourceDO>()
+                .eq(SourceDO::getId, id)
+                .eq(SourceDO::getScopeId, scopeId)
+                .set(SourceDO::getLifecycleStatus, "DEPRECATED")
+                .set(SourceDO::getDeprecatedAt, now)
+                .set(SourceDO::getDeprecatedCategory, category)
+                .set(SourceDO::getDeprecatedReason, reason)
+                .set(SourceDO::getDeprecatedBy, userId)
+        );
+        writeAuditLog(scopeId, userId, "SOURCE_DEPRECATE", id, sourceDO.getName(),
+            Map.of("category", category, "reason", reason != null ? reason : ""));
+
+        sourceDO.setLifecycleStatus("DEPRECATED");
+        sourceDO.setDeprecatedAt(now);
+        sourceDO.setDeprecatedCategory(category);
+        sourceDO.setDeprecatedReason(reason);
+        sourceDO.setDeprecatedBy(userId);
+        return toModel(sourceDO);
+    }
+
+    public SourceModel undeprecateSource(Long id, Long scopeId, Long userId) {
+        SourceDO sourceDO = sourceMapper.selectOne(
+            new LambdaQueryWrapper<SourceDO>()
+                .eq(SourceDO::getId, id)
+                .eq(SourceDO::getScopeId, scopeId)
+        );
+        if (sourceDO == null) {
+            throw new BusinessException(ErrorCode.INGEST_SOURCE_NOT_FOUND);
+        }
+        if (!"DEPRECATED".equals(sourceDO.getLifecycleStatus())) {
+            throw new BusinessException(ErrorCode.SOURCE_NOT_DEPRECATED);
+        }
+        sourceMapper.update(null,
+            new LambdaUpdateWrapper<SourceDO>()
+                .eq(SourceDO::getId, id)
+                .eq(SourceDO::getScopeId, scopeId)
+                .set(SourceDO::getLifecycleStatus, "ACTIVE")
+                .set(SourceDO::getDeprecatedAt, null)
+                .set(SourceDO::getDeprecatedCategory, null)
+                .set(SourceDO::getDeprecatedReason, null)
+                .set(SourceDO::getDeprecatedBy, null)
+        );
+        lintFindingService.resolveSourceFindingsOnUndeprecate(scopeId, id);
+        writeAuditLog(scopeId, userId, "SOURCE_UNDEPRECATE", id, sourceDO.getName(), Map.of());
+
+        sourceDO.setLifecycleStatus("ACTIVE");
+        sourceDO.setDeprecatedAt(null);
+        sourceDO.setDeprecatedCategory(null);
+        sourceDO.setDeprecatedReason(null);
+        sourceDO.setDeprecatedBy(null);
+        return toModel(sourceDO);
+    }
+
+    public void deleteSource(Long id, Long scopeId) {
+        throw new BusinessException(ErrorCode.SOURCE_DELETE_FORBIDDEN);
+    }
+
+    private void writeAuditLog(Long scopeId, Long userId, String action, Long sourceId,
+                               String sourceName, Map<String, Object> detail) {
+        try {
+            AuditLogModel model = new AuditLogModel();
+            model.setActorUserId(userId);
+            model.setAction(action);
+            model.setTargetType("source");
+            model.setTargetId(sourceId);
+            model.setTargetName(sourceName);
+            model.setScopeId(scopeId);
+            model.setDetailJson(objectMapper.writeValueAsString(detail));
+            auditLogService.log(model);
+        } catch (Exception e) {
+            log.warn("Failed to write audit log: action={}, sourceId={}", action, sourceId, e);
+        }
     }
 
     private String extractFormat(String filename) {
@@ -338,6 +515,11 @@ public class SourceService {
         model.setCreatedAt(sourceDO.getCreatedAt());
         model.setFileModifiedAt(sourceDO.getFileModifiedAt());
         model.setContentHash(sourceDO.getContentHash());
+        model.setLifecycleStatus(sourceDO.getLifecycleStatus());
+        model.setDeprecatedAt(sourceDO.getDeprecatedAt());
+        model.setDeprecatedCategory(sourceDO.getDeprecatedCategory());
+        model.setDeprecatedReason(sourceDO.getDeprecatedReason());
+        model.setDeprecatedBy(sourceDO.getDeprecatedBy());
         return model;
     }
 }

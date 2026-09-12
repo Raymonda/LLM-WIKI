@@ -80,6 +80,14 @@ public class SseEventConsumer implements RocketMQListener<ExecutionEventMessage>
             }
             emitter.complete();
             registry.removeEmitter(msg.getExecutionId());
+        } else if ("awaiting_confirmation".equals(status)) {
+            ExecutionInfo info = buildFullExecutionInfo(msg.getExecutionId());
+            if (info != null) {
+                emitter.send(SseEmitter.event().name("phase1_done").data(info));
+            } else {
+                emitter.send(SseEmitter.event().name("phase1_done").data(Map.of(
+                        "executionId", msg.getExecutionId(), "status", status)));
+            }
         } else if ("paused".equals(status)) {
             ExecutionInfo info = buildFullExecutionInfo(msg.getExecutionId());
             if (info != null) {

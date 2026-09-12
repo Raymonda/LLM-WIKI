@@ -11,6 +11,7 @@ public final class ExecutionEventTypes {
     public static final String ERROR = "error";
     public static final String COMPACTION_TRIGGERED = "compaction/triggered";
     public static final String SPILL_WRITTEN = "spill/written";
+    public static final String QUALITY_GUARD = "quality/guard";
 
     private ExecutionEventTypes() {
     }

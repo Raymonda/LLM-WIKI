@@ -15,5 +15,10 @@ public class SourceInfo {
     private LocalDateTime createdAt;
     private LocalDateTime fileModifiedAt;
     private String contentHash;
+    private String lifecycleStatus;
+    private LocalDateTime deprecatedAt;
+    private String deprecatedCategory;
+    private String deprecatedReason;
+    private Long deprecatedBy;
     private DuplicateInfo duplicateInfo;
 }

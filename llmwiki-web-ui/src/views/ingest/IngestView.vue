@@ -1,20 +1,26 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
-import { uploadSource, listSources, deleteSource, type SourceInfo, type DuplicateInfo } from '@/api/source'
+import { useRouter, useRoute } from 'vue-router'
+import { uploadSource, listSources, deprecateSource, undeprecateSource, type SourceInfo, type DuplicateInfo } from '@/api/source'
 import { useAuthStore } from '@/stores/auth'
 import {
   Upload, FileText, CheckCircle, ChevronRight,
-  Loader2, AlertTriangle, Trash2, ArrowRight, Sparkles,
+  Loader2, AlertTriangle, Archive, ArchiveRestore, ArrowRight, Sparkles,
   Search, FilePlus, FileEdit, XCircle, RotateCcw, AlertCircle, X,
-  PauseCircle, PlayCircle, ChevronDown, GitBranch
+  PauseCircle, PlayCircle, ChevronDown, GitBranch, ClipboardCheck,
+  Layers
 } from 'lucide-vue-next'
 import IngestProgressBar from './components/IngestProgressBar.vue'
 import IngestStageNav, { type StageItem } from './components/IngestStageNav.vue'
 import IngestStepTimeline from './components/IngestStepTimeline.vue'
 import EntityDiscoveryWall from './components/EntityDiscoveryWall.vue'
+import AnalysisSummaryPanel from './components/AnalysisSummaryPanel.vue'
+import BatchOverviewPanel from './components/BatchOverviewPanel.vue'
+import ReviewInbox from './components/ReviewInbox.vue'
 import { useIngestProgressStore } from '@/stores/ingestProgress'
+import { isSourceDeprecated, validateDeprecateForm } from '@/utils/sourceLifecycle'
+import { useIngestBatchStore } from '@/stores/ingestBatch'
 import { useConfirmDialog } from '@/composables/useConfirmDialog'
 
 const { state: confirmState, showConfirm, onConfirm, onCancel, ConfirmDialog } = useConfirmDialog()
@@ -22,16 +28,30 @@ const { state: confirmState, showConfirm, onConfirm, onCancel, ConfirmDialog } =
 const { t } = useI18n()
 const router = useRouter()
 const authStore = useAuthStore()
+const route = useRoute()
 const store = useIngestProgressStore()
+const batchStore = useIngestBatchStore()
 
 const uploadError = ref('')
 const isUploading = ref(false)
 const existingSources = ref<SourceInfo[]>([])
 const loadingSources = ref(false)
 const duplicateWarning = ref<DuplicateInfo | null>(null)
+const batchPendingSources = ref<Array<{ id: number; name: string; size: number; format: string }>>([])
+const batchUploadFailures = ref<string[]>([])
+const batchDuplicateNames = ref<string[]>([])
+const batchGuidance = ref('')
+const batchBusy = ref(false)
+const batchError = ref('')
 
 const currentStep = computed(() => store.currentStep)
 const uploadedFile = computed(() => store.uploadedFile)
+const batchInbox = computed(() => batchStore.inbox)
+const batchMode = computed(() => batchStore.selectedBatchId != null)
+const selectedBatchInfo = computed(
+  () => batchStore.inbox.find(b => b.batchId === batchStore.selectedBatchId) ?? null,
+)
+const batchItems = computed(() => batchStore.currentBatch?.items ?? [])
 const userGuidance = computed({
   get: () => store.userGuidance,
   set: (v: string) => {
@@ -65,6 +85,8 @@ const includeParsePhase = computed(() => store.includeParsePhase)
 const totalTokens = computed(() => store.totalTokens)
 const nowMs = computed(() => store.nowMs)
 const chunkPreviews = computed(() => store.chunkPreviews)
+const aiAnalysis = computed(() => store.aiAnalysis)
+const metadataRaw = computed(() => store.metadataRaw)
 const allTaskSummaries = computed(() => store.allTaskSummaries)
 const activeTaskId = computed(() => store.activeTaskId)
 const setActiveTask = store.setActiveTask
@@ -157,9 +179,17 @@ const parsedViolations = computed<ParsedViolation[]>(() => {
 const stages = computed<StageItem[]>(() => [
   { key: 'upload', label: t('ingest.stageUpload'), icon: Upload, hint: t('ingest.stageUploadHint') },
   { key: 'analyzing', label: t('ingest.stageAnalyzing'), icon: Search, hint: t('ingest.stageAnalyzingHint') },
+  { key: 'review', label: t('ingest.stageReview'), icon: ClipboardCheck, hint: t('ingest.stageReviewHint') },
   { key: 'executing', label: t('ingest.stageExecuting'), icon: FilePlus, hint: t('ingest.stageExecutingHint') },
   { key: 'done', label: t('ingest.stageDone'), icon: CheckCircle },
 ])
+
+const stageNavKey = computed(() => {
+  if (currentStep.value === 'paused') {
+    return stepStates.value.some(s => s.name === 'ANALYZE' && s.status === 'completed') ? 'executing' : 'analyzing'
+  }
+  return currentStep.value
+})
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B'
@@ -186,19 +216,41 @@ function actionLabel(action: string): string {
 
 async function handleFileUpload(event: Event) {
   const input = event.target as HTMLInputElement
-  if (!input.files?.length) return
+  const files = Array.from(input.files ?? [])
+  if (files.length === 0) return
   isUploading.value = true
   uploadError.value = ''
   duplicateWarning.value = null
+  batchUploadFailures.value = []
+  batchDuplicateNames.value = []
+  const uploaded: Array<{ id: number; name: string; size: number; format: string }> = []
   try {
-    const result = await uploadSource(input.files[0])
-    store.pendingUploadedFile = { id: result.id, name: result.name, size: result.size, format: result.format }
-    if (result.duplicateInfo) {
-      duplicateWarning.value = result.duplicateInfo
+    for (const file of files) {
+      try {
+        const result = await uploadSource(file)
+        uploaded.push({ id: result.id, name: result.name, size: result.size, format: result.format })
+        if (result.duplicateInfo) {
+          if (files.length === 1) {
+            duplicateWarning.value = result.duplicateInfo
+          } else {
+            batchDuplicateNames.value.push(result.name)
+          }
+        }
+      } catch (e: any) {
+        if (files.length === 1) {
+          uploadError.value = e.message || t('ingest.uploadFailed')
+        } else {
+          batchUploadFailures.value.push(file.name)
+        }
+      }
+    }
+    if (files.length === 1 && uploaded.length === 1) {
+      store.pendingUploadedFile = uploaded[0]
+      batchPendingSources.value = []
+    } else if (uploaded.length > 0) {
+      batchPendingSources.value = uploaded
     }
     await loadExistingSources()
-  } catch (e: any) {
-    uploadError.value = e.message || t('ingest.uploadFailed')
   } finally {
     isUploading.value = false
     input.value = ''
@@ -216,12 +268,64 @@ async function loadExistingSources() {
   }
 }
 
-async function handleDeleteSource(id: number) {
+const DEPRECATE_CATEGORIES = ['OUTDATED', 'SUPERSEDED', 'ERRONEOUS', 'OTHER']
+
+const DEPRECATE_CATEGORY_KEY_MAP: Record<string, string> = {
+  OUTDATED: 'ingest.deprecateCategoryOutdated',
+  SUPERSEDED: 'ingest.deprecateCategorySuperseded',
+  ERRONEOUS: 'ingest.deprecateCategoryErroneous',
+  OTHER: 'ingest.deprecateCategoryOther',
+}
+
+const deprecateDialog = ref(false)
+const deprecateTarget = ref<SourceInfo | null>(null)
+const deprecateCategory = ref('OUTDATED')
+const deprecateReason = ref('')
+const deprecateSubmitting = ref(false)
+const deprecateError = ref('')
+
+function deprecateCategoryLabel(category: string | null | undefined): string {
+  const key = DEPRECATE_CATEGORY_KEY_MAP[category || '']
+  return key ? t(key) : ''
+}
+
+function openDeprecateDialog(source: SourceInfo) {
+  deprecateTarget.value = source
+  deprecateCategory.value = 'OUTDATED'
+  deprecateReason.value = ''
+  deprecateError.value = ''
+  deprecateDialog.value = true
+}
+
+async function submitDeprecate() {
+  if (!deprecateTarget.value) return
+  if (!validateDeprecateForm(deprecateCategory.value, deprecateReason.value)) {
+    deprecateError.value = t('ingest.deprecateReasonRequired')
+    return
+  }
+  deprecateSubmitting.value = true
+  deprecateError.value = ''
   try {
-    await deleteSource(id)
-    existingSources.value = existingSources.value.filter(s => s.id !== id)
+    await deprecateSource(deprecateTarget.value.id, {
+      category: deprecateCategory.value,
+      reason: deprecateReason.value.trim() || undefined,
+    })
+    deprecateDialog.value = false
+    await loadExistingSources()
   } catch (e) {
-    console.error('Failed to delete source:', e)
+    console.error('Failed to deprecate source:', e)
+    deprecateError.value = t('ingest.deprecateFailed')
+  } finally {
+    deprecateSubmitting.value = false
+  }
+}
+
+async function handleUndeprecateSource(id: number) {
+  try {
+    await undeprecateSource(id)
+    await loadExistingSources()
+  } catch (e) {
+    console.error('Failed to undeprecate source:', e)
   }
 }
 
@@ -280,6 +384,14 @@ async function handleResumeIngest() {
   await store.resumeIngestExecution()
 }
 
+async function handleConfirmWrite() {
+  await store.confirmExecution()
+}
+
+async function handleReanalysis() {
+  await store.requestReanalysis()
+}
+
 function handleNewSource() {
   store.startNewSource()
 }
@@ -289,8 +401,121 @@ function handleBackToWiki() {
   router.push('/')
 }
 
+async function openBatch(batchId: number) {
+  await batchStore.selectBatch(batchId)
+  router.replace({ path: '/ingest', query: { batch: String(batchId) } })
+}
+
+function exitBatch() {
+  batchStore.selectBatch(null)
+  router.replace({ path: '/ingest' })
+}
+
+async function runBatchAction(action: () => Promise<unknown>) {
+  batchBusy.value = true
+  batchError.value = ''
+  try {
+    await action()
+  } catch (e: any) {
+    batchError.value = e.message || t('common.operationFailed')
+  } finally {
+    batchBusy.value = false
+  }
+}
+
+async function handleBatchConfirmAll() {
+  const batch = selectedBatchInfo.value
+  if (!batch) return
+  const confirmed = await showConfirm({
+    title: t('ingest.batchConfirmAll'),
+    message: t('ingest.batchConfirmAllMessage', [batch.awaitingCount]),
+    confirmText: t('ingest.batchConfirmAll'),
+    cancelText: t('ingest.cancel'),
+    type: 'warning',
+  })
+  if (!confirmed) return
+  await runBatchAction(() => batchStore.confirmAll(batch.batchId))
+}
+
+async function handleBatchPause() {
+  const batchId = batchStore.selectedBatchId
+  if (batchId == null) return
+  await runBatchAction(() => batchStore.pause(batchId))
+}
+
+async function handleBatchResume() {
+  const batchId = batchStore.selectedBatchId
+  if (batchId == null) return
+  await runBatchAction(() => batchStore.resume(batchId))
+}
+
+async function handleBatchCancel() {
+  const batchId = batchStore.selectedBatchId
+  if (batchId == null) return
+  const confirmed = await showConfirm({
+    title: t('ingest.batchCancelBatch'),
+    message: t('ingest.batchCancelMessage'),
+    confirmText: t('ingest.batchCancelBatch'),
+    cancelText: t('ingest.cancel'),
+    type: 'danger',
+    confirmVariant: 'danger',
+  })
+  if (!confirmed) return
+  await runBatchAction(() => batchStore.cancel(batchId))
+}
+
+async function handleItemConfirm(executionId: number, guidance?: string) {
+  await runBatchAction(() => batchStore.confirmOne(executionId, guidance))
+}
+
+async function handleItemReanalyze(executionId: number, guidance?: string) {
+  await runBatchAction(() => batchStore.reanalyzeOne(executionId, guidance))
+}
+
+async function handleItemRetry(executionId: number) {
+  await runBatchAction(() => batchStore.retryOne(executionId))
+}
+
+async function createBatchFromPending() {
+  if (batchPendingSources.value.length === 0) return
+  await runBatchAction(async () => {
+    const response = await batchStore.createBatchAndStart(
+      authStore.scopeId,
+      batchPendingSources.value.map(s => s.id),
+      batchGuidance.value || undefined,
+    )
+    batchPendingSources.value = []
+    batchGuidance.value = ''
+    await openBatch(response.batchId)
+  })
+}
+
+watch(
+  () => route.query.batch,
+  (val) => {
+    const id = Number(val)
+    if (Number.isInteger(id) && id > 0) {
+      if (id === batchStore.selectedBatchId) return
+      batchStore.selectBatch(id).catch((e) => {
+        console.error('Failed to open batch from route:', e)
+        exitBatch()
+      })
+    } else if (batchStore.selectedBatchId != null) {
+      batchStore.selectBatch(null)
+    }
+  },
+)
+
 onMounted(async () => {
   await loadExistingSources()
+  await batchStore.refreshInbox().catch((e) => console.error('Failed to refresh batch inbox:', e))
+  const batchId = Number(route.query.batch)
+  if (Number.isInteger(batchId) && batchId > 0) {
+    await openBatch(batchId).catch((e) => {
+      console.error('Failed to open batch from route:', e)
+      exitBatch()
+    })
+  }
 })
 </script>
 
@@ -299,7 +524,7 @@ onMounted(async () => {
     <h1 class="ingest-view__title">{{ t('ingest.title') }}</h1>
     <p class="ingest-view__subtitle">{{ t('ingest.subtitle') }}</p>
 
-    <div v-if="allTaskSummaries.length > 0 || activeTaskId === null" class="ingest-view__task-tabs">
+    <div v-if="!batchMode && (allTaskSummaries.length > 0 || activeTaskId === null)" class="ingest-view__task-tabs">
       <button
         v-for="task in allTaskSummaries"
         :key="task.executionId"
@@ -307,10 +532,11 @@ onMounted(async () => {
         @click="setActiveTask(task.executionId)"
       >
         <Loader2 v-if="task.isPhaseRunning" :size="12" class="ingest-view__stepper-spin" />
-        <CheckCircle v-else-if="task.currentStep === 'done'" :size="12" style="color: var(--success)" />
         <AlertTriangle v-else-if="task.status === 'failed' || task.status === 'budget_exhausted'" :size="12" style="color: var(--error)" />
         <XCircle v-else-if="task.status === 'cancelled'" :size="12" style="color: var(--text-tertiary)" />
         <PauseCircle v-else-if="task.status === 'paused'" :size="12" style="color: var(--warning)" />
+        <CheckCircle v-else-if="task.currentStep === 'done'" :size="12" style="color: var(--success)" />
+        <ClipboardCheck v-else-if="task.currentStep === 'review'" :size="12" style="color: var(--accent-primary)" />
         <FileText v-else :size="12" />
         <span>{{ task.sourceName || t('ingest.materialFallback', [task.executionId]) }}</span>
         <span v-if="task.isPhaseRunning" class="ingest-view__task-tab-progress">{{ Math.round(task.progress * 100) }}%</span>
@@ -325,21 +551,62 @@ onMounted(async () => {
     </div>
 
     <IngestStageNav
+      v-if="!batchMode"
       class="ingest-view__stage-nav"
       :stages="stages"
-      :current-key="currentStep"
+      :current-key="stageNavKey"
       :error-key="stageErrorKey"
     />
 
     <IngestProgressBar
-      v-if="currentStep !== 'upload'"
+      v-if="!batchMode && currentStep !== 'upload'"
       class="ingest-view__progress"
       :progress="effectiveProgress"
       :remaining-ms="remainingMs"
       :status="progressBarStatus"
     />
 
-    <div class="ingest-view__content">
+    <div v-if="batchInbox.length > 0" class="ingest-view__batch-bar">
+      <button
+        v-for="batch in batchInbox"
+        :key="batch.batchId"
+        :class="['ingest-view__batch-chip', { 'ingest-view__batch-chip--active': batch.batchId === batchStore.selectedBatchId }]"
+        @click="openBatch(batch.batchId)"
+      >
+        <Layers :size="12" />
+        <span>{{ t('ingest.batchSelectLabel') }} #{{ batch.batchId }}</span>
+        <span v-if="batch.awaitingCount > 0" class="ingest-view__batch-chip-badge">{{ batch.awaitingCount }}</span>
+      </button>
+      <button v-if="batchMode" class="ingest-view__btn-ghost" @click="exitBatch">
+        {{ t('ingest.batchExitView') }}
+      </button>
+    </div>
+
+    <div v-if="batchMode" class="ingest-view__content">
+      <div v-if="batchError" class="ingest-view__error-banner">
+        <AlertTriangle :size="16" />
+        {{ batchError }}
+      </div>
+
+      <BatchOverviewPanel
+        :batch="selectedBatchInfo"
+        :busy="batchBusy"
+        @confirm-all="handleBatchConfirmAll"
+        @pause="handleBatchPause"
+        @resume="handleBatchResume"
+        @cancel="handleBatchCancel"
+      />
+
+      <ReviewInbox
+        :items="batchItems"
+        :busy="batchBusy"
+        @confirm="handleItemConfirm"
+        @reanalyze="handleItemReanalyze"
+        @retry="handleItemRetry"
+      />
+    </div>
+
+    <div v-else class="ingest-view__content">
       <!-- 上传 -->
       <div v-if="currentStep === 'upload'" class="ingest-view__panel">
         <h2 class="ingest-view__panel-title">{{ t('ingest.uploadPanelTitle') }}</h2>
@@ -370,8 +637,51 @@ onMounted(async () => {
           <Upload :size="32" class="ingest-view__upload-icon" />
           <p>{{ isUploading ? t('ingest.uploading') : t('ingest.dragDropOrClick') }}</p>
           <p class="ingest-view__upload-hint">{{ t('ingest.supportedFormatsFull') }}</p>
-          <input type="file" accept=".pdf,.md,.txt,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.json" @change="handleFileUpload" :disabled="isUploading" class="ingest-view__file-input" />
+          <input type="file" multiple accept=".pdf,.md,.txt,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.json" @change="handleFileUpload" :disabled="isUploading" class="ingest-view__file-input" />
         </label>
+
+        <div v-if="batchUploadFailures.length > 0" class="ingest-view__error-banner">
+          <AlertTriangle :size="16" />
+          {{ t('ingest.batchUploadPartialFail', [batchUploadFailures.length]) }}
+        </div>
+
+        <div v-if="batchDuplicateNames.length > 0" class="ingest-view__duplicate-warning">
+          <AlertTriangle :size="16" />
+          <span>{{ t('ingest.batchDuplicateHint', [batchDuplicateNames.join(t('common.commaSeparator'))]) }}</span>
+          <button class="ingest-view__duplicate-dismiss" @click="batchDuplicateNames = []" :title="t('ingest.dismissWarning')">
+            <X :size="14" />
+          </button>
+        </div>
+
+        <div v-if="batchPendingSources.length > 0" class="ingest-view__batch-pending">
+          <h3 class="ingest-view__batch-pending-title">{{ t('ingest.batchPendingTitle', [batchPendingSources.length]) }}</h3>
+          <div class="ingest-view__existing-list">
+            <div v-for="source in batchPendingSources" :key="source.id" class="ingest-view__existing-item">
+              <FileText :size="14" class="ingest-view__existing-icon" />
+              <span class="ingest-view__existing-name">{{ source.name }}</span>
+              <span class="ingest-view__existing-meta">{{ formatSize(source.size) }} · {{ source.format }}</span>
+            </div>
+          </div>
+          <div class="ingest-view__guidance">
+            <label class="ingest-view__guidance-label">
+              <Sparkles :size="14" />
+              {{ t('ingest.batchGuidanceLabel') }}
+            </label>
+            <textarea
+              v-model="batchGuidance"
+              class="ingest-view__guidance-input"
+              :placeholder="t('ingest.guidancePlaceholder')"
+              rows="3"
+            ></textarea>
+          </div>
+          <div class="ingest-view__panel-actions">
+            <button class="ingest-view__btn-primary" :disabled="batchBusy" @click="createBatchFromPending">
+              <Sparkles :size="16" />
+              {{ t('ingest.batchCreateAndStart') }}
+              <ArrowRight :size="16" />
+            </button>
+          </div>
+        </div>
 
         <div v-if="uploadedFile" class="ingest-view__guidance">
           <label class="ingest-view__guidance-label">
@@ -386,7 +696,7 @@ onMounted(async () => {
           ></textarea>
         </div>
 
-        <div class="ingest-view__panel-actions">
+        <div v-if="batchPendingSources.length === 0" class="ingest-view__panel-actions">
           <button class="ingest-view__btn-primary" :disabled="!uploadedFile || isPhaseRunning" @click="startAnalysis">
             <Sparkles :size="16" />
             {{ t('ingest.startAiAnalysis') }}
@@ -401,10 +711,58 @@ onMounted(async () => {
               <FileText :size="14" class="ingest-view__existing-icon" />
               <span class="ingest-view__existing-name">{{ source.name }}</span>
               <span class="ingest-view__existing-meta">{{ formatSize(source.size) }} · {{ source.format }}</span>
-              <button class="ingest-view__existing-delete" @click="handleDeleteSource(source.id)" :title="t('ingest.deleteSource')">
-                <Trash2 :size="14" />
+              <span
+                v-if="isSourceDeprecated(source)"
+                class="ingest-view__existing-badge"
+                :title="[deprecateCategoryLabel(source.deprecatedCategory), source.deprecatedReason].filter(Boolean).join(' · ')"
+              >
+                {{ t('ingest.deprecatedBadge') }}
+              </span>
+              <button
+                v-if="!isSourceDeprecated(source)"
+                class="ingest-view__existing-action"
+                @click="openDeprecateDialog(source)"
+                :title="t('ingest.deprecateSource')"
+              >
+                <Archive :size="14" />
+              </button>
+              <button
+                v-else
+                class="ingest-view__existing-action"
+                @click="handleUndeprecateSource(source.id)"
+                :title="t('ingest.undeprecateSource')"
+              >
+                <ArchiveRestore :size="14" />
               </button>
             </div>
+          </div>
+        </div>
+
+        <div v-if="deprecateDialog" class="ingest-view__deprecate-dialog">
+          <h3 class="ingest-view__deprecate-title">{{ t('ingest.deprecateDialogTitle') }}</h3>
+          <p class="ingest-view__deprecate-target">{{ deprecateTarget?.name }}</p>
+          <p class="ingest-view__deprecate-hint">{{ t('ingest.deprecateDialogHint') }}</p>
+          <div class="ingest-view__deprecate-categories">
+            <label v-for="cat in DEPRECATE_CATEGORIES" :key="cat" class="ingest-view__deprecate-category">
+              <input type="radio" :value="cat" v-model="deprecateCategory" :disabled="deprecateSubmitting" />
+              <span>{{ deprecateCategoryLabel(cat) }}</span>
+            </label>
+          </div>
+          <textarea
+            v-model="deprecateReason"
+            class="ingest-view__deprecate-input"
+            :placeholder="deprecateCategory === 'OTHER' ? t('ingest.deprecateReasonPlaceholderRequired') : t('ingest.deprecateReasonPlaceholder')"
+            rows="3"
+            :disabled="deprecateSubmitting"
+          ></textarea>
+          <div v-if="deprecateError" class="ingest-view__deprecate-error">{{ deprecateError }}</div>
+          <div class="ingest-view__deprecate-actions">
+            <button class="ingest-view__btn-secondary" @click="deprecateDialog = false" :disabled="deprecateSubmitting">
+              {{ t('ingest.cancel') }}
+            </button>
+            <button class="ingest-view__btn-primary" :disabled="deprecateSubmitting" @click="submitDeprecate">
+              {{ deprecateSubmitting ? t('ingest.submitting') : t('ingest.deprecateConfirm') }}
+            </button>
           </div>
         </div>
       </div>
@@ -443,6 +801,60 @@ onMounted(async () => {
           <button class="ingest-view__btn-secondary" @click="handleNewSource">
             <RotateCcw :size="14" />
             {{ t('ingest.reUpload') }}
+          </button>
+        </div>
+      </div>
+
+      <!-- 审阅确认 -->
+      <div v-if="currentStep === 'review'" class="ingest-view__panel">
+        <div class="ingest-view__review-header">
+          <div class="ingest-view__review-icon-wrap">
+            <ClipboardCheck :size="36" />
+          </div>
+          <h2 class="ingest-view__review-title">{{ t('ingest.reviewTitle') }}</h2>
+          <p class="ingest-view__review-sub">{{ t('ingest.reviewSub') }}</p>
+        </div>
+
+        <AnalysisSummaryPanel :ai-analysis="aiAnalysis" :metadata="metadataRaw" />
+
+        <EntityDiscoveryWall :previews="chunkPreviews" />
+
+        <div v-if="affectedPages.length > 0" class="ingest-view__affected-group">
+          <h4 class="ingest-view__affected-group-title">{{ t('ingest.reviewAffectedTitle', [affectedPages.length]) }}</h4>
+          <div class="ingest-view__affected-items">
+            <div v-for="page in affectedPages" :key="page.path" class="ingest-view__affected-row">
+              <component :is="actionIcon(page.action)" :size="14" class="ingest-view__affected-row-icon" />
+              <span class="ingest-view__affected-row-title">{{ page.title }}</span>
+              <span class="ingest-view__affected-row-action" :class="'ingest-view__affected-row-action--' + page.action">{{ actionLabel(page.action) }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="ingest-view__guidance">
+          <label class="ingest-view__guidance-label">
+            <Sparkles :size="14" />
+            {{ t('ingest.reviewGuidanceLabel') }}
+          </label>
+          <textarea
+            v-model="userGuidance"
+            class="ingest-view__guidance-input"
+            :placeholder="t('ingest.reviewGuidancePlaceholder')"
+            rows="3"
+          ></textarea>
+        </div>
+
+        <div class="ingest-view__panel-actions">
+          <button class="ingest-view__btn-primary" @click="handleConfirmWrite">
+            <CheckCircle :size="16" />
+            {{ t('ingest.confirmWrite') }}
+          </button>
+          <button class="ingest-view__btn-secondary" @click="handleReanalysis">
+            <RotateCcw :size="16" />
+            {{ t('ingest.reanalyze') }}
+          </button>
+          <button class="ingest-view__btn-ghost" @click="handleNewSource">
+            <Upload :size="16" />
+            {{ t('ingest.reviewBack') }}
           </button>
         </div>
       </div>
@@ -1003,26 +1415,6 @@ onMounted(async () => {
   font-size: var(--font-body);
 }
 
-.ingest-view__compliance-banner {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  background: var(--warning-light, #fff8e1);
-  color: var(--warning, #ed6c02);
-  border-radius: var(--radius-md);
-  margin-bottom: var(--space-4);
-  font-size: var(--font-body);
-}
-
-.ingest-view__compliance-violations {
-  padding: var(--space-3) var(--space-4);
-  background: var(--bg-secondary);
-  border: 1px solid var(--warning, #ed6c02);
-  border-radius: var(--radius-md);
-  margin-bottom: var(--space-4);
-}
-
 .ingest-view__scan-warning {
   display: flex;
   align-items: center;
@@ -1204,13 +1596,6 @@ onMounted(async () => {
   margin-top: var(--space-2);
 }
 
-.ingest-view__panel-actions-right {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-left: auto;
-}
-
 .ingest-view__btn-primary {
   display: inline-flex;
   align-items: center;
@@ -1344,7 +1729,17 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 
-.ingest-view__existing-delete {
+.ingest-view__existing-badge {
+  padding: 1px var(--space-1);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.ingest-view__existing-action {
   display: flex;
   align-items: center;
   padding: var(--space-1);
@@ -1356,9 +1751,75 @@ onMounted(async () => {
   transition: color 150ms ease, background-color 150ms ease;
 }
 
-.ingest-view__existing-delete:hover {
+.ingest-view__existing-action:hover {
+  color: var(--accent-primary);
+  background: var(--bg-tertiary);
+}
+
+.ingest-view__deprecate-dialog {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+}
+
+.ingest-view__deprecate-title {
+  margin: 0 0 var(--space-2);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ingest-view__deprecate-target {
+  margin: 0 0 var(--space-1);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.ingest-view__deprecate-hint {
+  margin: 0 0 var(--space-3);
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.ingest-view__deprecate-categories {
+  display: flex;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.ingest-view__deprecate-category {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.ingest-view__deprecate-input {
+  width: 100%;
+  padding: var(--space-2);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--input-bg);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+}
+
+.ingest-view__deprecate-error {
+  margin-top: var(--space-2);
+  font-size: 12px;
   color: var(--error);
-  background: var(--error-light);
+}
+
+.ingest-view__deprecate-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
 /* Executing hint */
@@ -1369,6 +1830,34 @@ onMounted(async () => {
   padding: var(--space-3) var(--space-4);
   font-size: var(--font-body-sm);
   color: var(--text-secondary);
+}
+
+/* Review page */
+.ingest-view__review-header {
+  text-align: center;
+  padding: var(--space-4) 0 var(--space-6);
+}
+
+.ingest-view__review-icon-wrap {
+  display: inline-flex;
+  color: var(--accent-primary);
+  margin-bottom: var(--space-3);
+}
+
+.ingest-view__review-title {
+  font-size: var(--font-h2);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  margin-bottom: var(--space-1);
+}
+
+.ingest-view__review-sub {
+  font-size: var(--font-body);
+  color: var(--text-secondary);
+}
+
+.ingest-view__panel > .analysis-panel {
+  margin-bottom: var(--space-2);
 }
 
 /* Paused page */
@@ -1800,5 +2289,68 @@ onMounted(async () => {
 .ingest-view__quality-badge--info {
   background: var(--info-light, #eff6ff);
   color: var(--info, #3b82f6);
+}
+
+.ingest-view__batch-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.ingest-view__batch-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--btn-height-sm);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  font-size: var(--font-body-sm);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
+}
+
+.ingest-view__batch-chip:hover {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+.ingest-view__batch-chip--active {
+  border-color: var(--accent-primary);
+  background: var(--accent-light);
+  color: var(--accent-primary);
+}
+
+.ingest-view__batch-chip-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--warning);
+  color: var(--text-on-accent);
+  font-size: var(--font-caption);
+  font-weight: var(--weight-semibold);
+}
+
+.ingest-view__batch-pending {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.ingest-view__batch-pending-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-body-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
 }
 </style>

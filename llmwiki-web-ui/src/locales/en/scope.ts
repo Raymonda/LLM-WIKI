@@ -57,6 +57,8 @@ export default {
   auditPageSensitivity: 'Sensitivity Changed',
   auditSourceUpload: 'Source Uploaded',
   auditSourceDelete: 'Source Deleted',
+  auditSourceDeprecate: 'Source Deprecated',
+  auditSourceUndeprecate: 'Source Restored',
   auditSubCreate: 'Subscription Created',
   auditSubCancel: 'Subscription Cancelled',
   auditMemberAdd: 'Member Added',

@@ -14,6 +14,7 @@ public class ExecutionInfo {
     private Long scopeId;
     private Long sourceId;
     private Long schemaConfigId;
+    private Long batchId;
     private LocalDateTime startTime;
     private LocalDateTime endTime;
     private LocalDateTime createdAt;
