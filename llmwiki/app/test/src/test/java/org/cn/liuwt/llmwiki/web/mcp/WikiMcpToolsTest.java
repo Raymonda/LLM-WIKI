@@ -205,6 +205,7 @@ class WikiMcpToolsTest {
         assertEquals("X 是 一种设计模式", result.get("answer"));
         assertEquals(List.of("retrieve"), result.get("steps"));
         assertEquals(false, result.get("timedOut"));
+        assertFalse(result.containsKey("clarification"));
     }
 
     @Test
@@ -224,6 +225,7 @@ class WikiMcpToolsTest {
         assertTrue(result.timedOut());
         assertEquals("", result.answer());
         assertEquals(List.of(), result.steps());
+        assertEquals("", result.clarification());
     }
 
     @Test
@@ -234,6 +236,39 @@ class WikiMcpToolsTest {
         assertFalse(result.timedOut());
         assertEquals("ab", result.answer());
         assertEquals(List.of("s"), result.steps());
+    }
+
+    @Test
+    void shouldSkipUiProtocolEventsWhenAggregatingAnswer() {
+        WikiMcpTools.AskResult result = WikiMcpTools.collectAnswer(
+                Flux.just("答案", "__TOOL__:{\"tool\":\"readFile\"}", "__FACT__:{\"id\":\"fb-1\"}", "继续"),
+                Duration.ofSeconds(5));
+
+        assertEquals("答案继续", result.answer());
+        assertEquals("", result.clarification());
+    }
+
+    @Test
+    void shouldReportClarificationWhenStreamContainsClarify() {
+        WikiMcpTools.AskResult result = WikiMcpTools.collectAnswer(
+                Flux.just("__CLARIFY__:{\"question\":\"想了解哪个方面？\"}"),
+                Duration.ofSeconds(5));
+
+        assertEquals("{\"question\":\"想了解哪个方面？\"}", result.clarification());
+        assertEquals("", result.answer());
+        assertFalse(result.timedOut());
+    }
+
+    @Test
+    void shouldExposeClarificationInAskResultWhenPresent() {
+        when(queryService.queryWikiStreaming(eq(100L), eq("模糊问题"), anyString(), eq(false)))
+                .thenReturn(Flux.just("__CLARIFY__:{\"question\":\"想了解哪个方面？\"}"));
+
+        Map<String, Object> result = tools.wikiAsk("模糊问题", null);
+
+        assertEquals("{\"question\":\"想了解哪个方面？\"}", result.get("clarification"));
+        assertEquals("", result.get("answer"));
+        assertEquals(false, result.get("timedOut"));
     }
 
     private ExecutionModel execution(long id, Long scopeId, String status) {

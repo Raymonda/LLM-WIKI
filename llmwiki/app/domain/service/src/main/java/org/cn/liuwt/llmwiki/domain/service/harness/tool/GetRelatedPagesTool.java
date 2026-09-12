@@ -5,8 +5,10 @@ import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageLinkDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageLinkMapper;
+import org.cn.liuwt.llmwiki.domain.service.harness.query.QueryToolProgress;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,7 +34,8 @@ public class GetRelatedPagesTool {
     @Tool(description = "通过链接图谱获取与给定页面有链接关系的页面（包括引用该页面的和被该页面引用的）")
     public List<RelatedPageResult> getRelatedPages(
         @ToolParam(description = "知识库范围 ID") String scopeId,
-        @ToolParam(description = "页面路径，如 'pages/microservice-architecture.md'") String pagePath
+        @ToolParam(description = "页面路径，如 'pages/microservice-architecture.md'") String pagePath,
+        ToolContext toolContext
     ) {
         Long scopeIdLong = Long.parseLong(scopeId);
 
@@ -118,6 +121,7 @@ public class GetRelatedPagesTool {
 
         log.info("tool=getRelatedPages scopeId={} pagePath={} outgoing={} incoming={} total={}",
             scopeId, pagePath, outgoingLinks.size(), incomingLinks.size(), results.size());
+        QueryToolProgress.emit(toolContext, "getRelatedPages", QueryToolProgress.displayName(pagePath), results.size());
         return results;
     }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick, type Component } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
@@ -9,7 +9,7 @@ import { Search, MessageCircle, Loader2, BookOpen, BookmarkPlus, Bot, FileText, 
 import { searchPages, searchSuggest, listCategories, type WikiPageInfo, type SearchResultInfo } from '@/api/wiki'
 import { useAuthStore } from '@/stores/auth'
 import { saveAnswer, resolveLinks, type QueryAnalysisMode } from '@/api/query'
-import { useSSEQuery } from '@/composables/useSSEQuery'
+import { useSSEQuery, type ToolActivity } from '@/composables/useSSEQuery'
 import { buildFactBlocksMarkdown, orderFactBlocksByConfidence, type FactBlockView } from '@/composables/queryStreamLogic'
 import FactEvidenceList from '@/components/search/FactEvidenceList.vue'
 import { extractWikiSourceRefs, type WikiSourceRef } from '@/utils/wikiSourceRefs'
@@ -53,8 +53,40 @@ const aiAnswer = computed(() => sse.aiAnswer.value)
 const queryError = computed(() => sse.queryError.value)
 const queryMode = computed(() => sse.queryMode.value)
 const progressSteps = computed(() => sse.progressSteps.value)
+const toolActivity = computed(() => sse.toolActivity.value)
 const isSynthesizing = computed(() => sse.isSynthesizing.value)
 const funFacts = computed(() => sse.funFacts.value)
+
+const TOOL_LABEL_KEYS: Record<string, string> = {
+  readFile: 'search.toolReadFile',
+  readFileSection: 'search.toolReadFileSection',
+  searchWiki: 'search.toolSearchWiki',
+  getRelatedPages: 'search.toolGetRelatedPages',
+  listPages: 'search.toolListPages',
+  getSourceInfo: 'search.toolGetSourceInfo',
+  readRawSource: 'search.toolReadRawSource',
+}
+
+const TOOL_ICONS: Record<string, Component> = {
+  readFile: FileText,
+  readFileSection: FileText,
+  searchWiki: Search,
+  getRelatedPages: ExternalLink,
+  listPages: Library,
+  getSourceInfo: Info,
+  readRawSource: BookOpen,
+}
+
+function toolActivityIcon(activity: ToolActivity): Component {
+  return TOOL_ICONS[activity.tool] || Sparkles
+}
+
+function toolActivityLabel(activity: ToolActivity): string {
+  const key = TOOL_LABEL_KEYS[activity.tool]
+  if (!key) return activity.target || activity.tool
+  const base = t(key, [activity.target || t('search.toolScopeFallback')])
+  return activity.count != null ? `${base} · ${t('search.toolResultCount', [activity.count])}` : base
+}
 
 const factContent = computed(() => sse.factAnswer.value)
 const synthesisStream = computed(() => sse.synthesisStreamContent.value)
@@ -603,6 +635,16 @@ onUnmounted(() => {
             <span v-else class="search-page__progress-dot"></span>
           </div>
           <span class="search-page__progress-label">{{ step.label }}</span>
+        </div>
+        <div v-if="toolActivity.length > 0" class="search-page__tool-activity">
+          <div
+            v-for="(activity, idx) in toolActivity"
+            :key="`${activity.tool}-${idx}`"
+            class="search-page__tool-activity-item"
+          >
+            <component :is="toolActivityIcon(activity)" :size="12" class="search-page__tool-activity-icon" />
+            <span class="search-page__tool-activity-label">{{ toolActivityLabel(activity) }}</span>
+          </div>
         </div>
       </div>
 
@@ -1394,6 +1436,40 @@ onUnmounted(() => {
 
 .search-page__progress-label {
   font-size: var(--font-body);
+}
+
+.search-page__tool-activity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--border-default);
+}
+
+.search-page__tool-activity-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  animation: toolActivityFadeIn 0.2s ease-out;
+}
+
+.search-page__tool-activity-icon {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.search-page__tool-activity-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes toolActivityFadeIn {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .search-page__error {

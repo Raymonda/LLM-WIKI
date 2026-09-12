@@ -22,6 +22,11 @@
   --error-light: #FEE2E2;
   --info: #3B82F6;
   --info-light: #DBEAFE;
+  --accent-strong: #4338CA;
+  --success-strong: #047857;
+  --warning-strong: #92400E;
+  --error-strong: #B91C1C;
+  --info-strong: #1D4ED8;
 
   --btn-primary-bg: #5E6AD2;
   --btn-primary-text: #FDFCFA;

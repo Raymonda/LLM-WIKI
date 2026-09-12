@@ -4,6 +4,7 @@ public final class QuerySseProtocol {
 
     public static final String FACT_PREFIX = "__FACT__:";
     public static final String CLARIFY_PREFIX = "__CLARIFY__:";
+    public static final String TOOL_PREFIX = "__TOOL__:";
 
     private QuerySseProtocol() {}
 
@@ -17,6 +18,9 @@ public final class QuerySseProtocol {
         if (chunk == null) return new SseEvent("answer-chunk", "");
         if (chunk.startsWith(CLARIFY_PREFIX)) {
             return new SseEvent("clarification", chunk.substring(CLARIFY_PREFIX.length()));
+        }
+        if (chunk.startsWith(TOOL_PREFIX)) {
+            return new SseEvent("tool-progress", chunk.substring(TOOL_PREFIX.length()));
         }
         if (chunk.startsWith(FACT_PREFIX)) {
             String payload = chunk.substring(FACT_PREFIX.length());

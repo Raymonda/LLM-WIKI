@@ -34,6 +34,9 @@ public class RateLimitService {
     private final ConcurrentHashMap<Long, String> activePipelineIds = new ConcurrentHashMap<>();
 
     private static final long MIN_CALL_INTERVAL_MS = 500;
+
+    private static final int CALL_RATE_MAX_ATTEMPTS = 5;
+
     private static final Duration NO_STEP_GRACE = Duration.ofMinutes(5);
     private static final Duration NO_HEARTBEAT_GRACE = Duration.ofMinutes(30);
 
@@ -108,6 +111,21 @@ public class RateLimitService {
         }
         lastCallTimestamps.put(scopeId, now);
         return true;
+    }
+
+    public boolean awaitCallRate(Long scopeId) {
+        for (int attempt = 0; attempt < CALL_RATE_MAX_ATTEMPTS; attempt++) {
+            if (checkCallRate(scopeId)) {
+                return true;
+            }
+            try {
+                Thread.sleep(MIN_CALL_INTERVAL_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
     }
 
     public boolean checkCallRateWithinPipeline(Long scopeId, String pipelineKey) {

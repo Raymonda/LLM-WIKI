@@ -22,7 +22,7 @@ public class ExecutionHistoryServiceImpl implements ExecutionHistoryService {
 
     private static final Logger log = LoggerFactory.getLogger(ExecutionHistoryServiceImpl.class);
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-    private static final List<String> ACTIVE_STATUSES = Arrays.asList("running", "pending", "awaiting_confirmation");
+    private static final List<String> ACTIVE_STATUSES = Arrays.asList("running", "pending", "awaiting_confirmation", "awaiting_review");
 
     @Autowired
     private ExecutionMapper executionMapper;
@@ -160,13 +160,7 @@ public class ExecutionHistoryServiceImpl implements ExecutionHistoryService {
         if (exec == null || !ACTIVE_STATUSES.contains(exec.getStatus())) {
             return false;
         }
-        LocalDateTime lastStepStart = findLastStepStartedAt(executionId);
-        LocalDateTime activity = lastStepStart != null ? lastStepStart : exec.getStartedAt();
-        if (activity == null) {
-            return false;
-        }
-        Duration grace = lastStepStart != null ? noHeartbeatGrace : noStepGrace;
-        return activity.plus(grace).isBefore(LocalDateTime.now());
+        return isZombieCandidate(exec, noStepGrace, noHeartbeatGrace, LocalDateTime.now());
     }
 
     @Override
@@ -183,17 +177,35 @@ public class ExecutionHistoryServiceImpl implements ExecutionHistoryService {
         LocalDateTime now = LocalDateTime.now();
         List<ExecutionDO> zombies = new ArrayList<>();
         for (ExecutionDO exec : active) {
-            LocalDateTime lastStepStart = findLastStepStartedAt(exec.getId());
-            LocalDateTime activity = lastStepStart != null ? lastStepStart : exec.getStartedAt();
-            if (activity == null) {
-                continue;
-            }
-            Duration grace = lastStepStart != null ? noHeartbeatGrace : noStepGrace;
-            if (activity.plus(grace).isBefore(now)) {
+            if (isZombieCandidate(exec, noStepGrace, noHeartbeatGrace, now)) {
                 zombies.add(exec);
             }
         }
         return zombies;
+    }
+
+    private boolean isZombieCandidate(ExecutionDO exec, Duration noStepGrace, Duration noHeartbeatGrace, LocalDateTime now) {
+        if (isAwaitingUserDecision(exec)) {
+            return false;
+        }
+        LocalDateTime lastStepStart = findLastStepStartedAt(exec.getId());
+        if (isQueuedBeforeDispatch(exec, lastStepStart)) {
+            return false;
+        }
+        LocalDateTime activity = lastStepStart != null ? lastStepStart : exec.getStartedAt();
+        if (activity == null) {
+            return false;
+        }
+        Duration grace = lastStepStart != null ? noHeartbeatGrace : noStepGrace;
+        return activity.plus(grace).isBefore(now);
+    }
+
+    private boolean isAwaitingUserDecision(ExecutionDO exec) {
+        return "awaiting_confirmation".equals(exec.getStatus()) || "awaiting_review".equals(exec.getStatus());
+    }
+
+    private boolean isQueuedBeforeDispatch(ExecutionDO exec, LocalDateTime lastStepStart) {
+        return lastStepStart == null && exec.getNodeId() == null;
     }
 
     private LocalDateTime findLastStepStartedAt(Long executionId) {

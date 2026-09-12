@@ -40,4 +40,18 @@ class QuerySseProtocolTest {
         assertEquals("clarification", event.eventName());
         assertEquals("{\"question\":\"追问\"}", event.payload());
     }
+
+    @Test
+    void shouldMapToolPrefixToToolProgressEvent() {
+        QuerySseProtocol.SseEvent event = QuerySseProtocol.mapChunk("__TOOL__:{\"tool\":\"readFile\",\"target\":\"a.md\"}");
+        assertEquals("tool-progress", event.eventName());
+        assertEquals("{\"tool\":\"readFile\",\"target\":\"a.md\"}", event.payload());
+    }
+
+    @Test
+    void shouldKeepToolProgressEventWhenFactBlocksDisabled() {
+        QuerySseProtocol.SseEvent event = QuerySseProtocol.mapChunk("__TOOL__:{\"tool\":\"searchWiki\"}", false);
+        assertEquals("tool-progress", event.eventName());
+        assertEquals("{\"tool\":\"searchWiki\"}", event.payload());
+    }
 }

@@ -7,6 +7,7 @@ import org.cn.liuwt.llmwiki.domain.service.harness.prompt.config.QueryPrompts;
 import org.cn.liuwt.llmwiki.domain.service.harness.query.FactBlockParser;
 import org.cn.liuwt.llmwiki.domain.service.harness.query.QueryClarifier;
 import org.cn.liuwt.llmwiki.domain.service.harness.query.QuerySseProtocol;
+import org.cn.liuwt.llmwiki.domain.service.harness.query.QueryToolProgress;
 import org.cn.liuwt.llmwiki.domain.service.harness.tool.ReadFileTool;
 import org.cn.liuwt.llmwiki.domain.service.harness.tool.ReadRawSourceTool;
 import org.cn.liuwt.llmwiki.domain.service.harness.tool.GetSourceInfoTool;
@@ -40,13 +41,18 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.SignalType;
+import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -63,6 +69,9 @@ public class AgentRunner {
 
     @Value("${llmwiki.query.narrative.enabled:true}")
     private boolean narrativeEnabled;
+
+    @Value("${llmwiki.query.prompt.focus.enabled:false}")
+    private boolean promptFocusEnabled;
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -193,7 +202,12 @@ public class AgentRunner {
 
         return Flux.defer(() -> {
             try {
+                long queryStart = System.currentTimeMillis();
+                CompletableFuture<RetrievalContext> retrievalFuture = CompletableFuture.supplyAsync(
+                    () -> retrievalService.preRetrieveLight(scopeId, question));
+
                 String effectiveAssumed = assumedIntent;
+                long clarifyStart = System.currentTimeMillis();
                 if (clarifierEnabled && (effectiveAssumed == null || effectiveAssumed.isBlank())) {
                     ChatClient clarifyClient = (deepMode && deepNoToolsClient != null) ? deepNoToolsClient : noToolsClient;
                     String clarifyPrompt = schemaInjector.prependForQuery(scopeId,
@@ -214,22 +228,27 @@ public class AgentRunner {
                         effectiveAssumed = "（澄清次数超限，自动采用）" + clarification.clarification();
                     }
                 }
-                long phase1Start = System.currentTimeMillis();
-                RetrievalContext retrievalContext = retrievalService.preRetrieveLight(scopeId, question);
-                long phase1Elapsed = System.currentTimeMillis() - phase1Start;
+                long clarifyElapsed = System.currentTimeMillis() - clarifyStart;
+
+                RetrievalContext retrievalContext = retrievalFuture.join();
+                long prePhaseElapsed = System.currentTimeMillis() - queryStart;
 
                 String factContext = compactionService.compressField(sessionId, scopeId, "factContext", retrievalContext.toPromptContextLight());
                 String deprecatedContext = retrievalContext.formatDeprecatedContext();
                 int pageCount = retrievalContext.getPageCount();
 
-                log.info("Pre-retrieve completed: scopeId={} results={} factContextLen={} deprecatedPages={} elapsed={}ms",
+                QueryTimings timings = new QueryTimings(queryStart);
+                timings.clarifyMs = clarifyElapsed;
+                timings.prePhaseMs = prePhaseElapsed;
+
+                log.info("Pre-retrieve completed: scopeId={} results={} factContextLen={} deprecatedPages={} prePhase={}ms clarify={}ms",
                     scopeId, retrievalContext.getSearchResults().size(),
-                    factContext.length(), retrievalContext.getDeprecatedPages().size(), phase1Elapsed);
+                    factContext.length(), retrievalContext.getDeprecatedPages().size(), prePhaseElapsed, clarifyElapsed);
 
                 // Phase 1: Fact Agent (tools, ACTIVE-only, generates Layer 1)
                 String factSystemPrompt = factBlockEnabled
                     ? schemaInjector.prependForQuery(scopeId,
-                        PromptRegistry.forQuery().factAgentPromptStructured(scopeId, pageCount, factContext))
+                        PromptRegistry.forQuery().factAgentPromptStructured(scopeId, pageCount, factContext, promptFocusEnabled))
                     : schemaInjector.prependForQuery(scopeId,
                         PromptRegistry.forQuery().factAgentPrompt(scopeId, pageCount, factContext));
 
@@ -243,13 +262,19 @@ public class AgentRunner {
                 List<FactBlock> factBlocks = new ArrayList<>();
                 AtomicInteger charCount = new AtomicInteger(0);
 
+                Sinks.Many<String> toolSink = Sinks.many().unicast().onBackpressureBuffer();
+                Consumer<String> toolProgressSink = toolSink::tryEmitNext;
+                Map<String, Object> toolContextMap = new HashMap<>();
+                toolContextMap.put("sessionId", sessionId);
+                toolContextMap.put(QueryToolProgress.CONTEXT_KEY, toolProgressSink);
+
                 Flux<String> generatingMarker = Flux.just("__STEP__:generating");
 
                 Flux<String> layer1Stream = factBlockEnabled
                     ? activeQueryClient.prompt()
                         .system(factSystemPrompt)
                         .user(question)
-                        .toolContext(java.util.Map.of("sessionId", sessionId))
+                        .toolContext(toolContextMap)
                         .stream()
                         .content()
                         .concatMap(chunk -> {
@@ -273,25 +298,32 @@ public class AgentRunner {
                     : activeQueryClient.prompt()
                         .system(factSystemPrompt)
                         .user(question)
-                        .toolContext(java.util.Map.of("sessionId", sessionId))
+                        .toolContext(toolContextMap)
                         .stream()
                         .content()
                         .doOnNext(layer1Buffer::append);
 
+                Flux<String> layer1WithTools = Flux.merge(
+                    layer1Stream.doFinally(s -> toolSink.tryEmitComplete()), toolSink.asFlux());
+
                 // Phase 2: Synthesis Agent (no tools, uses Layer 1 + DEPRECATED context, generates Layer 2/3)
                 Flux<String> layer23Stream = Flux.defer(() -> {
-                    log.info("Fact Agent completed: scopeId={} factBlocks={}", scopeId, factBlocks.size());
+                    timings.markFactAgentDone();
+                    log.info("[query-timing] Fact Agent completed: scopeId={} factBlocks={} factAgent={}ms firstFactChunk={}ms",
+                        scopeId, factBlocks.size(), timings.factAgentMs, timings.firstFactChunkMs);
                     String synthesisUserPrompt = buildSynthesisUserPrompt(scopeId, question,
                         FactBlockParser.toFactInput(factBlocks, layer1Buffer.toString()), deprecatedContext, deepMode);
 
-                    return synthesizeWithImages(scopeId, synthesisUserPrompt, factBlocks, layer1Buffer.toString(), deepMode);
+                    return synthesizeWithImages(scopeId, synthesisUserPrompt, factBlocks, layer1Buffer.toString(), deepMode)
+                        .doOnNext(timings::markSynthesisChunk);
                 });
 
                 Flux<String> synthesisMarker = Flux.just("\n\n", "__STEP__:synthesizing");
 
-                return Flux.concat(generatingMarker, layer1Stream, synthesisMarker, layer23Stream)
+                return Flux.concat(generatingMarker, layer1WithTools, synthesisMarker, layer23Stream)
                     .doOnNext(chunk -> {
-                        if (!chunk.startsWith("__STEP__:") && !chunk.startsWith("\n\n__STEP__:")) {
+                        timings.onChunk(chunk);
+                        if (!chunk.startsWith("__STEP__:") && !chunk.startsWith("\n\n__STEP__:") && !chunk.startsWith(QuerySseProtocol.TOOL_PREFIX)) {
                             charCount.addAndGet(chunk != null ? chunk.length() : 0);
                         }
                     })
@@ -299,6 +331,10 @@ public class AgentRunner {
                         log.error("Stream failed, FALLBACK to simple query: scopeId={}, error={}", scopeId, e.getMessage(), e);
                         recordError(sessionId, "stream", e.getMessage());
                         return Flux.just(runSimpleQuery(scopeId, question));
+                    })
+                    .doFinally(signal -> {
+                        toolSink.tryEmitComplete();
+                        timings.logSummary(scopeId, sessionId, signal);
                     });
             } catch (Exception e) {
                 log.error("Pre-retrieve failed, FALLBACK to simple query: scopeId={}, error={}", scopeId, e.getMessage(), e);
@@ -331,7 +367,12 @@ public class AgentRunner {
         ChatClient activeQueryClient = (deepMode && deepQueryReadOnlyClient != null) ? deepQueryReadOnlyClient : queryReadOnlyClient;
         return Flux.defer(() -> {
             try {
+                long queryStart = System.currentTimeMillis();
+                CompletableFuture<RetrievalContext> retrievalFuture = CompletableFuture.supplyAsync(
+                    () -> retrievalService.preRetrieveMultiScope(scopeIds, question));
+
                 String effectiveAssumed = assumedIntent;
+                long clarifyStart = System.currentTimeMillis();
                 if (clarifierEnabled && (effectiveAssumed == null || effectiveAssumed.isBlank())) {
                     ChatClient clarifyClient = (deepMode && deepNoToolsClient != null) ? deepNoToolsClient : noToolsClient;
                     String clarifyPrompt = schemaInjector.prependForQuery(primaryScopeId,
@@ -352,11 +393,20 @@ public class AgentRunner {
                         effectiveAssumed = "（澄清次数超限，自动采用）" + clarification.clarification();
                     }
                 }
-                RetrievalContext retrievalContext = retrievalService.preRetrieveMultiScope(scopeIds, question);
+                long clarifyElapsed = System.currentTimeMillis() - clarifyStart;
+
+                RetrievalContext retrievalContext = retrievalFuture.join();
+                long prePhaseElapsed = System.currentTimeMillis() - queryStart;
+
                 String factContext = compactionService.compressField(sessionId, primaryScopeId, "factContext", retrievalContext.toPromptContextLight());
+                QueryTimings timings = new QueryTimings(queryStart);
+                timings.clarifyMs = clarifyElapsed;
+                timings.prePhaseMs = prePhaseElapsed;
+                log.info("Multi-scope pre-retrieve completed: scopeIds={} results={} prePhase={}ms clarify={}ms",
+                    scopeIds, retrievalContext.getSearchResults().size(), prePhaseElapsed, clarifyElapsed);
                 int pageCount = retrievalContext.getSearchResults().size();
                 String factSystemPrompt = factBlockEnabled
-                    ? PromptRegistry.forQuery().factAgentPromptStructured(primaryScopeId, pageCount, factContext)
+                    ? PromptRegistry.forQuery().factAgentPromptStructured(primaryScopeId, pageCount, factContext, promptFocusEnabled)
                     : PromptRegistry.forQuery().factAgentPrompt(primaryScopeId, pageCount, factContext);
 
                 if (effectiveAssumed != null && !effectiveAssumed.isBlank()) {
@@ -366,12 +416,17 @@ public class AgentRunner {
                 StringBuilder lineBuffer = new StringBuilder();
                 StringBuilder layer1Buffer = new StringBuilder();
                 List<FactBlock> factBlocks = new ArrayList<>();
+                Sinks.Many<String> toolSink = Sinks.many().unicast().onBackpressureBuffer();
+                Consumer<String> toolProgressSink = toolSink::tryEmitNext;
+                Map<String, Object> toolContextMap = new HashMap<>();
+                toolContextMap.put("sessionId", sessionId);
+                toolContextMap.put(QueryToolProgress.CONTEXT_KEY, toolProgressSink);
                 Flux<String> generatingMarker = Flux.just("__STEP__:generating");
                 Flux<String> layer1Stream = factBlockEnabled
                     ? activeQueryClient.prompt()
                         .system(factSystemPrompt)
                         .user(question)
-                        .toolContext(java.util.Map.of("sessionId", sessionId))
+                        .toolContext(toolContextMap)
                         .stream()
                         .content()
                         .concatMap(chunk -> {
@@ -395,22 +450,32 @@ public class AgentRunner {
                     : activeQueryClient.prompt()
                         .system(factSystemPrompt)
                         .user(question)
-                        .toolContext(java.util.Map.of("sessionId", sessionId))
+                        .toolContext(toolContextMap)
                         .stream()
                         .content()
                         .doOnNext(layer1Buffer::append);
+                Flux<String> layer1WithTools = Flux.merge(
+                    layer1Stream.doFinally(s -> toolSink.tryEmitComplete()), toolSink.asFlux());
                 Flux<String> layer23Stream = Flux.defer(() -> {
-                    log.info("Fact Agent completed: scopeId={} factBlocks={}", primaryScopeId, factBlocks.size());
+                    timings.markFactAgentDone();
+                    log.info("[query-timing] Multi-scope Fact Agent completed: scopeIds={} factBlocks={} factAgent={}ms firstFactChunk={}ms",
+                        scopeIds, factBlocks.size(), timings.factAgentMs, timings.firstFactChunkMs);
                     String synthesisUserPrompt = buildSynthesisUserPrompt(primaryScopeId, question,
                         FactBlockParser.toFactInput(factBlocks, layer1Buffer.toString()), "", deepMode);
-                    return synthesizeWithImages(primaryScopeId, synthesisUserPrompt, factBlocks, layer1Buffer.toString(), deepMode);
+                    return synthesizeWithImages(primaryScopeId, synthesisUserPrompt, factBlocks, layer1Buffer.toString(), deepMode)
+                        .doOnNext(timings::markSynthesisChunk);
                 });
                 Flux<String> synthesisMarker = Flux.just("\n\n", "__STEP__:synthesizing");
-                return Flux.concat(generatingMarker, layer1Stream, synthesisMarker, layer23Stream)
+                return Flux.concat(generatingMarker, layer1WithTools, synthesisMarker, layer23Stream)
+                    .doOnNext(timings::onChunk)
                     .onErrorResume(e -> {
                         log.error("Multi-scope stream failed: scopeIds={}, error={}", scopeIds, e.getMessage(), e);
                         recordError(sessionId, "multi-scope-stream", e.getMessage());
                         return Flux.just(runSimpleQuery(primaryScopeId, question));
+                    })
+                    .doFinally(signal -> {
+                        toolSink.tryEmitComplete();
+                        timings.logSummary(primaryScopeId, sessionId, signal);
                     });
             } catch (Exception e) {
                 log.error("Multi-scope pre-retrieve failed: scopeIds={}, error={}", scopeIds, e.getMessage(), e);
@@ -701,5 +766,69 @@ public class AgentRunner {
             context.append("（搜索失败）\n");
         }
         return context.toString();
+    }
+
+    private static final class QueryTimings {
+        private final long startMs;
+        private long clarifyMs = -1;
+        private long prePhaseMs = -1;
+        private long factAgentStartMs = -1;
+        private long factAgentMs = -1;
+        private long synthesisStartMs = -1;
+        private long firstFactChunkMs = -1;
+        private long synthesisFirstChunkMs = -1;
+
+        QueryTimings(long startMs) {
+            this.startMs = startMs;
+        }
+
+        void onChunk(String chunk) {
+            if (chunk == null) {
+                return;
+            }
+            if (chunk.startsWith("__TOOL__:")) {
+                return;
+            }
+            long now = System.currentTimeMillis();
+            if ("__STEP__:generating".equals(chunk)) {
+                this.factAgentStartMs = now;
+                return;
+            }
+            if ("__STEP__:synthesizing".equals(chunk)) {
+                markFactAgentDone();
+                this.synthesisStartMs = now;
+                return;
+            }
+            if (chunk.isBlank()) {
+                return;
+            }
+            if (firstFactChunkMs < 0 && factAgentStartMs > 0 && synthesisStartMs < 0) {
+                this.firstFactChunkMs = now - factAgentStartMs;
+            }
+            if (synthesisStartMs > 0 && synthesisFirstChunkMs < 0) {
+                this.synthesisFirstChunkMs = now - synthesisStartMs;
+            }
+        }
+
+        void markFactAgentDone() {
+            if (factAgentMs < 0 && factAgentStartMs > 0) {
+                this.factAgentMs = System.currentTimeMillis() - factAgentStartMs;
+            }
+        }
+
+        void markSynthesisChunk(String chunk) {
+            if (chunk == null || chunk.isBlank()) {
+                return;
+            }
+            if (synthesisStartMs > 0 && synthesisFirstChunkMs < 0) {
+                this.synthesisFirstChunkMs = System.currentTimeMillis() - synthesisStartMs;
+            }
+        }
+
+        void logSummary(Long scopeId, String sessionId, SignalType signal) {
+            log.info("[query-timing] summary scopeId={} sessionId={} signal={} clarify={}ms prePhase={}ms factAgent={}ms firstFactChunk={}ms synthesisFirstChunk={}ms total={}ms",
+                scopeId, sessionId, signal, clarifyMs, prePhaseMs, factAgentMs, firstFactChunkMs, synthesisFirstChunkMs,
+                System.currentTimeMillis() - startMs);
+        }
     }
 }

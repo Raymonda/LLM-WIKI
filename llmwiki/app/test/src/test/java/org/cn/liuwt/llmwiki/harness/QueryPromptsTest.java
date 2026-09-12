@@ -74,4 +74,19 @@ class QueryPromptsTest {
         assertTrue(prompt.contains("时间线"), "narrative prompt must include rich element guidance in all modes");
         assertTrue(prompt.contains("编造"), "narrative prompt must forbid fabricating chart data");
     }
+
+    @Test
+    void shouldKeepStrictCoverageGuardWhenFocusDisabled() {
+        QueryPrompts prompts = PromptRegistry.forQuery();
+        String prompt = prompts.factAgentPromptStructured(1L, 10, "ctx", false);
+        assertTrue(prompt.contains("维度覆盖表未完成时禁止输出 JSON 行"), "coverage guard must stay strict by default");
+    }
+
+    @Test
+    void shouldSoftenCoverageGuardWhenFocusEnabled() {
+        QueryPrompts prompts = PromptRegistry.forQuery();
+        String prompt = prompts.factAgentPromptStructured(1L, 10, "ctx", true);
+        assertTrue(prompt.contains("无需在输出中展示"), "focus mode must relax coverage output requirement");
+        assertFalse(prompt.contains("维度覆盖表未完成时禁止输出 JSON 行"), "focus mode must not keep the strict guard");
+    }
 }

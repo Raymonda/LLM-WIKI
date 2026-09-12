@@ -3,9 +3,11 @@ package org.cn.liuwt.llmwiki.domain.service.harness.tool;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.domain.service.harness.ParsedSourceIndex;
+import org.cn.liuwt.llmwiki.domain.service.harness.query.QueryToolProgress;
 import org.cn.liuwt.llmwiki.integration.storage.StorageProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,13 +39,15 @@ public class ReadRawSourceTool {
     public String readRawSource(
         @ToolParam(description = "知识库范围 ID") String scopeId,
         @ToolParam(description = "来源文档 ID（整数），可通过 getSourceInfo 工具获取") Long sourceId,
-        @ToolParam(description = "可选：Markdown 标题文本（不含 # 前缀），如 '第三章 风险评估'。提供时只返回匹配章节的内容。传空字符串时返回文档目录结构（章节+标题列表）") String sectionHeading
+        @ToolParam(description = "可选：Markdown 标题文本（不含 # 前缀），如 '第三章 风险评估'。提供时只返回匹配章节的内容。传空字符串时返回文档目录结构（章节+标题列表）") String sectionHeading,
+        ToolContext toolContext
     ) {
         Long scopeIdLong = Long.parseLong(scopeId);
         SourceDO source = sourceMapper.selectById(sourceId);
         if (source == null || !source.getScopeId().equals(scopeIdLong)) {
             return "来源文档不存在或无权限: sourceId=" + sourceId;
         }
+        QueryToolProgress.emit(toolContext, "readRawSource", QueryToolProgress.truncate(source.getName(), 60), null);
 
         if (sectionHeading != null && sectionHeading.isBlank()) {
             String tocResult = buildTableOfContents(scopeId, sourceId, source);

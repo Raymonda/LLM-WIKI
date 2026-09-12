@@ -1,18 +1,34 @@
 package org.cn.liuwt.llmwiki.domain.service.harness.governance;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionStepDO;
+import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionStepMapper;
+import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
+import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.validation.SchemaComplianceChecker.ComplianceResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class ApprovalServiceImpl implements ApprovalService {
 
+    private static final Logger log = LoggerFactory.getLogger(ApprovalServiceImpl.class);
+
+    private static final Set<String> DECIDABLE_STEP_STATUSES = Set.of("pending", "awaiting_approval");
+
     @Autowired
     private ExecutionStepMapper executionStepMapper;
+
+    @Autowired
+    private ExecutionMapper executionMapper;
 
     private static final Map<String, ApprovalLevel> INGEST_DEFAULTS = Map.of(
         "UPLOAD", ApprovalLevel.AUTO,
@@ -73,26 +89,46 @@ public class ApprovalServiceImpl implements ApprovalService {
     }
 
     @Override
-    public boolean approveStep(Long stepId, Long userId) {
-        ExecutionStepDO stepDO = executionStepMapper.selectById(stepId);
-        if (stepDO == null) {
-            return false;
-        }
-        stepDO.setApprovedBy(userId);
-        stepDO.setStatus("approved");
-        executionStepMapper.updateById(stepDO);
-        return true;
+    @Transactional(rollbackFor = Exception.class)
+    public boolean approveStep(Long stepId, Long userId, Long scopeId) {
+        return decideStep(stepId, userId, scopeId, "approved");
     }
 
     @Override
-    public boolean rejectStep(Long stepId, Long userId) {
+    @Transactional(rollbackFor = Exception.class)
+    public boolean rejectStep(Long stepId, Long userId, Long scopeId) {
+        return decideStep(stepId, userId, scopeId, "rejected");
+    }
+
+    private boolean decideStep(Long stepId, Long userId, Long scopeId, String decision) {
+        if (stepId == null) {
+            throw new BusinessException(ErrorCode.INVALID_PARAM, "stepId is required");
+        }
         ExecutionStepDO stepDO = executionStepMapper.selectById(stepId);
         if (stepDO == null) {
-            return false;
+            throw new BusinessException(ErrorCode.STEP_NOT_FOUND, stepId);
         }
-        stepDO.setApprovedBy(userId);
-        stepDO.setStatus("rejected");
-        executionStepMapper.updateById(stepDO);
+        ExecutionDO execution = executionMapper.selectById(stepDO.getExecutionId());
+        if (execution == null) {
+            throw new BusinessException(ErrorCode.STEP_NOT_FOUND, stepId);
+        }
+        if (scopeId == null || !scopeId.equals(execution.getScopeId())) {
+            throw new BusinessException(ErrorCode.STEP_SCOPE_MISMATCH, stepId);
+        }
+        if (!DECIDABLE_STEP_STATUSES.contains(stepDO.getStatus())) {
+            throw new BusinessException(ErrorCode.STEP_NOT_AWAITING_DECISION, stepDO.getStatus());
+        }
+        int updated = executionStepMapper.update(null,
+            new LambdaUpdateWrapper<ExecutionStepDO>()
+                .eq(ExecutionStepDO::getId, stepId)
+                .in(ExecutionStepDO::getStatus, DECIDABLE_STEP_STATUSES)
+                .set(ExecutionStepDO::getStatus, decision)
+                .set(ExecutionStepDO::getApprovedBy, userId));
+        if (updated != 1) {
+            throw new BusinessException(ErrorCode.STEP_NOT_AWAITING_DECISION, "concurrent modification");
+        }
+        log.info("审批步骤决策 stepId={} executionId={} scope={} decision={} userId={}",
+            stepId, stepDO.getExecutionId(), scopeId, decision, userId);
         return true;
     }
 }

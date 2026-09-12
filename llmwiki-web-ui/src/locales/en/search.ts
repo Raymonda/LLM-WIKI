@@ -60,4 +60,13 @@ export default {
   confidenceHigh: 'High confidence',
   confidenceMedium: 'Medium confidence',
   confidenceLow: 'Low confidence',
+  toolScopeFallback: 'knowledge base',
+  toolResultCount: '{0} results',
+  toolReadFile: 'Reading {0}',
+  toolReadFileSection: 'Reading a section of {0}',
+  toolSearchWiki: 'Searching "{0}"',
+  toolGetRelatedPages: 'Exploring pages related to {0}',
+  toolListPages: 'Browsing "{0}" pages',
+  toolGetSourceInfo: 'Checking sources of {0}',
+  toolReadRawSource: 'Opening raw document {0}',
 }

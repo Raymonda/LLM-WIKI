@@ -60,4 +60,13 @@ export default {
   confidenceHigh: '高可信',
   confidenceMedium: '中可信',
   confidenceLow: '低可信',
+  toolScopeFallback: '知识库',
+  toolResultCount: '{0} 条',
+  toolReadFile: '阅读《{0}》',
+  toolReadFileSection: '查阅《{0}》章节',
+  toolSearchWiki: '检索「{0}」',
+  toolGetRelatedPages: '探索《{0}》的关联页面',
+  toolListPages: '浏览「{0}」页面',
+  toolGetSourceInfo: '查看《{0}》的来源',
+  toolReadRawSource: '回溯原始文档《{0}》',
 }

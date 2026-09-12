@@ -127,10 +127,8 @@ async function onBatchAccept() {
   try {
     const r = await batchAcceptPatches(ids)
     toast.success(t('schemaPatch.toastBatchAccept', [r.processed, r.failed ? t('schemaPatch.failedSuffix', [r.failed]) : '']))
-    const acceptedSet = new Set(ids)
-    pendingPatches.value = pendingPatches.value.filter(p => !acceptedSet.has(p.id))
     selectedIds.value = new Set()
-    currentVersion.value += r.processed
+    await load()
     emit('applied')
   } catch (e: any) {
     toast.error(e?.message || t('schemaPatch.toastBatchAcceptFail'))
@@ -146,9 +144,8 @@ async function onBatchReject() {
   try {
     const r = await batchRejectPatches(ids)
     toast.info(t('schemaPatch.toastBatchReject', [r.processed, r.failed ? t('schemaPatch.failedSuffix', [r.failed]) : '']))
-    const rejectedSet = new Set(ids)
-    pendingPatches.value = pendingPatches.value.filter(p => !rejectedSet.has(p.id))
     selectedIds.value = new Set()
+    await load()
   } catch (e: any) {
     toast.error(e?.message || t('schemaPatch.toastBatchRejectFail'))
   } finally {
@@ -163,9 +160,8 @@ async function onBatchIgnore() {
   try {
     const r = await batchIgnorePatches(ids)
     toast.info(t('schemaPatch.toastBatchIgnore', [r.processed, r.failed ? t('schemaPatch.failedSuffix', [r.failed]) : '']))
-    const ignoredSet = new Set(ids)
-    pendingPatches.value = pendingPatches.value.filter(p => !ignoredSet.has(p.id))
     selectedIds.value = new Set()
+    await load()
   } catch (e: any) {
     toast.error(e?.message || t('schemaPatch.toastBatchIgnoreFail'))
   } finally {
@@ -180,10 +176,8 @@ async function onAcceptAllLowRisk() {
   try {
     const r = await batchAcceptPatches(ids)
     toast.success(t('schemaPatch.toastAcceptAllLow', [r.processed, r.failed ? t('schemaPatch.failedSuffix', [r.failed]) : '']))
-    const acceptedSet = new Set(ids)
-    pendingPatches.value = pendingPatches.value.filter(p => !acceptedSet.has(p.id))
     selectedIds.value = new Set()
-    currentVersion.value += r.processed
+    await load()
     emit('applied')
   } catch (e: any) {
     toast.error(e?.message || t('schemaPatch.toastBatchAcceptFail'))
@@ -349,8 +343,23 @@ function sourceLabel(p: SchemaPatchInfo): string {
   return t('schemaPatch.srcUnknown')
 }
 
+const LIFECYCLE_TAG_PATTERN = /^\[(?:Gatekeeper\/\w+|GatekeeperSkip|AutoSupersede|UserPromote|AutoPromote|AutoExpire)\]\s*[^\n]*\n?/
+
 function stripGatekeeperTag(text: string): string {
-  return text.replace(/^\[Gatekeeper\/\w+\]\s*[^\n]*\n?/, '').trim()
+  let out = text
+  while (LIFECYCLE_TAG_PATTERN.test(out)) {
+    out = out.replace(LIFECYCLE_TAG_PATTERN, '')
+  }
+  return out.trim()
+}
+
+function isGatekeeperSkipped(p: SchemaPatchInfo): boolean {
+  return !p.gatekeeperDecision && (p.rationale ?? '').includes('[GatekeeperSkip]')
+}
+
+function gatekeeperBadge(p: SchemaPatchInfo): string {
+  if (p.gatekeeperDecision) return gatekeeperText(p.gatekeeperDecision)
+  return isGatekeeperSkipped(p) ? t('schemaPatch.gkSkip') : ''
 }
 
 function cleanRationale(text: string | null | undefined): string {
@@ -588,7 +597,7 @@ function gatekeeperText(d: string | null): string {
                       <p class="rpt-finding__desc">{{ patchNarrative(f.patch) }}</p>
                       <p class="rpt-finding__meta">
                         {{ sourceLabel(f.patch) }}
-                        <span v-if="f.patch.gatekeeperDecision"> · {{ gatekeeperText(f.patch.gatekeeperDecision) }}</span>
+                        <span v-if="gatekeeperBadge(f.patch)"> · {{ gatekeeperBadge(f.patch) }}</span>
                         <span v-if="f.patch.gatekeeperReason"> · {{ f.patch.gatekeeperReason }}</span>
                       </p>
                     </div>
@@ -723,8 +732,8 @@ function gatekeeperText(d: string | null): string {
                       <span class="patch-card__conf" :title="t('schemaPatch.confidenceTitle')">
                         {{ t('schemaPatch.confidenceLabel') }} {{ confidenceText(p.confidence) }}
                       </span>
-                      <span v-if="p.gatekeeperDecision" class="patch-card__gk" :title="p.gatekeeperReason || ''">
-                        {{ gatekeeperText(p.gatekeeperDecision) }}
+                      <span v-if="gatekeeperBadge(p)" class="patch-card__gk" :title="p.gatekeeperReason || ''">
+                        {{ gatekeeperBadge(p) }}
                       </span>
                     </div>
 
@@ -803,8 +812,8 @@ function gatekeeperText(d: string | null): string {
                       <span class="patch-card__conf" :title="t('schemaPatch.confidenceTitle')">
                         {{ t('schemaPatch.confidenceLabel') }} {{ confidenceText(p.confidence) }}
                       </span>
-                      <span v-if="p.gatekeeperDecision" class="patch-card__gk" :title="p.gatekeeperReason || ''">
-                        {{ gatekeeperText(p.gatekeeperDecision) }}
+                      <span v-if="gatekeeperBadge(p)" class="patch-card__gk" :title="p.gatekeeperReason || ''">
+                        {{ gatekeeperBadge(p) }}
                       </span>
                     </div>
 

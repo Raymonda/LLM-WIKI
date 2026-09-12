@@ -123,6 +123,8 @@ public class QueryController {
                         emitter.send(SseEmitter.event().name("fact-block").data(event.payload()));
                     } else if ("step".equals(event.eventName())) {
                         emitter.send(SseEmitter.event().name("step").data(Map.of("step", event.payload())));
+                    } else if ("tool-progress".equals(event.eventName())) {
+                        emitter.send(SseEmitter.event().name("tool-progress").data(event.payload()));
                     } else if ("clarification".equals(event.eventName())) {
                         emitter.send(SseEmitter.event().name("clarification").data(event.payload()));
                     } else {

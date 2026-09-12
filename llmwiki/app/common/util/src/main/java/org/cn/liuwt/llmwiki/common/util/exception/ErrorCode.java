@@ -166,6 +166,12 @@ public enum ErrorCode {
     PATCH_CONFLICT("PATCH_010", "Patch conflict: {0}"),
     PATCH_OP_UNKNOWN("PATCH_011", "Unknown operation: {0}"),
     PATCH_SECTION_UNSUPPORTED("PATCH_012", "Structured path does not support section {0}: {1}"),
+    PATCH_SCOPE_MISMATCH("PATCH_013", "Patch {0} does not belong to current scope"),
+
+    // Execution step approval
+    STEP_NOT_FOUND("STEP_001", "Execution step not found: {0}"),
+    STEP_NOT_AWAITING_DECISION("STEP_002", "Step is not awaiting a decision, current status: {0}"),
+    STEP_SCOPE_MISMATCH("STEP_003", "Step {0} does not belong to current scope"),
 
     // Lint additional (extended)
     LINT_INVALID_RESOLVE_TYPE("LINT_005", "Only schema_compliance findings in open status can be marked as resolved");

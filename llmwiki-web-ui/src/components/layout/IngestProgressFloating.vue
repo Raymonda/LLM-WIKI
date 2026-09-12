@@ -42,22 +42,55 @@ const extraTaskCount = computed(() => {
   return store.runningTaskCount - 1
 })
 
-const show = computed(() => {
-  return mostUrgentTask.value !== null
+const batchReport = computed(() => ({
+  awaiting: batchStore.awaitingTotal,
+  failed: batchStore.openFailedTotal,
+  inFlight: batchStore.inProgressTotal,
+  openTotal: batchStore.openItemTotal,
+}))
+
+const hasBatchReport = computed(() => {
+  const report = batchReport.value
+  return report.awaiting > 0 || report.failed > 0 || report.inFlight > 0
 })
 
-const awaitingBatch = computed(() => {
-  return batchStore.inbox.find(b => b.awaitingCount > 0) ?? null
+const showTaskFloating = computed(() => !hasBatchReport.value && mostUrgentTask.value !== null)
+
+const showBatchFloating = computed(() => hasBatchReport.value)
+
+const allOpenBatchesPaused = computed(
+  () => batchStore.openBatches.length > 0 && batchStore.openBatches.every(batch => batch.status === 'paused'),
+)
+
+const batchCardTone = computed(() => {
+  const report = batchReport.value
+  if (report.failed > 0) return 'failed'
+  if (report.awaiting > 0) return 'review'
+  return 'running'
 })
 
-const showBatchFloating = computed(() => {
-  return !show.value && awaitingBatch.value !== null
+const batchSummarySegments = computed(() => {
+  const report = batchReport.value
+  const parts: string[] = []
+  if (report.awaiting > 0) parts.push(t('ingest.batchChipAwaiting', [report.awaiting]))
+  if (report.inFlight > 0) {
+    parts.push(
+      allOpenBatchesPaused.value
+        ? t('ingest.batchFloatingPaused')
+        : t('ingest.batchFloatingProcessing', [report.inFlight, report.openTotal]),
+    )
+  }
+  if (report.failed > 0) parts.push(t('ingest.batchChipFailed', [report.failed]))
+  return parts.join(' · ')
 })
 
-function openBatchReview() {
-  const batch = awaitingBatch.value
-  if (!batch) return
-  router.push({ path: '/ingest', query: { batch: String(batch.batchId) } })
+function openBatchWorkspace() {
+  const open = batchStore.openBatches
+  if (open.length === 1) {
+    router.push({ path: '/ingest', query: { batch: String(open[0].batchId) } })
+    return
+  }
+  router.push('/ingest')
 }
 
 const ringSize = 28
@@ -130,7 +163,7 @@ const canClose = computed(() => {
   return t.currentStep === 'done' || t.status === 'failed' || t.status === 'budget_exhausted' || t.status === 'cancelled' || t.status === 'paused'
 })
 
-watch(show, (visible) => {
+watch(showTaskFloating, (visible) => {
   if (autoDismissTimer.value) {
     clearTimeout(autoDismissTimer.value)
     autoDismissTimer.value = null
@@ -158,7 +191,7 @@ onUnmounted(() => {
 <template>
   <Transition name="ingest-floating-fade">
     <div
-      v-if="show"
+      v-if="showTaskFloating"
       class="ingest-floating"
       :class="[`ingest-floating--${displayPhase}`, { 'ingest-floating--editor': isEditorRoute }]"
       role="button"
@@ -220,11 +253,6 @@ onUnmounted(() => {
 
       <div class="ingest-floating__tail">
         <span v-if="extraTaskCount > 0" class="ingest-floating__badge">{{ extraTaskCount }}</span>
-        <span
-          v-if="batchStore.awaitingTotal > 0"
-          class="ingest-floating__badge ingest-floating__badge--awaiting"
-          :title="t('ingest.inboxTitle')"
-        >{{ batchStore.awaitingTotal }}</span>
         <button v-if="canClose" class="ingest-floating__close" :aria-label="t('common.close')" @click.stop="handleClose">
           <X :size="14" />
         </button>
@@ -235,24 +263,32 @@ onUnmounted(() => {
 
   <Transition name="ingest-floating-fade">
     <div
-      v-if="showBatchFloating && awaitingBatch"
-      class="ingest-floating ingest-floating--review"
-      :class="{ 'ingest-floating--editor': isEditorRoute }"
+      v-if="showBatchFloating"
+      class="ingest-floating"
+      :class="[`ingest-floating--${batchCardTone}`, { 'ingest-floating--editor': isEditorRoute }]"
       role="button"
       tabindex="0"
-      @click="openBatchReview"
-      @keydown.enter="openBatchReview"
-      @keydown.space.prevent="openBatchReview"
+      @click="openBatchWorkspace"
+      @keydown.enter="openBatchWorkspace"
+      @keydown.space.prevent="openBatchWorkspace"
     >
       <div class="ingest-floating__indicator">
-        <ClipboardCheck :size="20" />
+        <template v-if="batchCardTone === 'failed'">
+          <AlertTriangle :size="20" />
+        </template>
+        <template v-else-if="batchCardTone === 'review'">
+          <ClipboardCheck :size="20" />
+        </template>
+        <template v-else>
+          <Loader2 :size="18" class="ingest-floating__spin" />
+        </template>
       </div>
 
       <div class="ingest-floating__body">
         <div class="ingest-floating__head">
-          <span class="ingest-floating__phase">{{ t('ingest.inboxTitle') }}</span>
+          <span class="ingest-floating__phase">{{ t('ingest.batchOverviewTitle') }}</span>
         </div>
-        <div class="ingest-floating__sub">{{ t('ingest.batchFloatingAwaiting', [awaitingBatch.awaitingCount]) }}</div>
+        <div class="ingest-floating__sub">{{ batchSummarySegments }}</div>
       </div>
 
       <div class="ingest-floating__tail">
@@ -351,7 +387,7 @@ onUnmounted(() => {
 }
 
 .ingest-floating__sub {
-  font-size: 11px;
+  font-size: var(--font-caption);
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -370,19 +406,16 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
+  min-width: 20px;
   height: 18px;
-  padding: 0 4px;
+  padding: 0 5px;
   border-radius: var(--radius-full);
   background: var(--accent-primary);
   color: var(--text-on-accent);
-  font-size: 10px;
+  font-size: var(--font-caption);
   font-weight: 600;
   line-height: 1;
-}
-
-.ingest-floating__badge--awaiting {
-  background: var(--warning);
+  font-variant-numeric: tabular-nums;
 }
 
 .ingest-floating__close {
@@ -410,16 +443,16 @@ onUnmounted(() => {
 
 .ingest-floating--done .ingest-floating__indicator {
   background: var(--success-light);
-  color: var(--success);
+  color: var(--success-strong);
 }
 
 .ingest-floating--failed .ingest-floating__indicator {
   background: var(--error-light);
-  color: var(--error);
+  color: var(--error-strong);
 }
 
 .ingest-floating--failed {
-  border-color: var(--error);
+  border-color: var(--error-strong);
 }
 
 .ingest-floating__indicator--cancelled {
@@ -439,11 +472,11 @@ onUnmounted(() => {
 
 .ingest-floating--paused .ingest-floating__indicator {
   background: var(--warning-light);
-  color: var(--warning);
+  color: var(--warning-strong);
 }
 
 .ingest-floating--paused {
-  border-color: var(--warning);
+  border-color: var(--warning-strong);
 }
 
 .ingest-floating--review .ingest-floating__indicator {

@@ -4,8 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
 import org.cn.liuwt.llmwiki.common.dal.helper.ActivePageScope;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageMapper;
+import org.cn.liuwt.llmwiki.domain.service.harness.query.QueryToolProgress;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,7 +27,8 @@ public class ListPagesTool {
     @Tool(description = "从数据库列出所有 Wiki 页面及其元数据，可选按分类筛选")
     public List<PageResult> listPages(
         @ToolParam(description = "知识库范围 ID") String scopeId,
-        @ToolParam(description = "分类筛选（可选）") String category
+        @ToolParam(description = "分类筛选（可选）") String category,
+        ToolContext toolContext
     ) {
         Long scopeIdLong = Long.parseLong(scopeId);
         LambdaQueryWrapper<WikiPageDO> wrapper = ActivePageScope.active(scopeIdLong);
@@ -37,6 +40,7 @@ public class ListPagesTool {
         wrapper.orderByDesc(WikiPageDO::getContentUpdatedAt);
         List<WikiPageDO> pageDOs = wikiPageMapper.selectList(wrapper);
         log.info("tool=listPages scopeId={} category={} results={}", scopeId, category, pageDOs.size());
+        QueryToolProgress.emit(toolContext, "listPages", QueryToolProgress.truncate(category, 40), pageDOs.size());
 
         List<PageResult> results = new ArrayList<>();
         for (WikiPageDO pageDO : pageDOs) {

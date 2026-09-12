@@ -12,6 +12,10 @@ import java.util.List;
 public class SchemaMarkdownRenderer {
 
     public String render(SchemaStructuredModel model) {
+        return render(model, null);
+    }
+
+    public String render(SchemaStructuredModel model, String changelogBody) {
         if (model == null) return null;
         StringBuilder sb = new StringBuilder();
 
@@ -21,7 +25,7 @@ public class SchemaMarkdownRenderer {
         renderSection4(sb, model);
         renderSection5(sb, model);
         renderSection6(sb, model);
-        renderSection7(sb);
+        renderSection7(sb, changelogBody);
 
         return sb.toString().trim() + "\n";
     }
@@ -250,8 +254,12 @@ public class SchemaMarkdownRenderer {
         sb.append("\n");
     }
 
-    private void renderSection7(StringBuilder sb) {
+    private void renderSection7(StringBuilder sb, String changelogBody) {
         sb.append("## 7. 变更日志\n\n");
-        sb.append("- ").append(LocalDate.now()).append(" 由结构化模型渲染生成。\n\n");
+        if (changelogBody != null && !changelogBody.isBlank()) {
+            sb.append(changelogBody.strip()).append("\n\n");
+        } else {
+            sb.append("- ").append(LocalDate.now()).append(" 由结构化模型渲染生成。\n\n");
+        }
     }
 }

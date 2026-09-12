@@ -25,6 +25,9 @@ hs_err_pid*
 # Trae IDE
 .qoder/
 
+# Git worktrees
+.worktrees/
+
 # Superpowers session artifacts
 .superpowers/
 
@@ -85,3 +88,12 @@ llmwiki/rocketmq/logs/
 
 # Competition release artifacts
 /release/
+/release-notes-*.md
+
+# Root-level one-off debug scripts and scratch output (local machine only)
+/*.ps1
+/cp-test.txt
+/verify-biz-src/
+
+# Impeccable UI-review artifacts
+.impeccable/

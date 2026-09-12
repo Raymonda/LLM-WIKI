@@ -67,6 +67,29 @@ export const useIngestBatchStore = defineStore('ingestBatch', () => {
     inbox.value.reduce((sum, batch) => sum + batch.awaitingCount, 0),
   )
 
+  const failedTotal = computed(() =>
+    inbox.value.reduce((sum, batch) => sum + batch.failedCount, 0),
+  )
+
+  const openBatches = computed(() =>
+    inbox.value.filter((batch) => batch.status === 'active' || batch.status === 'paused'),
+  )
+
+  const openFailedTotal = computed(() =>
+    openBatches.value.reduce((sum, batch) => sum + batch.failedCount, 0),
+  )
+
+  const inProgressTotal = computed(() =>
+    openBatches.value.reduce(
+      (sum, batch) => sum + batch.pendingCount + batch.runningCount + batch.confirmedCount,
+      0,
+    ),
+  )
+
+  const openItemTotal = computed(() =>
+    openBatches.value.reduce((sum, batch) => sum + batch.totalCount, 0),
+  )
+
   async function refreshInbox() {
     const authStore = useAuthStore()
     const scopeId = authStore.scopeId
@@ -168,6 +191,11 @@ export const useIngestBatchStore = defineStore('ingestBatch', () => {
     selectedBatchId,
     lastError,
     awaitingTotal,
+    failedTotal,
+    openBatches,
+    openFailedTotal,
+    inProgressTotal,
+    openItemTotal,
     refreshInbox,
     refreshCurrentBatch,
     refreshAll,
