@@ -1,9 +1,17 @@
 package org.cn.liuwt.llmwiki.domain.service.wiki;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel;
 import org.cn.liuwt.llmwiki.integration.storage.StorageProvider;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -24,6 +32,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.startsWith;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -40,6 +49,12 @@ class SourceServiceTest {
 
     @InjectMocks
     private SourceService sourceService;
+
+    @BeforeAll
+    static void initTableInfo() {
+        MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
+        TableInfoHelper.initTableInfo(assistant, SourceDO.class);
+    }
 
     private void stubEmptyTempDir() {
         when(storageProvider.list(anyString(), eq("raw/.tmp"))).thenReturn(List.of());
@@ -143,5 +158,61 @@ class SourceServiceTest {
         SourceModel model = sourceService.uploadTextSource("readme", "内容", 100L, 7L);
 
         assertEquals("readme.md", model.getName());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldPassPaginationParamsAndScopeFilterWhenListSourcesPagedCalled() {
+        when(sourceMapper.selectPage(any(), any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        sourceService.listSourcesPaged(100L, 2, 20);
+
+        ArgumentCaptor<Page<SourceDO>> pageCaptor = ArgumentCaptor.forClass(Page.class);
+        ArgumentCaptor<Wrapper<SourceDO>> wrapperCaptor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(sourceMapper).selectPage(pageCaptor.capture(), wrapperCaptor.capture());
+        assertEquals(2, pageCaptor.getValue().getCurrent());
+        assertEquals(20, pageCaptor.getValue().getSize());
+        LambdaQueryWrapper<SourceDO> wrapper = (LambdaQueryWrapper<SourceDO>) wrapperCaptor.getValue();
+        assertTrue(wrapper.getSqlSegment().toUpperCase().contains("SCOPE_ID"));
+        assertTrue(wrapper.getParamNameValuePairs().containsValue(100L));
+    }
+
+    @Test
+    void shouldMapRecordsAndTotalWhenListSourcesPagedCalled() {
+        SourceDO first = new SourceDO();
+        first.setId(11L);
+        first.setName("first.md");
+        first.setStatus("processed");
+        SourceDO second = new SourceDO();
+        second.setId(12L);
+        second.setName("second.md");
+        second.setStatus("uploaded");
+        Page<SourceDO> stubPage = new Page<>(2, 5, 10);
+        stubPage.setRecords(List.of(first, second));
+        doReturn(stubPage).when(sourceMapper).selectPage(any(), any());
+
+        IPage<SourceModel> paged = sourceService.listSourcesPaged(100L, 2, 5);
+
+        assertEquals(10, paged.getTotal());
+        assertEquals(2, paged.getCurrent());
+        assertEquals(5, paged.getSize());
+        assertEquals(2, paged.getPages());
+        assertEquals(2, paged.getRecords().size());
+        assertEquals(11L, paged.getRecords().get(0).getId());
+        assertEquals("first.md", paged.getRecords().get(0).getName());
+        assertEquals("second.md", paged.getRecords().get(1).getName());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldNormalizeInvalidPageBoundsWhenListSourcesPagedCalled() {
+        when(sourceMapper.selectPage(any(), any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        sourceService.listSourcesPaged(100L, 0, -5);
+
+        ArgumentCaptor<Page<SourceDO>> pageCaptor = ArgumentCaptor.forClass(Page.class);
+        verify(sourceMapper).selectPage(pageCaptor.capture(), any());
+        assertEquals(1, pageCaptor.getValue().getCurrent());
+        assertEquals(1, pageCaptor.getValue().getSize());
     }
 }

@@ -1,9 +1,11 @@
 package org.cn.liuwt.llmwiki.web.controller;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.common.util.result.Result;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.RateLimitService;
 import org.cn.liuwt.llmwiki.facade.model.DeprecateSourceRequest;
+import org.cn.liuwt.llmwiki.facade.model.PageResult;
 import org.cn.liuwt.llmwiki.facade.model.SourceInfo;
 import org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel;
 import org.cn.liuwt.llmwiki.domain.service.wiki.SourceService;
@@ -18,7 +20,6 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 import java.util.Map;
 
 import org.springframework.core.io.Resource;
@@ -50,12 +51,19 @@ public class SourceController {
         return Result.success(toInfo(source));
     }
 
-    @GetMapping("/list")
-    public Result<List<SourceInfo>> listSources() {
+    @GetMapping("/paged")
+    public Result<PageResult<SourceInfo>> listSourcesPaged(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
         Long scopeId = jwtTokenProvider.getCurrentScopeId();
-        List<SourceModel> sources = sourceService.listSources(scopeId);
-        List<SourceInfo> infos = sources.stream().map(this::toInfo).toList();
-        return Result.success(infos);
+        IPage<SourceModel> paged = sourceService.listSourcesPaged(scopeId, page, size);
+        PageResult<SourceInfo> pr = new PageResult<>();
+        pr.setItems(paged.getRecords().stream().map(this::toInfo).toList());
+        pr.setTotal(paged.getTotal());
+        pr.setPage(paged.getCurrent());
+        pr.setSize(paged.getSize());
+        pr.setTotalPages(paged.getPages());
+        return Result.success(pr);
     }
 
     @GetMapping("/count")

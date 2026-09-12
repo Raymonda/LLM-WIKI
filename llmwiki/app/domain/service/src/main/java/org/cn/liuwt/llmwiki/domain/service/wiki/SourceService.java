@@ -2,6 +2,8 @@ package org.cn.liuwt.llmwiki.domain.service.wiki;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
@@ -276,13 +278,15 @@ public class SourceService {
         return processing != null ? toModel(processing) : null;
     }
 
-    public List<SourceModel> listSources(Long scopeId) {
-        List<SourceDO> sourceDOs = sourceMapper.selectList(
-            new LambdaQueryWrapper<SourceDO>()
-                .eq(SourceDO::getScopeId, scopeId)
-                .orderByDesc(SourceDO::getCreatedAt)
-        );
-        return sourceDOs.stream().map(this::toModel).collect(Collectors.toList());
+    public IPage<SourceModel> listSourcesPaged(Long scopeId, int page, int size) {
+        LambdaQueryWrapper<SourceDO> wrapper = new LambdaQueryWrapper<SourceDO>()
+            .eq(SourceDO::getScopeId, scopeId)
+            .orderByDesc(SourceDO::getCreatedAt);
+        Page<SourceDO> pageParam = new Page<>(Math.max(page, 1), Math.max(size, 1));
+        IPage<SourceDO> doPage = sourceMapper.selectPage(pageParam, wrapper);
+        IPage<SourceModel> modelPage = new Page<>(doPage.getCurrent(), doPage.getSize(), doPage.getTotal());
+        modelPage.setRecords(doPage.getRecords().stream().map(this::toModel).collect(Collectors.toList()));
+        return modelPage;
     }
 
     public long countSources(Long scopeId) {
