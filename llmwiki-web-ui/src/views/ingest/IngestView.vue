@@ -19,7 +19,7 @@ import AnalysisSummaryPanel from './components/AnalysisSummaryPanel.vue'
 import BatchOverviewPanel from './components/BatchOverviewPanel.vue'
 import ReviewInbox from './components/ReviewInbox.vue'
 import { useIngestProgressStore } from '@/stores/ingestProgress'
-import { useIngestBatchStore } from '@/stores/ingestBatch'
+import { useIngestBatchStore, groupInboxItems } from '@/stores/ingestBatch'
 import { useConfirmDialog } from '@/composables/useConfirmDialog'
 
 const { state: confirmState, showConfirm, onConfirm, onCancel, ConfirmDialog } = useConfirmDialog()
@@ -423,6 +423,33 @@ async function handleItemRetry(executionId: number) {
   await runBatchAction(() => batchStore.retryOne(executionId))
 }
 
+async function handleRetryAllFailed() {
+  const failedItems = groupInboxItems(batchItems.value).find((group) => group.key === 'failed')?.items ?? []
+  if (failedItems.length === 0) return
+  const confirmed = await showConfirm({
+    title: t('ingest.inboxRetryAll'),
+    message: t('ingest.inboxRetryAllMessage', [failedItems.length]),
+    confirmText: t('ingest.inboxRetryAll'),
+    cancelText: t('ingest.cancel'),
+    type: 'warning',
+  })
+  if (!confirmed) return
+  await runBatchAction(async () => {
+    let failures = 0
+    for (const item of failedItems) {
+      try {
+        await batchStore.retryOne(item.executionId)
+      } catch {
+        failures += 1
+      }
+    }
+    await batchStore.refreshAll()
+    if (failures > 0) {
+      throw new Error(t('ingest.inboxRetryAllPartial', [failures]))
+    }
+  })
+}
+
 async function createBatchFromPending() {
   if (batchPendingSources.value.length === 0) return
   await runBatchAction(async () => {
@@ -550,6 +577,7 @@ onMounted(async () => {
         @confirm="handleItemConfirm"
         @reanalyze="handleItemReanalyze"
         @retry="handleItemRetry"
+        @retry-all="handleRetryAllFailed"
       />
     </div>
 

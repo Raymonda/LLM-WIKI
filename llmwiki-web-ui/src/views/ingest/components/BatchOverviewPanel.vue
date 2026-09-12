@@ -48,7 +48,7 @@ const chips = computed(() => {
     { key: 'completed', count: batch.completedCount, label: t('ingest.batchChipCompleted', [batch.completedCount]) },
     { key: 'failed', count: batch.failedCount, label: t('ingest.batchChipFailed', [batch.failedCount]) },
     { key: 'cancelled', count: batch.cancelledCount, label: t('ingest.batchChipCancelled', [batch.cancelledCount]) },
-  ].filter((chip) => chip.count > 0)
+  ].filter((chip) => chip.count > 0 && !(chip.key === 'completed' && batch.status === 'completed'))
 })
 
 const canConfirmAll = computed(() => (props.batch?.awaitingCount ?? 0) > 0)
@@ -77,7 +77,7 @@ function requestCancel() {
   <section v-if="batch" class="batch-overview">
     <header class="batch-overview__header">
       <Layers :size="16" class="batch-overview__icon" />
-      <h3 class="batch-overview__title">{{ t('ingest.batchOverviewTitle') }}</h3>
+      <h2 class="batch-overview__title">{{ t('ingest.batchOverviewTitle') }}</h2>
       <span class="batch-overview__status" :class="`batch-overview__status--${batch.status}`">
         {{ statusLabel }}
       </span>
@@ -196,17 +196,17 @@ function requestCancel() {
 
 .batch-overview__status--active {
   background: var(--accent-light);
-  color: var(--accent-primary);
+  color: var(--accent-strong);
 }
 
 .batch-overview__status--completed {
   background: var(--success-light);
-  color: var(--success);
+  color: var(--success-strong);
 }
 
 .batch-overview__status--cancelled {
   background: var(--error-light);
-  color: var(--error);
+  color: var(--error-strong);
 }
 
 .batch-overview__progress-text {
@@ -246,23 +246,23 @@ function requestCancel() {
 
 .batch-overview__chip--awaiting {
   background: var(--accent-light);
-  color: var(--accent-primary);
+  color: var(--accent-strong);
 }
 
 .batch-overview__chip--analyzing,
 .batch-overview__chip--writing {
   background: var(--info-light);
-  color: var(--info);
+  color: var(--info-strong);
 }
 
 .batch-overview__chip--completed {
   background: var(--success-light);
-  color: var(--success);
+  color: var(--success-strong);
 }
 
 .batch-overview__chip--failed {
   background: var(--error-light);
-  color: var(--error);
+  color: var(--error-strong);
 }
 
 .batch-overview__guidance {
@@ -312,7 +312,7 @@ function requestCancel() {
 
 .batch-overview__btn--danger {
   background: transparent;
-  color: var(--error);
+  color: var(--error-strong);
   border-color: var(--error-light);
 }
 </style>

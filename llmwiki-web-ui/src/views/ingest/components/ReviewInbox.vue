@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Inbox } from 'lucide-vue-next'
+import { Inbox, RotateCcw } from 'lucide-vue-next'
 import type { IngestBatchItemInfo } from '@/api/ingest'
 import { groupInboxItems, type InboxGroupKey } from '@/stores/ingestBatch'
 import InboxItemCard from './InboxItemCard.vue'
@@ -15,6 +15,7 @@ const emit = defineEmits<{
   (e: 'confirm', executionId: number, guidance?: string): void
   (e: 'reanalyze', executionId: number, guidance?: string): void
   (e: 'retry', executionId: number): void
+  (e: 'retry-all'): void
 }>()
 
 const { t } = useI18n()
@@ -55,7 +56,7 @@ function onRetry(executionId: number) {
   <section class="review-inbox" :aria-label="t('ingest.inboxTitle')">
     <header class="review-inbox__header">
       <Inbox :size="16" />
-      <h3 class="review-inbox__title">{{ t('ingest.inboxTitle') }}</h3>
+      <h2 class="review-inbox__title">{{ t('ingest.inboxTitle') }}</h2>
     </header>
 
     <p v-if="groups.length === 0" class="review-inbox__empty">{{ t('ingest.inboxEmpty') }}</p>
@@ -64,6 +65,16 @@ function onRetry(executionId: number) {
       <div class="review-inbox__group-header">
         <span class="review-inbox__group-label">{{ group.label }}</span>
         <span class="review-inbox__group-count">{{ group.items.length }}</span>
+        <button
+          v-if="group.key === 'failed' && group.items.length >= 2"
+          class="review-inbox__group-action"
+          type="button"
+          :disabled="busy"
+          @click="emit('retry-all')"
+        >
+          <RotateCcw :size="12" />
+          {{ t('ingest.inboxRetryAll') }}
+        </button>
       </div>
       <div class="review-inbox__group-items">
         <InboxItemCard
@@ -134,6 +145,30 @@ function onRetry(executionId: number) {
   border-radius: var(--radius-pill);
   padding: 1px var(--space-2);
   font-variant-numeric: tabular-nums;
+}
+
+.review-inbox__group-action {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--btn-ghost-text);
+  font-size: var(--font-caption);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.review-inbox__group-action:hover {
+  background: var(--sidebar-item-hover);
+}
+
+.review-inbox__group-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .review-inbox__group-items {

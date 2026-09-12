@@ -214,4 +214,10 @@ export default {
   batchDuplicateHint: 'Duplicate sources: {0}',
   batchExitView: 'Exit batch review',
   batchFloatingAwaiting: '{0} item(s) awaiting review',
+  batchFloatingProcessing: '{0} / {1} processing',
+  batchFloatingPaused: 'Batch paused',
+  batchAttentionBadge: '{0} pending item(s)',
+  inboxRetryAll: 'Retry all',
+  inboxRetryAllMessage: 'Retry {0} failed item(s)?',
+  inboxRetryAllPartial: '{0} retry request(s) failed to submit',
 }

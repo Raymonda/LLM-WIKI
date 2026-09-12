@@ -214,4 +214,10 @@ export default {
   batchDuplicateHint: '重复来源：{0}',
   batchExitView: '退出批次审阅',
   batchFloatingAwaiting: '{0} 份资料待审阅',
+  batchFloatingProcessing: '处理中 {0} / {1}',
+  batchFloatingPaused: '批次已暂停',
+  batchAttentionBadge: '{0} 项待处理',
+  inboxRetryAll: '全部重试',
+  inboxRetryAllMessage: '将重试 {0} 份失败资料，确认继续？',
+  inboxRetryAllPartial: '{0} 份资料重试提交失败',
 }

@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import { useIngestProgressStore } from '@/stores/ingestProgress'
+import { useIngestBatchStore } from '@/stores/ingestBatch'
 import { useTaskProgressStore } from '@/stores/taskProgress'
 import { useLocale } from '@/composables/useLocale'
 import { SUPPORTED_LOCALES } from '@/locales'
@@ -28,6 +29,7 @@ const router = useRouter()
 const themeStore = useThemeStore()
 const authStore = useAuthStore()
 const activityStore = useIngestProgressStore()
+const batchStore = useIngestBatchStore()
 const taskProgressStore = useTaskProgressStore()
 const collapsed = ref(false)
 const settingsExpanded = ref(false)
@@ -87,6 +89,9 @@ const hasRunningActivities = computed(() => {
   )
 })
 
+const batchAttentionTotal = computed(() => batchStore.awaitingTotal + batchStore.failedTotal)
+const batchHasFailures = computed(() => batchStore.failedTotal > 0)
+
 const currentScopeName = computed(() =>
   currentScope?.value?.scopeName || t('common.personalKB')
 )
@@ -135,6 +140,8 @@ function handleLangSwitch(lang: SupportedLocale) {
       <button class="sidebar__add-btn" @click="handleAddMaterial" :title="collapsed ? t('common.addMaterial') : ''">
         <Upload :size="18" />
         <span v-if="!collapsed">{{ t('common.addMaterial') }}</span>
+        <span v-if="batchAttentionTotal > 0" class="sidebar__add-badge" :class="{ 'sidebar__add-badge--error': batchHasFailures }" :title="t('ingest.batchAttentionBadge', [batchAttentionTotal])">{{ batchAttentionTotal > 99 ? '99+' : batchAttentionTotal }}</span>
+        <span v-else-if="hasRunningActivities" class="sidebar__add-dot" :title="t('ingest.floatingPhaseDefault')"></span>
       </button>
     </div>
 
@@ -148,10 +155,6 @@ function handleLangSwitch(lang: SupportedLocale) {
       >
         <div class="sidebar__nav-icon-wrap">
           <component :is="item.icon" :size="20" />
-          <span
-            v-if="hasRunningActivities && item.path === '/'"
-            class="sidebar__badge sidebar__badge--running"
-          ></span>
         </div>
         <span v-if="!collapsed" class="sidebar__nav-label">{{ item.label }}</span>
       </RouterLink>
@@ -310,6 +313,7 @@ function handleLangSwitch(lang: SupportedLocale) {
 }
 
 .sidebar__add-btn {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -328,6 +332,40 @@ function handleLangSwitch(lang: SupportedLocale) {
 
 .sidebar__add-btn:hover {
   opacity: 0.9;
+}
+
+.sidebar__add-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--warning-strong);
+  color: var(--text-on-accent);
+  font-size: var(--font-caption);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar__add-badge--error {
+  background: var(--error-strong);
+}
+
+.sidebar__add-dot {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--warning-strong);
+  animation: pulse 2s ease-in-out infinite;
 }
 
 .sidebar__nav {
@@ -374,20 +412,6 @@ function handleLangSwitch(lang: SupportedLocale) {
   position: relative;
   display: flex;
   align-items: center;
-}
-
-.sidebar__badge {
-  position: absolute;
-  top: -2px;
-  right: -4px;
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-full);
-}
-
-.sidebar__badge--running {
-  background: var(--warning);
-  animation: pulse 2s ease-in-out infinite;
 }
 
 @keyframes pulse {

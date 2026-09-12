@@ -215,22 +215,22 @@ function submitRetry() {
 
 .inbox-item--accent .inbox-item__badge {
   background: var(--accent-light);
-  color: var(--accent-primary);
+  color: var(--accent-strong);
 }
 
 .inbox-item--info .inbox-item__badge {
   background: var(--info-light);
-  color: var(--info);
+  color: var(--info-strong);
 }
 
 .inbox-item--success .inbox-item__badge {
   background: var(--success-light);
-  color: var(--success);
+  color: var(--success-strong);
 }
 
 .inbox-item--error .inbox-item__badge {
   background: var(--error-light);
-  color: var(--error);
+  color: var(--error-strong);
 }
 
 .inbox-item__tokens {
@@ -243,7 +243,7 @@ function submitRetry() {
 .inbox-item__error {
   margin: 0;
   font-size: var(--font-body-sm);
-  color: var(--error);
+  color: var(--error-strong);
 }
 
 .inbox-item__actions {
