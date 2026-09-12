@@ -26,6 +26,14 @@ export interface SourceInfo {
   duplicateInfo?: DuplicateInfo | null
 }
 
+export interface PageResult<T> {
+  items: T[]
+  total: number
+  page: number
+  size: number
+  totalPages: number
+}
+
 export function uploadSource(file: File): Promise<SourceInfo> {
   const formData = new FormData()
   formData.append('file', file)
@@ -34,8 +42,8 @@ export function uploadSource(file: File): Promise<SourceInfo> {
   })
 }
 
-export function listSources(): Promise<SourceInfo[]> {
-  return api.get('/source/list')
+export function listSourcesPaged(page = 1, size = 20): Promise<PageResult<SourceInfo>> {
+  return api.get('/source/paged', { params: { page, size } })
 }
 
 export function countSources(): Promise<{ count: number }> {

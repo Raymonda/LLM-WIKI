@@ -2,14 +2,14 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter, useRoute } from 'vue-router'
-import { uploadSource, listSources, deprecateSource, undeprecateSource, type SourceInfo, type DuplicateInfo } from '@/api/source'
+import { uploadSource, listSourcesPaged, deprecateSource, undeprecateSource, type SourceInfo, type DuplicateInfo } from '@/api/source'
 import { useAuthStore } from '@/stores/auth'
 import {
   Upload, FileText, CheckCircle, ChevronRight,
   Loader2, AlertTriangle, Archive, ArchiveRestore, ArrowRight, Sparkles,
   Search, FilePlus, FileEdit, XCircle, RotateCcw, AlertCircle, X,
   PauseCircle, PlayCircle, ChevronDown, GitBranch, ClipboardCheck,
-  Layers
+  Layers, ChevronLeft
 } from 'lucide-vue-next'
 import IngestProgressBar from './components/IngestProgressBar.vue'
 import IngestStageNav, { type StageItem } from './components/IngestStageNav.vue'
@@ -36,6 +36,10 @@ const uploadError = ref('')
 const isUploading = ref(false)
 const existingSources = ref<SourceInfo[]>([])
 const loadingSources = ref(false)
+const sourcesPage = ref(1)
+const sourcesTotalPages = ref(0)
+
+const SOURCES_PAGE_SIZE = 20
 const duplicateWarning = ref<DuplicateInfo | null>(null)
 const batchPendingSources = ref<Array<{ id: number; name: string; size: number; format: string }>>([])
 const batchUploadFailures = ref<string[]>([])
@@ -250,6 +254,7 @@ async function handleFileUpload(event: Event) {
     } else if (uploaded.length > 0) {
       batchPendingSources.value = uploaded
     }
+    sourcesPage.value = 1
     await loadExistingSources()
   } finally {
     isUploading.value = false
@@ -260,12 +265,20 @@ async function handleFileUpload(event: Event) {
 async function loadExistingSources() {
   loadingSources.value = true
   try {
-    existingSources.value = await listSources()
+    const result = await listSourcesPaged(sourcesPage.value, SOURCES_PAGE_SIZE)
+    existingSources.value = result.items
+    sourcesTotalPages.value = result.totalPages
   } catch (e) {
     console.error('Failed to load sources:', e)
   } finally {
     loadingSources.value = false
   }
+}
+
+function goToSourcesPage(page: number) {
+  if (page < 1 || (sourcesTotalPages.value > 0 && page > sourcesTotalPages.value)) return
+  sourcesPage.value = page
+  loadExistingSources()
 }
 
 const DEPRECATE_CATEGORIES = ['OUTDATED', 'SUPERSEDED', 'ERRONEOUS', 'OTHER']
@@ -763,6 +776,23 @@ onMounted(async () => {
                 <ArchiveRestore :size="14" />
               </button>
             </div>
+          </div>
+          <div v-if="sourcesTotalPages > 1" class="ingest-view__pagination">
+            <button
+              class="ingest-view__page-btn"
+              :disabled="sourcesPage <= 1"
+              @click="goToSourcesPage(sourcesPage - 1)"
+            >
+              <ChevronLeft :size="14" />
+            </button>
+            <span class="ingest-view__page-info">{{ sourcesPage }} / {{ sourcesTotalPages }}</span>
+            <button
+              class="ingest-view__page-btn"
+              :disabled="sourcesPage >= sourcesTotalPages"
+              @click="goToSourcesPage(sourcesPage + 1)"
+            >
+              <ChevronRight :size="14" />
+            </button>
           </div>
         </div>
 
@@ -1782,6 +1812,44 @@ onMounted(async () => {
 .ingest-view__existing-action:hover {
   color: var(--accent-primary);
   background: var(--bg-tertiary);
+}
+
+.ingest-view__pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ingest-view__page-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.ingest-view__page-btn:hover:not(:disabled) {
+  background: var(--accent-light);
+}
+
+.ingest-view__page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ingest-view__page-info {
+  font-size: var(--font-caption);
+  color: var(--text-secondary);
 }
 
 .ingest-view__deprecate-dialog {

@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import WikiPageRenderer from '@/components/wiki/WikiPageRenderer.vue'
 import { listCategories, recentPages, getRecommended, getPromotionStats, getContributors, listPages, mergePages, type WikiPageInfo, type PromotionStats, type ContributorInfo } from '@/api/wiki'
-import { listSources, getSourceContent, getSourcePreviewUrl, getSourceDownloadUrl, type SourceInfo, type SourceContentInfo } from '@/api/source'
+import { listSourcesPaged, getSourceContent, getSourcePreviewUrl, getSourceDownloadUrl, type SourceInfo, type SourceContentInfo } from '@/api/source'
 import { getActivityFeed, type ActivityItem } from '@/api/activity'
 import { useAuthStore } from '@/stores/auth'
 import { useTaskProgressStore } from '@/stores/taskProgress'
@@ -256,7 +256,7 @@ onMounted(async () => {
         }
       }
     }
-    sources.value = await listSources()
+    sources.value = (await listSourcesPaged(1, 5)).items
     recommendedPages.value = await getRecommended()
     if (authStore.currentScopeType() === 'personal') {
       promotionStats.value = await getPromotionStats()
@@ -416,7 +416,7 @@ function closePreview() {
             {{ t('wiki.recentSources') }}
           </h3>
           <div class="wiki-home__source-list">
-            <div v-for="source in sources.slice(0, 5)" :key="source.id" class="wiki-home__source-item">
+            <div v-for="source in sources" :key="source.id" class="wiki-home__source-item">
               <div class="wiki-home__source-row">
                 <FileText :size="15" class="wiki-home__source-icon" />
                 <span class="wiki-home__source-name" :title="source.name">{{ source.name }}</span>
