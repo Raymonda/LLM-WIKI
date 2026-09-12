@@ -165,13 +165,17 @@ public class HarnessController {
 
     @PostMapping("/executions/{stepId}/approve")
     public Result<Void> approveStep(@PathVariable Long stepId) {
-        approvalService.approveStep(stepId, null);
+        Long scopeId = jwtTokenProvider.getCurrentScopeId();
+        Long userId = jwtTokenProvider.getCurrentUserId();
+        approvalService.approveStep(stepId, userId, scopeId);
         return Result.success();
     }
 
     @PostMapping("/executions/{stepId}/reject")
     public Result<Void> rejectStep(@PathVariable Long stepId) {
-        approvalService.rejectStep(stepId, null);
+        Long scopeId = jwtTokenProvider.getCurrentScopeId();
+        Long userId = jwtTokenProvider.getCurrentUserId();
+        approvalService.rejectStep(stepId, userId, scopeId);
         return Result.success();
     }
 
@@ -554,7 +558,8 @@ public class HarnessController {
 
     @GetMapping("/schema/patches/{id}/diff")
     public Result<SchemaPatchModel> getPatchDiff(@PathVariable Long id) {
-        return Result.success(schemaPatchService.loadPatchDiff(id));
+        Long scopeId = jwtTokenProvider.getCurrentScopeId();
+        return Result.success(schemaPatchService.loadPatchDiff(id, scopeId));
     }
 
     @GetMapping("/schema/patches/count")
@@ -616,55 +621,62 @@ public class HarnessController {
 
     @PostMapping("/schema/patches/{id}/accept")
     public Result<SchemaPatchModel> acceptPatch(@PathVariable Long id) {
+        Long scopeId = jwtTokenProvider.getCurrentScopeId();
         Long userId = jwtTokenProvider.getCurrentUserId();
-        return Result.success(schemaPatchService.accept(id, userId));
+        return Result.success(schemaPatchService.accept(id, scopeId, userId));
     }
 
     @PostMapping("/schema/patches/{id}/reject")
     public Result<SchemaPatchModel> rejectPatch(@PathVariable Long id) {
+        Long scopeId = jwtTokenProvider.getCurrentScopeId();
         Long userId = jwtTokenProvider.getCurrentUserId();
-        return Result.success(schemaPatchService.reject(id, userId));
+        return Result.success(schemaPatchService.reject(id, scopeId, userId));
     }
 
     @PostMapping("/schema/patches/{id}/ignore")
     public Result<SchemaPatchModel> ignorePatch(@PathVariable Long id) {
+        Long scopeId = jwtTokenProvider.getCurrentScopeId();
         Long userId = jwtTokenProvider.getCurrentUserId();
-        return Result.success(schemaPatchService.ignore(id, userId));
+        return Result.success(schemaPatchService.ignore(id, scopeId, userId));
     }
 
     @PostMapping("/schema/patches/{id}/promote")
     public Result<SchemaPatchModel> promotePatch(@PathVariable Long id) {
+        Long scopeId = jwtTokenProvider.getCurrentScopeId();
         Long userId = jwtTokenProvider.getCurrentUserId();
-        return Result.success(schemaPatchService.promoteObserving(id, userId));
+        return Result.success(schemaPatchService.promoteObserving(id, scopeId, userId));
     }
 
     @PostMapping("/schema/patches/batch/accept")
     public Result<Map<String, Object>> batchAcceptPatches(@RequestBody Map<String, Object> body) {
+        Long scopeId = jwtTokenProvider.getCurrentScopeId();
         Long userId = jwtTokenProvider.getCurrentUserId();
         @SuppressWarnings("unchecked")
         List<Long> ids = ((List<Number>) body.get("ids")).stream()
             .map(Number::longValue).toList();
-        SchemaPatchService.BatchResult r = schemaPatchService.batchAccept(ids, userId);
+        SchemaPatchService.BatchResult r = schemaPatchService.batchAccept(ids, scopeId, userId);
         return Result.success(Map.of("processed", r.processed(), "failed", r.failed()));
     }
 
     @PostMapping("/schema/patches/batch/reject")
     public Result<Map<String, Object>> batchRejectPatches(@RequestBody Map<String, Object> body) {
+        Long scopeId = jwtTokenProvider.getCurrentScopeId();
         Long userId = jwtTokenProvider.getCurrentUserId();
         @SuppressWarnings("unchecked")
         List<Long> ids = ((List<Number>) body.get("ids")).stream()
             .map(Number::longValue).toList();
-        SchemaPatchService.BatchResult r = schemaPatchService.batchReject(ids, userId);
+        SchemaPatchService.BatchResult r = schemaPatchService.batchReject(ids, scopeId, userId);
         return Result.success(Map.of("processed", r.processed(), "failed", r.failed()));
     }
 
     @PostMapping("/schema/patches/batch/ignore")
     public Result<Map<String, Object>> batchIgnorePatches(@RequestBody Map<String, Object> body) {
+        Long scopeId = jwtTokenProvider.getCurrentScopeId();
         Long userId = jwtTokenProvider.getCurrentUserId();
         @SuppressWarnings("unchecked")
         List<Long> ids = ((List<Number>) body.get("ids")).stream()
             .map(Number::longValue).toList();
-        SchemaPatchService.BatchResult r = schemaPatchService.batchIgnore(ids, userId);
+        SchemaPatchService.BatchResult r = schemaPatchService.batchIgnore(ids, scopeId, userId);
         return Result.success(Map.of("processed", r.processed(), "failed", r.failed()));
     }
 

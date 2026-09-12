@@ -77,6 +77,7 @@ export default {
   gkApprove: 'AI review passed',
   gkObserve: 'AI suggests observing',
   gkReject: 'AI review rejected',
+  gkSkip: 'Review inconclusive',
   gkReason: 'Review basis: ',
   // Evidence & diff
   viewEvidence: 'View evidence ({0} items)',

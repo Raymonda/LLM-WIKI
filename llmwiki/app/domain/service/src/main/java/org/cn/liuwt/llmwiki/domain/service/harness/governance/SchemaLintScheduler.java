@@ -211,6 +211,21 @@ public class SchemaLintScheduler {
             processedIds.add(p.getId());
         }
 
+        // 条件 E:兜底老化——任何 OBSERVING 补丁停留 >= EXPIRE_DAYS 天仍未达提升条件(覆盖 evi=2 /
+        // 置信度处于 [EXPIRE_CONF, AGING_CONF) 中间带等此前无规则命中的缝隙),一律归档
+        int expiredByFallback = 0;
+        for (SchemaPatchDO p : observing) {
+            if (processedIds.contains(p.getId())) continue;
+            if (p.getCreatedAt() == null) continue;
+            long days = Duration.between(p.getCreatedAt(), now).toDays();
+            if (days < EXPIRE_DAYS) continue;
+            String reason = String.format("观察满%d天仍未达提升条件(置信度%s,证据%d条),兜底归档",
+                days, p.getConfidence(), countEvidence(p));
+            schemaPatchService.expirePatch(p, reason);
+            expiredByFallback++;
+            processedIds.add(p.getId());
+        }
+
         // 健康日志:堆积数、老化超 30 天未处置数
         int remaining = observing.size() - processedIds.size();
         int ageingOver30 = 0;
@@ -221,9 +236,9 @@ public class SchemaLintScheduler {
             if (days >= WARN_AGING_DAYS) ageingOver30++;
         }
             
-        log.info("====== SchemaLint 调度完成 scope={} 观察总数={} 提升(聚合/老化)={}/{} 过期归档(低置信/超时)={}/{} 剩余观察={} 超30天未处置={} ======",
+        log.info("====== SchemaLint 调度完成 scope={} 观察总数={} 提升(聚合/老化)={}/{} 过期归档(低置信/超时/兜底)={}/{}/{} 剩余观察={} 超30天未处置={} ======",
             scopeId, observing.size(), promotedByCluster, promotedByAging, 
-            expiredCount, expiredByMaxWindow, remaining, ageingOver30);
+            expiredCount, expiredByMaxWindow, expiredByFallback, remaining, ageingOver30);
             
         if (ageingOver30 > 0) {
             log.warn("SchemaLint scope={} 存在 {} 条 OBSERVING 补丁停留超过 {} 天未处置,建议人工审查",

@@ -1,6 +1,7 @@
 package org.cn.liuwt.llmwiki.domain.service.harness.governance;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SchemaConfigDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SchemaPatchDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.SchemaPatchMapper;
@@ -16,7 +17,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -40,6 +43,7 @@ public class SchemaPatchService {
     private static final Logger log = LoggerFactory.getLogger(SchemaPatchService.class);
 
     private static final Pattern SECTION_NUMBER_PATTERN = Pattern.compile("^##\\s*(\\d+)");
+    private static final Pattern SECTION7_HEADING_PATTERN = Pattern.compile("^##\\s*7[.、\\s]");
     private static final Pattern LABEL_FROM_DIFF = Pattern.compile("^[-*+]\\s+(.+?)[：:——]|^###\\s+(.+)|^\\d+[.、]\\s*(.+?)[（(]");
 
     @Autowired
@@ -77,11 +81,18 @@ public class SchemaPatchService {
         return out;
     }
 
-    public SchemaPatchModel loadPatchDiff(Long patchId) {
+    public SchemaPatchModel loadPatchDiff(Long patchId, Long scopeId) {
+        return toModel(loadPatch(patchId, scopeId));
+    }
+
+    private SchemaPatchDO loadPatch(Long patchId, Long scopeId) {
         if (patchId == null) throw new BusinessException(ErrorCode.PATCH_ID_NULL);
         SchemaPatchDO patch = schemaPatchMapper.selectById(patchId);
         if (patch == null) throw new BusinessException(ErrorCode.PATCH_NOT_FOUND, patchId);
-        return toModel(patch);
+        if (scopeId == null || !scopeId.equals(patch.getScopeId())) {
+            throw new BusinessException(ErrorCode.PATCH_SCOPE_MISMATCH, patchId);
+        }
+        return patch;
     }
 
     public int countPending(Long scopeId) {
@@ -94,8 +105,10 @@ public class SchemaPatchService {
         return n == null ? 0 : n.intValue();
     }
 
-    public SchemaPatchModel accept(Long patchId, Long userId) {
-        SchemaPatchDO patch = loadPending(patchId);
+    @Transactional(rollbackFor = Exception.class)
+    public SchemaPatchModel accept(Long patchId, Long scopeId, Long userId) {
+        SchemaPatchDO patch = loadPending(patchId, scopeId);
+        String originalStatus = patch.getStatus();
         SchemaConfigDO schema = schemaManager.getSchema(patch.getScopeId(), SchemaSkeletonValidator.WIKI_SCHEMA_KEY);
         if (schema == null || schema.getConfigValue() == null || schema.getConfigValue().isBlank()) {
             throw new BusinessException(ErrorCode.PATCH_SCHEMA_NOT_READY);
@@ -106,7 +119,8 @@ public class SchemaPatchService {
 
         if (structuredModel != null && sectionNumber >= 1 && sectionNumber <= 5) {
             applyPatchToJson(structuredModel, patch, sectionNumber);
-            String renderedMarkdown = schemaMarkdownRenderer.render(structuredModel);
+            String changelog = appendChangelogEntry(schema.getConfigValue(), patch);
+            String renderedMarkdown = schemaMarkdownRenderer.render(structuredModel, changelog);
             String json = schemaStructuredParser.toJson(structuredModel);
             schemaManager.saveSchema(
                 patch.getScopeId(),
@@ -122,7 +136,7 @@ public class SchemaPatchService {
             log.info("Schema 补丁已通过结构化路径应用 patchId={} scope={} section={}",
                 patchId, patch.getScopeId(), patch.getSectionTitle());
         } else {
-            String next = applyPatch(schema.getConfigValue(), patch);
+            String next = appendChangelogEntry(applyPatch(schema.getConfigValue(), patch), patch);
             schemaManager.saveSchema(
                 patch.getScopeId(),
                 SchemaSkeletonValidator.WIKI_SCHEMA_KEY,
@@ -138,11 +152,15 @@ public class SchemaPatchService {
         }
 
         Long newVersionId = schemaManager.getCurrentVersionId(patch.getScopeId(), SchemaSkeletonValidator.WIKI_SCHEMA_KEY);
+        LocalDateTime decidedAt = LocalDateTime.now();
+        if (!casTransition(patch.getId(), patch.getScopeId(), originalStatus,
+                SchemaPatchModel.Status.ACCEPTED.name(), userId, decidedAt, newVersionId, null)) {
+            throw new BusinessException(ErrorCode.PATCH_NOT_PENDING, "concurrent modification, expected " + originalStatus);
+        }
         patch.setStatus(SchemaPatchModel.Status.ACCEPTED.name());
         patch.setDecidedBy(userId);
-        patch.setDecidedAt(LocalDateTime.now());
+        patch.setDecidedAt(decidedAt);
         patch.setAppliedSchemaId(newVersionId);
-        schemaPatchMapper.updateById(patch);
         logGatekeeperOutcome(patch, SchemaPatchModel.Status.ACCEPTED);
 
         supersedeConflictingObserving(patch);
@@ -152,24 +170,31 @@ public class SchemaPatchService {
         return toModel(patch);
     }
 
-    public SchemaPatchModel reject(Long patchId, Long userId) {
-        return markDecided(patchId, userId, SchemaPatchModel.Status.REJECTED);
+    @Transactional(rollbackFor = Exception.class)
+    public SchemaPatchModel reject(Long patchId, Long scopeId, Long userId) {
+        return markDecided(patchId, scopeId, userId, SchemaPatchModel.Status.REJECTED);
     }
 
-    public SchemaPatchModel ignore(Long patchId, Long userId) {
-        return markDecided(patchId, userId, SchemaPatchModel.Status.IGNORED);
+    @Transactional(rollbackFor = Exception.class)
+    public SchemaPatchModel ignore(Long patchId, Long scopeId, Long userId) {
+        return markDecided(patchId, scopeId, userId, SchemaPatchModel.Status.IGNORED);
     }
 
     public record BatchResult(int processed, int failed) {}
 
-    public BatchResult batchAccept(List<Long> patchIds, Long userId) {
+    @Transactional(rollbackFor = Exception.class)
+    public BatchResult batchAccept(List<Long> patchIds, Long scopeId, Long userId) {
         if (patchIds == null || patchIds.isEmpty()) return new BatchResult(0, 0);
+        if (scopeId == null) throw new BusinessException(ErrorCode.PATCH_SCOPE_MISMATCH, "unknown");
 
         List<SchemaPatchDO> patches = schemaPatchMapper.selectBatchIds(patchIds);
         List<SchemaPatchDO> valid = new ArrayList<>();
         int failed = 0;
         for (SchemaPatchDO p : patches) {
             if (p == null) { failed++; continue; }
+            if (!scopeId.equals(p.getScopeId())) {
+                throw new BusinessException(ErrorCode.PATCH_SCOPE_MISMATCH, p.getId());
+            }
             boolean open = SchemaPatchModel.Status.PENDING.name().equals(p.getStatus())
                 || SchemaPatchModel.Status.OBSERVING.name().equals(p.getStatus());
             if (!open) {
@@ -181,7 +206,6 @@ public class SchemaPatchService {
         }
         if (valid.isEmpty()) return new BatchResult(0, failed);
 
-        Long scopeId = valid.get(0).getScopeId();
         SchemaConfigDO schema = schemaManager.getSchema(scopeId, SchemaSkeletonValidator.WIKI_SCHEMA_KEY);
         if (schema == null || schema.getConfigValue() == null || schema.getConfigValue().isBlank()) {
             throw new BusinessException(ErrorCode.PATCH_SCHEMA_NOT_READY);
@@ -211,14 +235,16 @@ public class SchemaPatchService {
         Long newVersionId = null;
         try {
             if (usedStructured) {
-                String renderedMarkdown = schemaMarkdownRenderer.render(structuredModel);
+                String changelog = appendBatchChangelogEntry(schema.getConfigValue(), applied);
+                String renderedMarkdown = schemaMarkdownRenderer.render(structuredModel, changelog);
                 String json = schemaStructuredParser.toJson(structuredModel);
                 schemaManager.saveSchema(scopeId, SchemaSkeletonValidator.WIKI_SCHEMA_KEY,
                     renderedMarkdown, json, schema.getConfigGroup(), schema.getDescription(),
                     SchemaManager.SOURCE_PATCH, applied.get(0).getId(), userId);
             } else {
+                String textWithChangelog = appendBatchChangelogEntry(textSchema, applied);
                 schemaManager.saveSchema(scopeId, SchemaSkeletonValidator.WIKI_SCHEMA_KEY,
-                    textSchema, schema.getConfigGroup(), schema.getDescription(),
+                    textWithChangelog, schema.getConfigGroup(), schema.getDescription(),
                     SchemaManager.SOURCE_PATCH, applied.get(0).getId(), userId);
             }
             newVersionId = schemaManager.getCurrentVersionId(scopeId, SchemaSkeletonValidator.WIKI_SCHEMA_KEY);
@@ -231,11 +257,16 @@ public class SchemaPatchService {
         int processed = 0;
         for (SchemaPatchDO patch : applied) {
             try {
+                if (!casTransition(patch.getId(), patch.getScopeId(), patch.getStatus(),
+                        SchemaPatchModel.Status.ACCEPTED.name(), userId, now, newVersionId, null)) {
+                    log.warn("批量采纳并发冲突，补丁状态已变更 patchId={}", patch.getId());
+                    failed++;
+                    continue;
+                }
                 patch.setStatus(SchemaPatchModel.Status.ACCEPTED.name());
                 patch.setDecidedBy(userId);
                 patch.setDecidedAt(now);
                 patch.setAppliedSchemaId(newVersionId);
-                schemaPatchMapper.updateById(patch);
                 logGatekeeperOutcome(patch, SchemaPatchModel.Status.ACCEPTED);
                 processed++;
             } catch (Exception e) {
@@ -244,13 +275,11 @@ public class SchemaPatchService {
             }
         }
 
-        Set<String> affectedSections = new LinkedHashSet<>();
-        for (SchemaPatchDO p : applied) affectedSections.add(p.getSectionTitle());
-        for (String section : affectedSections) {
+        for (SchemaPatchDO p : applied) {
             try {
-                supersedeConflictingObservingBySection(scopeId, section, applied.get(0).getId());
+                supersedeConflictingObserving(p);
             } catch (Exception e) {
-                log.warn("批量采纳 supersede 失败 section={}: {}", section, e.getMessage());
+                log.warn("批量采纳 supersede 失败 patchId={}: {}", p.getId(), e.getMessage());
             }
         }
 
@@ -259,22 +288,28 @@ public class SchemaPatchService {
         return new BatchResult(processed, failed);
     }
 
-    public BatchResult batchReject(List<Long> patchIds, Long userId) {
-        return batchMarkDecided(patchIds, userId, SchemaPatchModel.Status.REJECTED);
+    @Transactional(rollbackFor = Exception.class)
+    public BatchResult batchReject(List<Long> patchIds, Long scopeId, Long userId) {
+        return batchMarkDecided(patchIds, scopeId, userId, SchemaPatchModel.Status.REJECTED);
     }
 
-    public BatchResult batchIgnore(List<Long> patchIds, Long userId) {
-        return batchMarkDecided(patchIds, userId, SchemaPatchModel.Status.IGNORED);
+    @Transactional(rollbackFor = Exception.class)
+    public BatchResult batchIgnore(List<Long> patchIds, Long scopeId, Long userId) {
+        return batchMarkDecided(patchIds, scopeId, userId, SchemaPatchModel.Status.IGNORED);
     }
 
-    private BatchResult batchMarkDecided(List<Long> patchIds, Long userId, SchemaPatchModel.Status status) {
+    private BatchResult batchMarkDecided(List<Long> patchIds, Long scopeId, Long userId, SchemaPatchModel.Status status) {
         if (patchIds == null || patchIds.isEmpty()) return new BatchResult(0, 0);
+        if (scopeId == null) throw new BusinessException(ErrorCode.PATCH_SCOPE_MISMATCH, "unknown");
 
         List<SchemaPatchDO> patches = schemaPatchMapper.selectBatchIds(patchIds);
         LocalDateTime now = LocalDateTime.now();
         int processed = 0, failed = 0;
         for (SchemaPatchDO patch : patches) {
             if (patch == null) { failed++; continue; }
+            if (!scopeId.equals(patch.getScopeId())) {
+                throw new BusinessException(ErrorCode.PATCH_SCOPE_MISMATCH, patch.getId());
+            }
             boolean open = SchemaPatchModel.Status.PENDING.name().equals(patch.getStatus())
                 || SchemaPatchModel.Status.OBSERVING.name().equals(patch.getStatus());
             if (!open) {
@@ -283,10 +318,15 @@ public class SchemaPatchService {
                 continue;
             }
             try {
+                if (!casTransition(patch.getId(), patch.getScopeId(), patch.getStatus(),
+                        status.name(), userId, now, null, null)) {
+                    log.warn("批量{}并发冲突，补丁状态已变更 patchId={}", status, patch.getId());
+                    failed++;
+                    continue;
+                }
                 patch.setStatus(status.name());
                 patch.setDecidedBy(userId);
                 patch.setDecidedAt(now);
-                schemaPatchMapper.updateById(patch);
                 logGatekeeperOutcome(patch, status);
                 processed++;
             } catch (Exception e) {
@@ -298,63 +338,61 @@ public class SchemaPatchService {
         return new BatchResult(processed, failed);
     }
 
-    private void supersedeConflictingObservingBySection(Long scopeId, String sectionTitle, Long acceptedPatchId) {
-        List<SchemaPatchDO> observing = schemaPatchMapper.selectList(
-            new LambdaQueryWrapper<SchemaPatchDO>()
-                .eq(SchemaPatchDO::getScopeId, scopeId)
-                .eq(SchemaPatchDO::getStatus, SchemaPatchModel.Status.OBSERVING.name())
-                .eq(SchemaPatchDO::getSectionTitle, sectionTitle)
-        );
-        if (observing.isEmpty()) return;
-        LocalDateTime now = LocalDateTime.now();
-        for (SchemaPatchDO p : observing) {
-            p.setStatus(SchemaPatchModel.Status.SUPERSEDED.name());
-            p.setDecidedAt(now);
-            String tag = "[AutoSupersede] 用户已采纳同section补丁#" + acceptedPatchId;
-            String merged = p.getRationale();
-            p.setRationale(merged == null || merged.isBlank() ? tag : tag + "\n" + merged);
-            schemaPatchMapper.updateById(p);
-        }
-        log.info("批量采纳后自动SUPERSEDED {} 条同section观察期补丁 scope={} section={}",
-            observing.size(), scopeId, sectionTitle);
-    }
-
-    public SchemaPatchModel promoteObserving(Long patchId, Long userId) {
-        if (patchId == null) throw new BusinessException(ErrorCode.PATCH_ID_NULL);
-        SchemaPatchDO patch = schemaPatchMapper.selectById(patchId);
-        if (patch == null) throw new BusinessException(ErrorCode.PATCH_NOT_FOUND, patchId);
+    @Transactional(rollbackFor = Exception.class)
+    public SchemaPatchModel promoteObserving(Long patchId, Long scopeId, Long userId) {
+        SchemaPatchDO patch = loadPatch(patchId, scopeId);
         if (!SchemaPatchModel.Status.OBSERVING.name().equals(patch.getStatus())) {
             throw new BusinessException(ErrorCode.PATCH_NOT_OBSERVING, patch.getStatus());
         }
         String tag = "[UserPromote] 用户手动提升至待审批";
         String merged = patch.getRationale();
-        patch.setRationale(merged == null || merged.isBlank() ? tag : tag + "\n" + merged);
+        merged = (merged == null || merged.isBlank()) ? tag : tag + "\n" + merged;
+        if (!casTransition(patch.getId(), patch.getScopeId(), SchemaPatchModel.Status.OBSERVING.name(),
+                SchemaPatchModel.Status.PENDING.name(), null, null, null, merged)) {
+            throw new BusinessException(ErrorCode.PATCH_NOT_OBSERVING, "concurrent modification");
+        }
+        patch.setRationale(merged);
         patch.setStatus(SchemaPatchModel.Status.PENDING.name());
-        schemaPatchMapper.updateById(patch);
         log.info("用户手动提升观察期补丁 patchId={} scope={} user={}", patchId, patch.getScopeId(), userId);
         return toModel(patch);
     }
 
-    private SchemaPatchModel markDecided(Long patchId, Long userId, SchemaPatchModel.Status status) {
-        SchemaPatchDO patch = loadPending(patchId);
+    private SchemaPatchModel markDecided(Long patchId, Long scopeId, Long userId, SchemaPatchModel.Status status) {
+        SchemaPatchDO patch = loadPending(patchId, scopeId);
+        LocalDateTime decidedAt = LocalDateTime.now();
+        if (!casTransition(patch.getId(), patch.getScopeId(), patch.getStatus(),
+                status.name(), userId, decidedAt, null, null)) {
+            throw new BusinessException(ErrorCode.PATCH_NOT_PENDING, patch.getStatus());
+        }
         patch.setStatus(status.name());
         patch.setDecidedBy(userId);
-        patch.setDecidedAt(LocalDateTime.now());
-        schemaPatchMapper.updateById(patch);
+        patch.setDecidedAt(decidedAt);
         logGatekeeperOutcome(patch, status);
         return toModel(patch);
     }
 
-    private SchemaPatchDO loadPending(Long patchId) {
-        if (patchId == null) throw new BusinessException(ErrorCode.PATCH_ID_NULL);
-        SchemaPatchDO patch = schemaPatchMapper.selectById(patchId);
-        if (patch == null) throw new BusinessException(ErrorCode.PATCH_NOT_FOUND, patchId);
+    private SchemaPatchDO loadPending(Long patchId, Long scopeId) {
+        SchemaPatchDO patch = loadPatch(patchId, scopeId);
         boolean open = SchemaPatchModel.Status.PENDING.name().equals(patch.getStatus())
             || SchemaPatchModel.Status.OBSERVING.name().equals(patch.getStatus());
         if (!open) {
             throw new BusinessException(ErrorCode.PATCH_NOT_PENDING, patch.getStatus());
         }
         return patch;
+    }
+
+    private boolean casTransition(Long patchId, Long scopeId, String expectedStatus, String newStatus,
+                                  Long userId, LocalDateTime decidedAt, Long appliedSchemaId, String rationale) {
+        LambdaUpdateWrapper<SchemaPatchDO> update = new LambdaUpdateWrapper<SchemaPatchDO>()
+            .eq(SchemaPatchDO::getId, patchId)
+            .eq(SchemaPatchDO::getScopeId, scopeId)
+            .eq(SchemaPatchDO::getStatus, expectedStatus)
+            .set(SchemaPatchDO::getStatus, newStatus);
+        if (userId != null) update.set(SchemaPatchDO::getDecidedBy, userId);
+        if (decidedAt != null) update.set(SchemaPatchDO::getDecidedAt, decidedAt);
+        if (appliedSchemaId != null) update.set(SchemaPatchDO::getAppliedSchemaId, appliedSchemaId);
+        if (rationale != null) update.set(SchemaPatchDO::getRationale, rationale);
+        return schemaPatchMapper.update(null, update) == 1;
     }
 
     /**
@@ -409,7 +447,7 @@ public class SchemaPatchService {
                 if (!body.contains(patch.getDiffBefore())) {
                     throw new BusinessException(ErrorCode.PATCH_CONFLICT, "diffBefore not found in current Schema");
                 }
-                newBody = body.replace(patch.getDiffBefore(), patch.getDiffAfter());
+                newBody = replaceSingle(body, patch.getDiffBefore(), patch.getDiffAfter(), "section body");
             }
             case DELETE -> {
                 if (patch.getDiffBefore() == null || patch.getDiffBefore().isBlank()) {
@@ -418,7 +456,7 @@ public class SchemaPatchService {
                 if (!body.contains(patch.getDiffBefore())) {
                     throw new BusinessException(ErrorCode.PATCH_CONFLICT, "diffBefore not found in current Schema");
                 }
-                newBody = body.replace(patch.getDiffBefore(), "");
+                newBody = replaceSingle(body, patch.getDiffBefore(), "", "section body");
             }
             default -> throw new BusinessException(ErrorCode.PATCH_OP_UNKNOWN, patch.getOperation());
         }
@@ -438,6 +476,7 @@ public class SchemaPatchService {
 
     private void applyPatchToJson(SchemaStructuredModel model, SchemaPatchDO patch, int sectionNumber) {
         SchemaPatchModel.Operation op = SchemaPatchModel.Operation.valueOf(patch.getOperation());
+        validatePatchFields(patch, op);
         switch (sectionNumber) {
             case 1 -> applySection1Patch(model, patch, op);
             case 2 -> applySection2Patch(model, patch, op);
@@ -449,6 +488,97 @@ public class SchemaPatchService {
         }
     }
 
+    /**
+     * 结构化路径统一字段校验：ADD 必须有 diffAfter；MODIFY 必须同时有 diffBefore/diffAfter；
+     * DELETE 必须有非空 diffBefore。杜绝空 diffBefore 使 contains 谓词恒真导致的误清空。
+     */
+    private void validatePatchFields(SchemaPatchDO patch, SchemaPatchModel.Operation op) {
+        switch (op) {
+            case ADD -> {
+                if (patch.getDiffAfter() == null || patch.getDiffAfter().isBlank()) {
+                    throw new BusinessException(ErrorCode.PATCH_DIFF_EMPTY_ADD);
+                }
+            }
+            case MODIFY -> {
+                if (patch.getDiffBefore() == null || patch.getDiffBefore().isBlank()) {
+                    throw new BusinessException(ErrorCode.PATCH_DIFF_EMPTY_MODIFY, "diffBefore is required");
+                }
+                if (patch.getDiffAfter() == null) {
+                    throw new BusinessException(ErrorCode.PATCH_DIFF_EMPTY_MODIFY, "diffAfter is required");
+                }
+            }
+            case DELETE -> {
+                if (patch.getDiffBefore() == null || patch.getDiffBefore().isBlank()) {
+                    throw new BusinessException(ErrorCode.PATCH_DIFF_EMPTY_DELETE);
+                }
+            }
+        }
+    }
+
+    /**
+     * 单次替换：diffBefore 在目标文本中必须唯一命中，避免 String.replace 全量替换
+     * 把多处相同片段一并改写/删除。命中 0 次或多处均抛 PATCH_CONFLICT。
+     */
+    private String replaceSingle(String text, String before, String after, String context) {
+        int idx = text.indexOf(before);
+        if (idx < 0) {
+            throw new BusinessException(ErrorCode.PATCH_CONFLICT, context + ": diffBefore not found");
+        }
+        if (text.indexOf(before, idx + 1) >= 0) {
+            throw new BusinessException(ErrorCode.PATCH_CONFLICT,
+                context + ": diffBefore 匹配多处,拒绝全量替换");
+        }
+        return text.substring(0, idx) + after + text.substring(idx + before.length());
+    }
+
+    /**
+     * section 7 变更日志为 append-only（宪法规则 5）：从当前 Schema Markdown 中提取
+     * section 7 的 body（不含标题），追加本次采纳条目后返回新 body，交由渲染器拼接。
+     * 绝不重写或删除历史条目。
+     */
+    private String appendChangelogEntry(String currentMarkdown, SchemaPatchDO patch) {
+        String body = extractSection7Body(currentMarkdown);
+        String entry = "- " + LocalDate.now() + " 用户采纳补丁#" + patch.getId() + "："
+            + (patch.getSectionTitle() == null ? "" : patch.getSectionTitle())
+            + " " + patch.getOperation();
+        return body.isBlank() ? entry : body + "\n" + entry;
+    }
+
+    private String appendBatchChangelogEntry(String currentMarkdown, List<SchemaPatchDO> applied) {
+        if (applied == null || applied.isEmpty()) return extractSection7Body(currentMarkdown);
+        String body = extractSection7Body(currentMarkdown);
+        List<String> sectionTitles = new ArrayList<>();
+        for (SchemaPatchDO p : applied) {
+            if (p.getSectionTitle() != null && !sectionTitles.contains(p.getSectionTitle())) {
+                sectionTitles.add(p.getSectionTitle());
+            }
+        }
+        String entry = "- " + LocalDate.now() + " 批量采纳补丁#" + applied.get(0).getId()
+            + " 等 " + applied.size() + " 条：" + String.join("、", sectionTitles);
+        return body.isBlank() ? entry : body + "\n" + entry;
+    }
+
+    private String extractSection7Body(String schemaMarkdown) {
+        if (schemaMarkdown == null || schemaMarkdown.isBlank()) return "";
+        String normalized = schemaMarkdown.replace("\r\n", "\n");
+        String[] lines = normalized.split("\n", -1);
+        int start = -1;
+        for (int i = 0; i < lines.length; i++) {
+            if (SECTION7_HEADING_PATTERN.matcher(lines[i].trim()).find()) {
+                start = i + 1;
+                break;
+            }
+        }
+        if (start < 0) return "";
+        StringBuilder body = new StringBuilder();
+        for (int i = start; i < lines.length; i++) {
+            if (lines[i].startsWith("## ")) break;
+            if (body.length() > 0) body.append('\n');
+            body.append(lines[i]);
+        }
+        return body.toString().replaceAll("\\s+$", "");
+    }
+
     private void applySection1Patch(SchemaStructuredModel model, SchemaPatchDO patch, SchemaPatchModel.Operation op) {
         switch (op) {
             case ADD -> {
@@ -457,24 +587,18 @@ public class SchemaPatchService {
                 model.setDomainNarrative(current.isEmpty() ? addition : current + "\n" + addition);
             }
             case MODIFY -> {
-                if (patch.getDiffBefore() == null || patch.getDiffAfter() == null) {
-                    throw new BusinessException(ErrorCode.PATCH_DIFF_EMPTY_MODIFY);
-                }
                 String current = model.getDomainNarrative() == null ? "" : model.getDomainNarrative();
                 if (!current.contains(patch.getDiffBefore())) {
                     throw new BusinessException(ErrorCode.PATCH_CONFLICT, "diffBefore not found in domain narrative");
                 }
-                model.setDomainNarrative(current.replace(patch.getDiffBefore(), patch.getDiffAfter()));
+                model.setDomainNarrative(replaceSingle(current, patch.getDiffBefore(), patch.getDiffAfter(), "domain narrative"));
             }
             case DELETE -> {
-                if (patch.getDiffBefore() == null || patch.getDiffBefore().isBlank()) {
-                    throw new BusinessException(ErrorCode.PATCH_DIFF_EMPTY_DELETE);
-                }
                 String current = model.getDomainNarrative() == null ? "" : model.getDomainNarrative();
                 if (!current.contains(patch.getDiffBefore())) {
                     throw new BusinessException(ErrorCode.PATCH_CONFLICT, "diffBefore not found in domain narrative");
                 }
-                model.setDomainNarrative(current.replace(patch.getDiffBefore(), "").stripTrailing());
+                model.setDomainNarrative(replaceSingle(current, patch.getDiffBefore(), "", "domain narrative").stripTrailing());
             }
         }
     }
@@ -654,8 +778,12 @@ public class SchemaPatchService {
                     workflow.setDefaultApproval("CONFIRM");
                 } else if (diffText.contains("AUTO")) {
                     workflow.setDefaultApproval("AUTO");
-                } else if (patch.getDiffBefore() != null && workflow.getNarrative() != null) {
-                    workflow.setNarrative(workflow.getNarrative().replace(patch.getDiffBefore(), diffText));
+                } else {
+                    String narrative = workflow.getNarrative() == null ? "" : workflow.getNarrative();
+                    if (!narrative.contains(patch.getDiffBefore())) {
+                        throw new BusinessException(ErrorCode.PATCH_CONFLICT, "diffBefore not found in workflow narrative");
+                    }
+                    workflow.setNarrative(replaceSingle(narrative, patch.getDiffBefore(), diffText, "workflow narrative"));
                 }
             }
             case DELETE -> {
@@ -898,6 +1026,11 @@ public class SchemaPatchService {
             patch.getId(), patch.getScopeId(), gk, userDecision.name(), outcome);
     }
 
+    /**
+     * 用户采纳补丁后，仅将**真正冲突**的观察期补丁标记为 SUPERSEDED（条目级收窄）：
+     * 同一 operation 且 diff 文本存在重叠。同 section 但改动不同区域（互补规则）的
+     * 观察期补丁保持 OBSERVING，不因同 section 被一刀切归档。
+     */
     private void supersedeConflictingObserving(SchemaPatchDO acceptedPatch) {
         List<SchemaPatchDO> observing = schemaPatchMapper.selectList(
             new LambdaQueryWrapper<SchemaPatchDO>()
@@ -909,16 +1042,42 @@ public class SchemaPatchService {
         LocalDateTime now = LocalDateTime.now();
         int count = 0;
         for (SchemaPatchDO p : observing) {
-            p.setStatus(SchemaPatchModel.Status.SUPERSEDED.name());
-            p.setDecidedAt(now);
-            String tag = "[AutoSupersede] 用户已采纳同section补丁#" + acceptedPatch.getId();
+            if (!conflictsWith(p, acceptedPatch)) continue;
+            String tag = "[AutoSupersede] 用户已采纳冲突补丁#" + acceptedPatch.getId();
             String merged = p.getRationale();
-            p.setRationale(merged == null || merged.isBlank() ? tag : tag + "\n" + merged);
-            schemaPatchMapper.updateById(p);
-            count++;
+            String newRationale = merged == null || merged.isBlank() ? tag : tag + "\n" + merged;
+            if (casTransition(p.getId(), p.getScopeId(), SchemaPatchModel.Status.OBSERVING.name(),
+                    SchemaPatchModel.Status.SUPERSEDED.name(), null, now, null, newRationale)) {
+                count++;
+            }
         }
-        log.info("接受补丁#{} 后自动SUPERSEDED {} 条同section观察期补丁 scope={} section={}",
+        log.info("接受补丁#{} 后自动 SUPERSEDED {} 条冲突观察期补丁 scope={} section={}",
             acceptedPatch.getId(), count, acceptedPatch.getScopeId(), acceptedPatch.getSectionTitle());
+    }
+
+    private boolean conflictsWith(SchemaPatchDO observing, SchemaPatchDO accepted) {
+        if (observing.getId() != null && observing.getId().equals(accepted.getId())) return false;
+        if (accepted.getOperation() == null || !accepted.getOperation().equals(observing.getOperation())) {
+            return false;
+        }
+        return textOverlaps(observing.getDiffAfter(), accepted.getDiffAfter())
+            || textOverlaps(observing.getDiffBefore(), accepted.getDiffBefore())
+            || textOverlaps(observing.getDiffAfter(), accepted.getDiffBefore())
+            || textOverlaps(observing.getDiffBefore(), accepted.getDiffAfter());
+    }
+
+    private boolean textOverlaps(String a, String b) {
+        if (a == null || b == null) return false;
+        String na = a.replaceAll("\\s+", " ").trim();
+        String nb = b.replaceAll("\\s+", " ").trim();
+        if (na.isEmpty() || nb.isEmpty()) return false;
+        if (na.contains(nb) || nb.contains(na)) return true;
+        String shorter = na.length() <= nb.length() ? na : nb;
+        String longer = na.length() <= nb.length() ? nb : na;
+        int window = Math.min(20, shorter.length());
+        if (window < 4) return false;
+        if (longer.contains(shorter.substring(0, window))) return true;
+        return longer.contains(shorter.substring(shorter.length() - window));
     }
 
     // ===== 宪法规则 7：SchemaLint 调度器相关支持方法 =====
@@ -966,6 +1125,9 @@ public class SchemaPatchService {
         if (superseded != null) {
             for (SchemaPatchDO s : superseded) {
                 if (s.getId().equals(representative.getId())) continue;
+                String sTag = "[AutoPromote] 聚合代表#" + representative.getId() + " 已提升,本条并入观察聚合";
+                String sMerged = s.getRationale();
+                s.setRationale(sMerged == null || sMerged.isBlank() ? sTag : sTag + "\n" + sMerged);
                 s.setStatus(SchemaPatchModel.Status.SUPERSEDED.name());
                 s.setDecidedAt(now);
                 schemaPatchMapper.updateById(s);

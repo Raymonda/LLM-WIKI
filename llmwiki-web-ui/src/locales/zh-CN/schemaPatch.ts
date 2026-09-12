@@ -77,6 +77,7 @@ export default {
   gkApprove: 'AI 审核通过',
   gkObserve: 'AI 建议观望',
   gkReject: 'AI 审核退回',
+  gkSkip: '审核未产出决定',
   gkReason: '审核依据：',
   // Evidence & diff
   viewEvidence: '查看依据（{0} 处）',

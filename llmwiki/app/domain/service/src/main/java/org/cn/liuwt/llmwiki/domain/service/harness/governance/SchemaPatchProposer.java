@@ -127,19 +127,28 @@ public class SchemaPatchProposer {
                 log.debug("Gatekeeper REJECT scope={} section={} reason={}", scopeId, p.getSectionTitle(), g.reason);
                 continue;
             }
-            // 共识规则：两轮都 PENDING/APPROVE 才 PENDING；否则降级 OBSERVING。
-            if (g != null) {
-                if ("OBSERVE".equals(g.decision)
-                    && SchemaPatchModel.Status.PENDING.name().equals(p.getStatus())) {
+            if (g == null) {
+                // fail-closed：守门审不可用或未产出该条决定时，禁止单轮直接入 PENDING，降级 OBSERVING 等待复核
+                if (SchemaPatchModel.Status.PENDING.name().equals(p.getStatus())) {
                     p.setStatus(SchemaPatchModel.Status.OBSERVING.name());
                 }
-                // 结构化持久化 Gatekeeper 决定，供 P2-i 回流准确率指标
-                p.setGatekeeperDecision(g.decision);
-                if (g.reason != null && !g.reason.isBlank()) {
-                    String trimmedReason = g.reason.trim();
-                    p.setGatekeeperReason(trimmedReason.length() > 200
-                        ? trimmedReason.substring(0, 200) : trimmedReason);
-                }
+                String skipTag = "[GatekeeperSkip] 守门审未产出决定，降级观察期";
+                String skipMerged = p.getRationale();
+                p.setRationale(skipMerged == null || skipMerged.isBlank() ? skipTag : skipTag + "\n" + skipMerged);
+                admitted.add(p);
+                continue;
+            }
+            // 共识规则：两轮都 PENDING/APPROVE 才 PENDING；否则降级 OBSERVING。
+            if ("OBSERVE".equals(g.decision)
+                && SchemaPatchModel.Status.PENDING.name().equals(p.getStatus())) {
+                p.setStatus(SchemaPatchModel.Status.OBSERVING.name());
+            }
+            // 结构化持久化 Gatekeeper 决定，供 P2-i 回流准确率指标
+            p.setGatekeeperDecision(g.decision);
+            if (g.reason != null && !g.reason.isBlank()) {
+                String trimmedReason = g.reason.trim();
+                p.setGatekeeperReason(trimmedReason.length() > 200
+                    ? trimmedReason.substring(0, 200) : trimmedReason);
             }
             admitted.add(p);
         }
