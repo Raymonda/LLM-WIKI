@@ -37,4 +37,5 @@ public class PipelineTaskMessage {
     private String content;
     private String category;
     private String contentHash;
+    private String payloadJson;
 }

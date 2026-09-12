@@ -110,6 +110,8 @@ export default {
   toastPromote: 'Suggestion promoted to pending approval',
   toastRulingExec: 'Ruling: {0}',
   toastRulingCancel: 'Ruling cancelled',
+  rulingSubmitted: 'Submitted for background execution',
+  viewTask: 'View task',
   toastLoadFail: 'Failed to load schema suggestions',
   toastApplyFail: 'Failed to apply suggestion',
   toastOpFail: 'Operation failed',

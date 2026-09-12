@@ -39,4 +39,9 @@ public class HarnessEngineStub implements HarnessEngine {
     public WikiPageDO executeSaveQueryResult(Long scopeId, String question, String answer, String sessionId) {
         throw new UnsupportedOperationException("HarnessEngine not implemented yet");
     }
+
+    @Override
+    public WikiPageDO executeSaveQueryResultWithExecution(Long executionId, Long scopeId, String question, String answer, String sessionId) {
+        throw new UnsupportedOperationException("HarnessEngine not implemented yet");
+    }
 }

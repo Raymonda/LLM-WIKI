@@ -40,6 +40,11 @@ function handleNotificationClick(notif: NotificationInfo) {
   if (notif.isRead === 0) {
     store.markNotificationRead(notif.id)
   }
+  if (notif.type === 'query_save' && notif.relatedPageId) {
+    router.push(`/wiki/${notif.relatedPageId}`)
+    store.closePanel()
+    return
+  }
   if (notif.batchId) {
     router.push({ path: '/ingest', query: { batch: String(notif.batchId) } })
     store.closePanel()

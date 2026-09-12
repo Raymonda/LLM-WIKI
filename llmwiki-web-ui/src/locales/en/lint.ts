@@ -226,6 +226,8 @@ export default {
   rulingDismiss: 'Dismiss',
   rulingKeepPage: 'Keep "{0}"',
   rulingCoexist: 'Coexist',
+  rulingSubmitted: 'Submitted for background execution',
+  viewTask: 'View task',
   rulingMerge: 'Merge',
   rulingApproveAll: 'Approve',
   rulingModify: 'Accept with modifications',

@@ -15,6 +15,7 @@ const props = defineProps<{
     totalTokens: number
   } | null
   startTime: number | null
+  executionId: number | null
 }>()
 
 const emit = defineEmits<{
@@ -138,6 +139,14 @@ const progressCountDisplay = computed(() => {
       <span :style="{ color: statusColor }" class="lint-trigger__result-label">{{ statusLabel }}</span>
       <span v-if="execution.totalTokens" class="lint-trigger__tokens">Token {{ execution.totalTokens }}</span>
     </div>
+
+    <router-link
+      v-if="executionId"
+      class="lint-trigger__task-link"
+      :to="`/harness/${executionId}`"
+    >
+      {{ t('harness.viewTaskDetail') }}
+    </router-link>
   </div>
 </template>
 
@@ -260,5 +269,16 @@ const progressCountDisplay = computed(() => {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+.lint-trigger__task-link {
+  font-size: var(--font-body-sm);
+  color: var(--accent-primary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.lint-trigger__task-link:hover {
+  text-decoration: underline;
 }
 </style>

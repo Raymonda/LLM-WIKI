@@ -1,5 +1,6 @@
 import api from './index'
 import { useAuthStore } from '@/stores/auth'
+import type { TaskReceiptInfo } from './harness'
 
 export interface WikiPageInfo {
   id: number
@@ -166,7 +167,7 @@ export function searchSuggest(prefix: string): Promise<WikiPageInfo[]> {
   return api.get('/wiki/search/suggest', { params: { prefix } })
 }
 
-export function rebuildSearchIndex(): Promise<string> {
+export function rebuildSearchIndex(): Promise<TaskReceiptInfo> {
   return api.post('/wiki/search/rebuild-index')
 }
 

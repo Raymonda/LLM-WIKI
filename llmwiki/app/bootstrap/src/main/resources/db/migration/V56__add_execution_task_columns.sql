@@ -1,0 +1,2 @@
+ALTER TABLE execution ADD COLUMN payload_json MEDIUMTEXT NULL;
+ALTER TABLE execution ADD COLUMN submitted_by BIGINT NULL;

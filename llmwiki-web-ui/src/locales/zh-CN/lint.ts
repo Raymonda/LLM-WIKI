@@ -226,6 +226,8 @@ export default {
   rulingDismiss: '暂不处理',
   rulingKeepPage: '保留「{0}」',
   rulingCoexist: '并存各自生长',
+  rulingSubmitted: '已提交后台执行',
+  viewTask: '查看任务',
   rulingMerge: '合并为一',
   rulingApproveAll: '一键审批',
   rulingModify: '接受但需调整',

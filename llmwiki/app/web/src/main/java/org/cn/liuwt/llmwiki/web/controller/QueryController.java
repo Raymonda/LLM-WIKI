@@ -1,6 +1,5 @@
 package org.cn.liuwt.llmwiki.web.controller;
 
-import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
 import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
 import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.common.util.result.Result;
@@ -8,7 +7,9 @@ import org.cn.liuwt.llmwiki.domain.service.harness.query.QuerySseProtocol;
 import org.cn.liuwt.llmwiki.domain.service.system.ScopeService;
 import org.cn.liuwt.llmwiki.domain.service.wiki.WikiFileServiceImpl;
 import org.cn.liuwt.llmwiki.facade.model.SaveAnswerRequest;
-import org.cn.liuwt.llmwiki.facade.model.WikiPageInfo;
+import org.cn.liuwt.llmwiki.facade.model.TaskReceiptInfo;
+import org.cn.liuwt.llmwiki.service.harness.task.BackgroundTaskService;
+import org.cn.liuwt.llmwiki.service.harness.task.TaskReceipt;
 import org.cn.liuwt.llmwiki.service.query.FunFactService;
 import org.cn.liuwt.llmwiki.service.query.QueryService;
 import org.cn.liuwt.llmwiki.web.security.JwtTokenProvider;
@@ -23,6 +24,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.util.List;
 import java.util.Map;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import reactor.core.publisher.Flux;
@@ -47,6 +49,9 @@ public class QueryController {
 
     @Autowired
     private ScopeService scopeService;
+
+    @Autowired
+    private BackgroundTaskService backgroundTaskService;
 
     @Value("${llmwiki.query.fact-block.enabled:true}")
     private boolean factBlockEnabled;
@@ -157,24 +162,22 @@ public class QueryController {
     }
 
     @PostMapping("/save")
-    public Result<WikiPageInfo> saveAnswer(@RequestBody SaveAnswerRequest request) {
+    public Result<TaskReceiptInfo> saveAnswer(@RequestBody SaveAnswerRequest request) {
         Long scopeId = jwtTokenProvider.getCurrentScopeId();
-        try {
-            WikiPageDO pageDO = queryService.saveAnswerToWiki(scopeId, request.getQuestion(), request.getAnswer(), request.getSessionId());
-            WikiPageInfo info = new WikiPageInfo();
-            info.setId(pageDO.getId());
-            info.setTitle(pageDO.getTitle());
-            info.setPath(pageDO.getFilePath());
-            info.setCategory(pageDO.getCategory());
-            info.setSummary(pageDO.getSummary());
-            info.setScopeId(pageDO.getScopeId());
-            info.setSourceCount(pageDO.getSourceCount());
-            info.setHealthStatus(pageDO.getHealthStatus());
-            return Result.success(info);
-        } catch (Exception e) {
-            log.error("Failed to save answer to wiki", e);
-            return Result.failed(ErrorCode.QUERY_SAVE_FAILED, e.getMessage());
+        Long userId = jwtTokenProvider.getCurrentUserId();
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("question", request.getQuestion());
+        payload.put("answer", request.getAnswer());
+        if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
+            payload.put("sessionId", request.getSessionId());
         }
+        payload.put("title", request.getQuestion());
+        TaskReceipt receipt = backgroundTaskService.submit(scopeId, userId, "query_save", payload);
+        TaskReceiptInfo info = new TaskReceiptInfo();
+        info.setExecutionId(receipt.executionId());
+        info.setTaskType(receipt.taskType());
+        info.setStatus(receipt.status());
+        return Result.success(info);
     }
 
     @PostMapping("/resolve-links")

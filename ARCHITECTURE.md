@@ -210,6 +210,35 @@ UPDATE_LINKS     建立与团队已有页面的交叉引用
 
 晋升由用户手动触发；用户可随时将页面标记为 private 退出共享，系统自动召回已晋升内容。
 
+### 6.5 任务提交门面与任务中心
+
+长操作（冲突裁决 / 问答保存 / 索引重建）不再同步占用 HTTP 线程，统一走"提交门面 + 后台任务"模式：
+
+```
+业务入口(Controller) ──► BackgroundTaskService.submit()   ← HTTP 线程只做校验 + 落库 + 投递
+   ├─ 校验：taskType 已注册 / payload 必备字段 / handler.validate（scope 归属红线，提交期必做）
+   ├─ 幂等：scopeId + taskType + 活跃状态(pending/running/paused) + idempotencyKey 查重
+   ├─ 创建 execution（pending，payload_json + submitted_by 落库）
+   └─ 投递：MQ 可用 → PipelineTaskMessage；否则本地线程池（提交即返回）
+         ↓ 返回 TaskReceipt { executionId, taskType, status }（P99 < 500ms）
+
+执行端（PipelineTaskConsumer 注册表分支 / 本地线程包装器）
+   → running(started_at) → handler.execute(TaskContext)
+   → 成功 completed + 通知 + SSE 事件；失败 failed + 错误摘要 + 通知（MQ 自动重投递，终态收敛为 failed）
+
+查询端（任务中心 /harness）
+   进行中区：active 任务 10s 轮询 + 展开卡片订阅 per-execution SSE 看步骤进度
+   历史区：分页列表 + 失败项重试（仅 failed 可重试；重投递前活跃查重）
+```
+
+关键设计：
+
+- **注册表分发**：新任务类型实现 `BackgroundTaskHandler`（taskType / idempotencyKey / validate / execute）并注入注册表，消费端按 taskType 分发；存量类型（ingest/lint/page_merge 等）继续走原路径，双轨边界清晰，二期渐进迁移
+- **受理回执模式**：提交方只拿回执，执行结果经任务中心 / SSE / 通知三面查看——消除"前端超时断开 ≠ 后端未执行"的假失败
+- **任务参数持久化**：`execution.payload_json` / `submitted_by`（Flyway V56，均可空）作为 retry 与消息重建的依据
+- **首批任务类型**：`conflict_ruling`（幂等键 `review:{id}`）/ `query_save`（允许并发，不查重）/ `index_rebuild`（scope 级互斥）
+- **边界**：无 MQ 时本地线程池语义一致但应用重启不恢复（MQ 模式由 RecoveryService 兜底）；handler 内 LLM 调用继续受 `LlmConcurrencyBarrier` 约束；步骤级断点续跑与存量路径迁移为二期范围
+
 ## 7. 知识矛盾检测与处置
 
 矛盾检测内建在三大流程中，目标是零人工阻断：

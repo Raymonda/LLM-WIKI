@@ -469,6 +469,14 @@ public class LintService {
         return executeReviewForFinding(findingId, reviewId, action, "用户从Lint体检页面裁决");
     }
 
+    public ConflictReviewDO resolveOrCreateReview(Long scopeId, Long findingId) {
+        LintFindingDO finding = lintFindingService.getFinding(findingId);
+        if (finding == null) {
+            throw new RuntimeException("Finding not found: id=" + findingId);
+        }
+        return conflictReviewService.getReview(resolveOrCreateReviewId(scopeId, finding));
+    }
+
     private Long resolveOrCreateReviewId(Long scopeId, LintFindingDO finding) {
         Map<String, Object> extra = parseExtraMap(finding.getExtra());
         WikiPageDO fromPage = resolveConflictPage(scopeId,

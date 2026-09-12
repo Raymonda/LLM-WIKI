@@ -86,6 +86,43 @@ public class ExecutionTrackerImpl implements ExecutionTracker {
     }
 
     @Override
+    public ExecutionModel createTaskExecution(String type, Long scopeId, String payloadJson, Long submittedBy) {
+        ExecutionDO executionDO = new ExecutionDO();
+        executionDO.setType(type);
+        executionDO.setStatus("pending");
+        executionDO.setScopeId(scopeId);
+        executionDO.setStartedAt(LocalDateTime.now());
+        executionDO.setTotalTokens(0);
+        executionDO.setTotalCost(java.math.BigDecimal.ZERO);
+        executionDO.setPayloadJson(payloadJson);
+        executionDO.setSubmittedBy(submittedBy);
+        executionMapper.insert(executionDO);
+        return toExecutionModel(executionDO);
+    }
+
+    @Override
+    public List<ExecutionModel> listActiveExecutions(Long scopeId, String type) {
+        List<ExecutionDO> executionDOs = executionMapper.selectList(
+            new LambdaQueryWrapper<ExecutionDO>()
+                .eq(ExecutionDO::getScopeId, scopeId)
+                .eq(ExecutionDO::getType, type)
+                .in(ExecutionDO::getStatus, List.of("pending", "running", "paused"))
+                .orderByDesc(ExecutionDO::getCreatedAt)
+        );
+        return executionDOs.stream()
+            .map(this::toExecutionModel)
+            .collect(Collectors.toList());
+    }
+
+    @Override
+    public void deleteSteps(Long executionId) {
+        executionStepMapper.delete(
+            new LambdaQueryWrapper<ExecutionStepDO>()
+                .eq(ExecutionStepDO::getExecutionId, executionId)
+        );
+    }
+
+    @Override
     public ExecutionStepModel createStep(Long executionId, String stepName, Integer stepOrder, String approvalLevel) {
         ExecutionStepDO stepDO = new ExecutionStepDO();
         stepDO.setExecutionId(executionId);
@@ -255,17 +292,19 @@ public class ExecutionTrackerImpl implements ExecutionTracker {
     }
 
     @Override
-    public IPage<ExecutionModel> listExecutionsPaged(Long scopeId, String type, int page, int size) {
+    public IPage<ExecutionModel> listExecutionsPaged(Long scopeId, String type, List<String> statuses, int page, int size) {
         LambdaQueryWrapper<ExecutionDO> wrapper = new LambdaQueryWrapper<ExecutionDO>()
             .eq(ExecutionDO::getScopeId, scopeId);
         if (type != null && !type.isBlank()) {
             wrapper.eq(ExecutionDO::getType, type);
         }
+        wrapper.in(statuses != null && !statuses.isEmpty(), ExecutionDO::getStatus, statuses);
         wrapper.orderByDesc(ExecutionDO::getCreatedAt);
         wrapper.select(ExecutionDO::getId, ExecutionDO::getType, ExecutionDO::getStatus,
             ExecutionDO::getScopeId, ExecutionDO::getSourceId, ExecutionDO::getSchemaConfigId,
             ExecutionDO::getStartedAt, ExecutionDO::getCompletedAt, ExecutionDO::getTotalTokens,
-            ExecutionDO::getTotalCost, ExecutionDO::getCreatedAt);
+            ExecutionDO::getTotalCost, ExecutionDO::getCreatedAt, ExecutionDO::getErrorMessage,
+            ExecutionDO::getBatchId, ExecutionDO::getPayloadJson, ExecutionDO::getSubmittedBy);
         Page<ExecutionDO> pageParam = new Page<>(page, size);
         IPage<ExecutionDO> doPage = executionMapper.selectPage(pageParam, wrapper);
         IPage<ExecutionModel> modelPage = new Page<>(doPage.getCurrent(), doPage.getSize(), doPage.getTotal());
@@ -307,6 +346,8 @@ public class ExecutionTrackerImpl implements ExecutionTracker {
         model.setErrorMessage(executionDO.getErrorMessage());
         model.setNodeId(executionDO.getNodeId());
         model.setBatchId(executionDO.getBatchId());
+        model.setPayloadJson(executionDO.getPayloadJson());
+        model.setSubmittedBy(executionDO.getSubmittedBy());
         return model;
     }
 
@@ -347,10 +388,12 @@ public class ExecutionTrackerImpl implements ExecutionTracker {
     public void resetExecutionForRetry(Long executionId) {
         ExecutionDO executionDO = executionMapper.selectById(executionId);
         if (executionDO != null) {
-            executionDO.setStatus("running");
-            executionDO.setErrorMessage(null);
-            executionDO.setCompletedAt(null);
-            executionMapper.updateById(executionDO);
+            executionMapper.update(null,
+                new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ExecutionDO>()
+                    .eq(ExecutionDO::getId, executionId)
+                    .set(ExecutionDO::getStatus, "running")
+                    .set(ExecutionDO::getErrorMessage, null)
+                    .set(ExecutionDO::getCompletedAt, null));
             eventPublisher.publishExecutionStatus(executionId, executionDO.getType(), "running", null);
         }
     }

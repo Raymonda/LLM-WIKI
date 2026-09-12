@@ -248,13 +248,34 @@ public class PipelineOrchestrator {
         }
     }
 
+    public WikiPageDO runSaveQueryResultPipelineWithExecution(Long executionId, Long scopeId, String question,
+                                                              String answer, String sessionId) {
+        TokenUsageContext.set(scopeId, "query");
+        try {
+            ExecutionModel execution = executionTracker.getExecution(executionId);
+            if (execution == null) {
+                throw new RuntimeException("执行记录不存在: " + executionId);
+            }
+            return doRunSaveQueryResultPipelineWithExecution(execution, scopeId, question, answer, sessionId);
+        } finally {
+            TokenUsageContext.clear();
+        }
+    }
+
     private WikiPageDO doRunSaveQueryResultPipeline(Long scopeId, String question, String answer, String sessionId) {
         if (chatClient == null || !chatClient.isAvailable()) {
             throw new RuntimeException("AI 服务未配置或不可用");
         }
-
         ExecutionModel execution = executionTracker.createExecution("query_save", scopeId, null, null);
         executionTracker.updateExecutionStatus(execution.getId(), "running");
+        return doRunSaveQueryResultPipelineWithExecution(execution, scopeId, question, answer, sessionId);
+    }
+
+    private WikiPageDO doRunSaveQueryResultPipelineWithExecution(ExecutionModel execution, Long scopeId, String question,
+                                                                 String answer, String sessionId) {
+        if (chatClient == null || !chatClient.isAvailable()) {
+            throw new RuntimeException("AI 服务未配置或不可用");
+        }
 
         int totalTokens = 0;
 

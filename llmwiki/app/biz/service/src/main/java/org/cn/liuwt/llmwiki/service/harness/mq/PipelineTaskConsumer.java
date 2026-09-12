@@ -7,6 +7,8 @@ import org.cn.liuwt.llmwiki.domain.service.harness.HarnessEngine;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.bootstrap.SchemaPolishService;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
+import org.cn.liuwt.llmwiki.service.harness.task.BackgroundTaskExecutor;
+import org.cn.liuwt.llmwiki.service.harness.task.BackgroundTaskRegistry;
 import org.cn.liuwt.llmwiki.service.ingest.IngestService;
 import org.cn.liuwt.llmwiki.service.ingest.MergeService;
 import org.cn.liuwt.llmwiki.service.wiki.PageSavePostService;
@@ -59,6 +61,12 @@ public class PipelineTaskConsumer implements RocketMQListener<PipelineTaskMessag
 
     @Autowired
     private SchemaPolishService schemaPolishService;
+
+    @Autowired
+    private BackgroundTaskRegistry backgroundTaskRegistry;
+
+    @Autowired
+    private BackgroundTaskExecutor backgroundTaskExecutor;
 
     private static final Set<String> TERMINAL_STATUSES = Set.of("completed", "cancelled", "budget_exhausted", "failed");
     private static final Set<String> RESUME_ONLY_STATUSES = Set.of("paused");
@@ -151,6 +159,10 @@ public class PipelineTaskConsumer implements RocketMQListener<PipelineTaskMessag
     }
 
     private void executeTask(PipelineTaskMessage msg) {
+        if (backgroundTaskRegistry.hasHandler(msg.getTaskType())) {
+            backgroundTaskExecutor.execute(msg.getExecutionId(), msg.getTaskType());
+            return;
+        }
         switch (msg.getTaskType()) {
             case PipelineTaskMessage.TYPE_INGEST_START:
                 ingestService.runIngestPipeline(msg.getExecutionId(), msg.getScopeId(), msg.getSourceId(), msg.getGuidance());
@@ -183,7 +195,7 @@ public class PipelineTaskConsumer implements RocketMQListener<PipelineTaskMessag
                         msg.getSourceId(), msg.getGuidance(), msg.getOriginalPageIds());
                 break;
             default:
-                log.error("Unknown task type: {}", msg.getTaskType());
+                throw new IllegalStateException("Unknown pipeline task type: " + msg.getTaskType());
         }
     }
 

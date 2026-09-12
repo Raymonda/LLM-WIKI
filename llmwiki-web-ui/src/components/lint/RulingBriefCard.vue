@@ -33,6 +33,8 @@ const props = defineProps<{
   fromPageTitle?: string
   toPageTitle?: string
   readonly?: boolean
+  processing?: boolean
+  submittedExecutionId?: number | null
 }>()
 
 const emit = defineEmits<{
@@ -237,25 +239,34 @@ const conflictToLabel = computed(() => props.toPageTitle || t('lint.pageFallback
       <span>{{ t('lint.rulingNotGenerated') }}</span>
     </div>
 
+    <!-- 已提交任务标记（任务化后不再同步执行） -->
+    <div v-if="submittedExecutionId != null" class="ruling-brief-card__submitted">
+      <ShieldCheck :size="14" />
+      <span>{{ t('lint.rulingSubmitted') }}</span>
+      <router-link class="ruling-brief-card__task-link" :to="`/harness/${submittedExecutionId}`">
+        {{ t('lint.viewTask') }}
+      </router-link>
+    </div>
+
     <!-- 矛盾裁决专属按钮（参考变更审批中心） -->
     <div v-if="!readonly && isAwaitingApproval && isConflict" class="ruling-brief-card__actions ruling-brief-card__actions--conflict">
-      <button class="ruling-brief-card__btn ruling-brief-card__btn--dismiss" @click="emit('conflictAction', findingId, 'dismiss')">
+      <button class="ruling-brief-card__btn ruling-brief-card__btn--dismiss" :disabled="processing || submittedExecutionId != null" @click="emit('conflictAction', findingId, 'dismiss')">
         <Ban :size="14" />
         {{ t('lint.rulingDismiss') }}
       </button>
-      <button class="ruling-brief-card__btn ruling-brief-card__btn--ghost" @click="emit('conflictAction', findingId, 'choose_a')">
+      <button class="ruling-brief-card__btn ruling-brief-card__btn--ghost" :disabled="processing || submittedExecutionId != null" @click="emit('conflictAction', findingId, 'choose_a')">
         <CircleDot :size="14" />
         {{ t('lint.rulingKeepPage', [conflictFromLabel]) }}
       </button>
-      <button class="ruling-brief-card__btn ruling-brief-card__btn--ghost" @click="emit('conflictAction', findingId, 'coexist')">
+      <button class="ruling-brief-card__btn ruling-brief-card__btn--ghost" :disabled="processing || submittedExecutionId != null" @click="emit('conflictAction', findingId, 'coexist')">
         <GitBranch :size="14" />
         {{ t('lint.rulingCoexist') }}
       </button>
-      <button class="ruling-brief-card__btn ruling-brief-card__btn--ghost" @click="emit('conflictAction', findingId, 'choose_b')">
+      <button class="ruling-brief-card__btn ruling-brief-card__btn--ghost" :disabled="processing || submittedExecutionId != null" @click="emit('conflictAction', findingId, 'choose_b')">
         <CircleDot :size="14" />
         {{ t('lint.rulingKeepPage', [conflictToLabel]) }}
       </button>
-      <button class="ruling-brief-card__btn ruling-brief-card__btn--approve" @click="emit('conflictAction', findingId, 'merge')">
+      <button class="ruling-brief-card__btn ruling-brief-card__btn--approve" :disabled="processing || submittedExecutionId != null" @click="emit('conflictAction', findingId, 'merge')">
         <GitMerge :size="14" />
         {{ t('lint.rulingMerge') }}
       </button>
@@ -559,5 +570,34 @@ const conflictToLabel = computed(() => props.toPageTitle || t('lint.pageFallback
   margin-top: var(--space-3);
   padding-top: var(--space-3);
   border-top: 1px solid var(--border-subtle);
+}
+
+.ruling-brief-card__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ruling-brief-card__submitted {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--success-light);
+  border-radius: var(--radius-md);
+  font-size: var(--font-caption);
+  font-weight: var(--weight-medium);
+  color: var(--success);
+}
+
+.ruling-brief-card__task-link {
+  margin-left: auto;
+  color: var(--accent-primary);
+  text-decoration: none;
+  font-weight: var(--weight-semibold);
+}
+
+.ruling-brief-card__task-link:hover {
+  text-decoration: underline;
 }
 </style>

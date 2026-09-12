@@ -41,6 +41,8 @@ const STEP_LABEL_MAP: Record<string, string> = {
   WRITE_SAVED_PAGE: '写入收藏页',
   SAVE_LINKS: '保存关联链接',
   DETECT_SAVE_CONFLICTS: '检测内容冲突',
+  RECORD_RESULT: '记录保存结果',
+  REBUILD_INDEX: '重建索引',
 
   // ===== Schema / 配置变更（单步） =====
   SCHEMA_CHANGE: 'Schema 变更',
@@ -59,6 +61,8 @@ const OPERATION_TYPE_LABEL_MAP: Record<string, string> = {
   page_modify: '页面修改',
   page_merge: '知识合并',
   query_save: '保存查询结果',
+  conflict_ruling: '冲突裁决',
+  index_rebuild: '索引重建',
 }
 
 const STATUS_LABEL_MAP: Record<string, string> = {

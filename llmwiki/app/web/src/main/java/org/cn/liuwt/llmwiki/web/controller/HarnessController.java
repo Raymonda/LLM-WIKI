@@ -20,6 +20,9 @@ import org.cn.liuwt.llmwiki.domain.service.harness.governance.bootstrap.Paradigm
 import org.cn.liuwt.llmwiki.domain.model.harness.SchemaStructuredModel;
 import org.cn.liuwt.llmwiki.domain.model.harness.SchemaPatchModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
+import org.cn.liuwt.llmwiki.facade.model.TaskReceiptInfo;
+import org.cn.liuwt.llmwiki.service.harness.task.BackgroundTaskService;
+import org.cn.liuwt.llmwiki.service.harness.task.TaskReceipt;
 import org.cn.liuwt.llmwiki.facade.model.ExecutionInfo;
 import org.cn.liuwt.llmwiki.facade.model.ExecutionInfo.ExecutionStepInfo;
 import org.cn.liuwt.llmwiki.facade.model.PageResult;
@@ -41,6 +44,8 @@ import org.cn.liuwt.llmwiki.integration.ai.TokenUsageContext;
 import org.cn.liuwt.llmwiki.integration.ai.LlmClient;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -51,6 +56,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.HashMap;
+import java.util.Arrays;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -111,11 +117,16 @@ public class HarnessController {
     @Autowired
     private ConflictReviewService conflictReviewService;
 
+    @Autowired
+    private BackgroundTaskService backgroundTaskService;
+
     @Autowired(required = false)
     private LlmClient llmClient;
 
     @Autowired
     private ExecutionNodeRegistry executionNodeRegistry;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private final ExecutorService sseExecutor = Executors.newCachedThreadPool();
 
@@ -139,9 +150,11 @@ public class HarnessController {
     public Result<PageResult<ExecutionInfo>> listExecutionsPaged(
             @RequestParam Long scopeId,
             @RequestParam(required = false) String type,
+            @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
-        IPage<ExecutionModel> paged = executionTracker.listExecutionsPaged(scopeId, type, page, size);
+        IPage<ExecutionModel> paged = executionTracker.listExecutionsPaged(
+            scopeId, type, parseStatusFilter(status), page, size);
         Map<Long, String> sourceNameMap = batchLoadSourceNames(paged.getRecords());
         PageResult<ExecutionInfo> pr = new PageResult<>();
         pr.setItems(paged.getRecords().stream()
@@ -681,16 +694,50 @@ public class HarnessController {
     }
 
     @PostMapping("/conflict-rulings/{id}/execute")
-    public Result<ConflictReviewDO> executeRuling(
+    public Result<TaskReceiptInfo> executeRuling(
             @PathVariable Long id,
             @RequestBody Map<String, String> body) {
+        Long scopeId = jwtTokenProvider.getCurrentScopeId();
         Long userId = jwtTokenProvider.getCurrentUserId();
         String action = body.get("action");
-        String detail = body.get("detail");
         if (action == null || action.isBlank()) {
             return Result.failed(ErrorCode.SCHEMA_ACTION_TYPE_REQUIRED);
         }
-        return Result.success(conflictReviewService.executeRuling(id, userId, action, detail));
+        ConflictReviewDO review = conflictReviewService.getReview(id);
+        if (review == null || !scopeId.equals(review.getScopeId())) {
+            return Result.failed(ErrorCode.CONFLICT_REVIEW_NOT_FOUND);
+        }
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("reviewId", id);
+        payload.put("action", action);
+        String detail = body.get("detail");
+        if (detail != null && !detail.isBlank()) {
+            payload.put("detail", detail);
+        }
+        payload.put("title", "裁决：" + displayTitle(review.getFromPageTitle())
+            + " ↔ " + displayTitle(review.getToPageTitle()));
+        TaskReceipt receipt = backgroundTaskService.submit(scopeId, userId, "conflict_ruling", payload);
+        TaskReceiptInfo info = new TaskReceiptInfo();
+        info.setExecutionId(receipt.executionId());
+        info.setTaskType(receipt.taskType());
+        info.setStatus(receipt.status());
+        return Result.success(info);
+    }
+
+    private static String displayTitle(String title) {
+        return title != null && !title.isBlank() ? title : "未知页面";
+    }
+
+    @PostMapping("/executions/{id}/retry")
+    public Result<TaskReceiptInfo> retryExecution(@PathVariable Long id) {
+        Long scopeId = jwtTokenProvider.getCurrentScopeId();
+        Long userId = jwtTokenProvider.getCurrentUserId();
+        TaskReceipt receipt = backgroundTaskService.retry(scopeId, id, userId);
+        TaskReceiptInfo info = new TaskReceiptInfo();
+        info.setExecutionId(receipt.executionId());
+        info.setTaskType(receipt.taskType());
+        info.setStatus(receipt.status());
+        return Result.success(info);
     }
 
     @PostMapping("/conflict-rulings/{id}/cancel")
@@ -750,6 +797,42 @@ public class HarnessController {
         return Result.success(java.util.Map.of("key", saved.getConfigKey(), "value", saved.getConfigValue()));
     }
 
+    private static final List<String> ACTIVE_STATUSES = List.of("pending", "running", "paused");
+
+    private List<String> parseStatusFilter(String status) {
+        if (status == null || status.isBlank()) {
+            return null;
+        }
+        String trimmed = status.trim();
+        if ("active".equalsIgnoreCase(trimmed)) {
+            return ACTIVE_STATUSES;
+        }
+        return Arrays.stream(trimmed.split(","))
+            .map(String::trim)
+            .filter(s -> !s.isEmpty())
+            .collect(Collectors.toList());
+    }
+
+    private String parsePayloadTitle(String payloadJson) {
+        if (payloadJson == null || payloadJson.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode title = objectMapper.readTree(payloadJson).get("title");
+            if (title == null || title.isNull()) {
+                return null;
+            }
+            String value = title.asText();
+            if (value.isBlank()) {
+                return null;
+            }
+            return value.length() > 80 ? value.substring(0, 80) + "..." : value;
+        } catch (Exception e) {
+            log.debug("Failed to parse payload title: {}", e.getMessage());
+            return null;
+        }
+    }
+
     private Map<Long, String> batchLoadSourceNames(java.util.List<ExecutionModel> models) {
         Set<Long> sourceIds = models.stream()
             .map(ExecutionModel::getSourceId)
@@ -775,6 +858,7 @@ public class HarnessController {
         info.setCreatedAt(model.getCreatedAt());
         info.setTotalTokens(model.getTotalTokens());
         info.setErrorMessage(model.getErrorMessage());
+        info.setPayloadTitle(parsePayloadTitle(model.getPayloadJson()));
         if (model.getSourceId() != null && sourceNameMap.containsKey(model.getSourceId())) {
             info.setSourceName(sourceNameMap.get(model.getSourceId()));
         }

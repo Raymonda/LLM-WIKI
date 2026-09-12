@@ -40,4 +40,8 @@ public class QueryService {
     public WikiPageDO saveAnswerToWiki(Long scopeId, String question, String answer, String sessionId) {
         return harnessEngine.executeSaveQueryResult(scopeId, question, answer, sessionId);
     }
+
+    public WikiPageDO saveAnswerToWikiWithExecution(Long executionId, Long scopeId, String question, String answer, String sessionId) {
+        return harnessEngine.executeSaveQueryResultWithExecution(executionId, scopeId, question, answer, sessionId);
+    }
 }

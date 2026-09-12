@@ -75,6 +75,7 @@ export const useLintStore = defineStore('lint', () => {
   const selectedIds = ref<Set<number>>(new Set())
   const processingIds = ref<Set<number>>(new Set())
   const batchProcessing = ref(false)
+  const rulingTasks = ref<Map<number, number>>(new Map())
 
   const mainTabCounts = ref<Record<MainTabKey, number>>({ manual: 0, ai_processed: 0, archived: 0 })
 
@@ -609,13 +610,11 @@ export const useLintStore = defineStore('lint', () => {
     if (!scopeId.value) return
     await withProcessing(id, async () => {
       try {
-        const result = await executeConflictRuling(id, scopeId.value!, action)
-        if (result.status === 'failed') {
-          throw new Error((result.error as string) || '裁决执行失败')
-        }
+        const receipt = await executeConflictRuling(id, action)
+        rulingTasks.value = new Map(rulingTasks.value).set(id, receipt.executionId)
         await refreshAfterAction()
       } catch (e: any) {
-        setActionError(e.message || '裁决执行失败')
+        setActionError(e.message || '裁决提交失败')
       }
     })
   }
@@ -925,7 +924,7 @@ export const useLintStore = defineStore('lint', () => {
     overview, overviewLoading, findingsPaged, findingsLoading,
     execution, running, error, actionError, lintStartTime, latestExecutionId,
     mainTab, manualTypeFilter, currentPage, pageSize, pageSizeOptions,
-    selectedIds, processingIds, batchProcessing,
+    selectedIds, processingIds, batchProcessing, rulingTasks,
     mainTabCounts,
     completionSummary, dismissCompletionSummary,
     healthDistribution, healthyCount, needsUpdateCount,

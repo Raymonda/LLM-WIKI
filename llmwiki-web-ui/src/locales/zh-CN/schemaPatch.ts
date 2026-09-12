@@ -110,6 +110,8 @@ export default {
   toastPromote: '已将该建议提升至待审批',
   toastRulingExec: '已裁决：{0}',
   toastRulingCancel: '已取消该裁决',
+  rulingSubmitted: '已提交后台执行',
+  viewTask: '查看任务',
   toastLoadFail: '加载规范建议失败',
   toastApplyFail: '应用建议失败',
   toastOpFail: '操作失败',

@@ -43,6 +43,7 @@ const props = defineProps<{
   hasSelectedFailed: boolean
   selectedAutoResolvableCount: number
   selectedFailedCount: number
+  rulingTaskIds: Map<number, number>
 }>()
 
 const emit = defineEmits<{
@@ -500,6 +501,8 @@ const visiblePages = computed(() => {
                 :from-page-title="finding.findingType === 'conflict' ? conflictFromTitle(finding) : undefined"
                 :to-page-title="finding.findingType === 'conflict' ? conflictToTitle(finding) : undefined"
                 :readonly="mainTab === 'archived' || mainTab === 'ai_processed'"
+                :processing="processingIds.has(finding.id)"
+                :submitted-execution-id="rulingTaskIds.get(finding.id) ?? null"
                 @approve="emit('approve', finding.id)"
                 @modify="handleModifyFinding(finding.id)"
                 @reject="emit('reject', finding.id)"

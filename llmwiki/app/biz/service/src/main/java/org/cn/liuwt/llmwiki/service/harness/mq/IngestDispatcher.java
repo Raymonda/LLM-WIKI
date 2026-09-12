@@ -52,6 +52,24 @@ public class IngestDispatcher {
         }
     }
 
+    public void dispatchTask(PipelineTaskMessage msg, Runnable localFallback) {
+        if (!isMqAvailable() || !mqHealthService.shouldAttempt()) {
+            localFallback.run();
+            return;
+        }
+        try {
+            rocketMQTemplate.convertAndSend(PipelineTaskMessage.TOPIC, msg);
+            mqHealthService.markSendSuccess();
+            log.info("[MQ] Pipeline task sent: executionId={}, taskType={}, topic={}",
+                msg.getExecutionId(), msg.getTaskType(), PipelineTaskMessage.TOPIC);
+        } catch (Exception e) {
+            mqHealthService.markSendFailed();
+            log.error("Failed to send pipeline task to RocketMQ (type={}, executionId={}), falling back to local execution",
+                msg.getTaskType(), msg.getExecutionId(), e);
+            localFallback.run();
+        }
+    }
+
     public void submitLocalTask(Long executionId, Runnable task) {
         AtomicReference<Future<?>> futureRef = new AtomicReference<>();
         Future<?> future = registry.submitTask(() -> {

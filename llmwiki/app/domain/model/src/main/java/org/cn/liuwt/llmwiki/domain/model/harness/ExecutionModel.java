@@ -21,6 +21,8 @@ public class ExecutionModel {
     private String nodeId;
     private Long batchId;
     private String guidance;
+    private String payloadJson;
+    private Long submittedBy;
     private List<ExecutionStepModel> steps;
 
     @Data

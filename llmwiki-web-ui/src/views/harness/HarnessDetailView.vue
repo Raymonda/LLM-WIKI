@@ -1,12 +1,16 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { getExecution, getSchemaVersion, type ExecutionRecord } from '@/api/harness'
+import {
+  getExecution, getSchemaVersion, cancelExecution, retryExecution, createExecutionSSE,
+  type ExecutionRecord, type ExecutionStepInfo,
+} from '@/api/harness'
 import {
   ArrowLeft, Clock, CheckCircle, AlertTriangle, Loader2, XCircle,
-  FileText, Search, ShieldCheck, Settings, Activity, Layers, GitMerge, ExternalLink
+  FileText, Search, ShieldCheck, Settings, Activity, Layers, GitMerge, ExternalLink, RotateCw
 } from 'lucide-vue-next'
+import { ElMessage } from 'element-plus'
 import {
   stepLabel,
   statusLabel as statusLabelUtil,
@@ -21,6 +25,8 @@ const { t, locale } = useI18n()
 const loading = ref(true)
 const execution = ref<ExecutionRecord | null>(null)
 const schemaVersionContent = ref<string | null>(null)
+const actionLoading = ref(false)
+let eventSource: EventSource | null = null
 
 const typeConfig: Record<string, { icon: any; color: string; bgColor: string; labelKey: string }> = {
   ingest: { icon: FileText, color: 'var(--success)', bgColor: 'var(--success-light)', labelKey: 'harness.typeIngestFull' },
@@ -95,7 +101,8 @@ const configSummary = computed(() => {
 })
 
 const isPipelineType = computed(() =>
-  execution.value?.operationType === 'ingest' || execution.value?.operationType === 'lint' || execution.value?.operationType === 'page_merge'
+  ['ingest', 'lint', 'page_merge', 'conflict_ruling', 'query_save', 'index_rebuild']
+    .includes(execution.value?.operationType ?? '')
 )
 
 interface WriteOutputPage {
@@ -142,8 +149,8 @@ const mergeSourceNames = computed(() => {
 
 const isMerge = computed(() => execution.value?.operationType === 'page_merge')
 
-async function loadExecution() {
-  loading.value = true
+async function loadExecution(silent = false) {
+  if (!silent) loading.value = true
   try {
     const id = Number(route.params.id)
     execution.value = await getExecution(id)
@@ -156,15 +163,100 @@ async function loadExecution() {
         schemaVersionContent.value = null
       }
     }
+
+    if (execution.value && ['pending', 'running', 'paused'].includes(execution.value.status)) {
+      subscribe(execution.value.executionId)
+    }
   } catch (e) {
     console.error('Failed to load execution:', e)
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
+  }
+}
+
+function closeStream() {
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
+  }
+}
+
+function subscribe(id: number) {
+  closeStream()
+  const es = createExecutionSSE(id)
+  eventSource = es
+
+  es.addEventListener('init', (event: MessageEvent) => {
+    try {
+      execution.value = JSON.parse(event.data) as ExecutionRecord
+    } catch {}
+  })
+
+  es.addEventListener('step', (event: MessageEvent) => {
+    if (!execution.value) return
+    try {
+      const data = JSON.parse(event.data) as ExecutionStepInfo
+      const steps = execution.value.steps ? [...execution.value.steps] : []
+      const idx = steps.findIndex(s => s.stepId === data.stepId)
+      if (idx >= 0) {
+        steps[idx] = { ...steps[idx], ...data }
+      } else {
+        steps.push(data)
+      }
+      execution.value = { ...execution.value, steps }
+    } catch {}
+  })
+
+  es.addEventListener('done', (event: MessageEvent) => {
+    try {
+      execution.value = JSON.parse(event.data) as ExecutionRecord
+    } catch {}
+    closeStream()
+  })
+
+  es.addEventListener('pause', (event: MessageEvent) => {
+    try {
+      execution.value = JSON.parse(event.data) as ExecutionRecord
+    } catch {}
+  })
+
+  es.onerror = () => {
+    closeStream()
+  }
+}
+
+async function retryTask() {
+  if (!execution.value) return
+  actionLoading.value = true
+  try {
+    await retryExecution(execution.value.executionId)
+    await loadExecution(true)
+  } catch (e) {
+    ElMessage.error((e as Error).message || t('harness.actionFailed'))
+  } finally {
+    actionLoading.value = false
+  }
+}
+
+async function cancelTask() {
+  if (!execution.value) return
+  actionLoading.value = true
+  try {
+    await cancelExecution(execution.value.executionId)
+    await loadExecution(true)
+  } catch (e) {
+    ElMessage.error((e as Error).message || t('harness.actionFailed'))
+  } finally {
+    actionLoading.value = false
   }
 }
 
 onMounted(() => {
   loadExecution()
+})
+
+onUnmounted(() => {
+  closeStream()
 })
 </script>
 
@@ -190,7 +282,7 @@ onMounted(() => {
           />
           <div>
             <h1 class="harness-detail__title">
-              {{ operationTypeLabel(execution.operationType) || (typeConfig[execution.operationType] ? t(typeConfig[execution.operationType].labelKey) : execution.operationType) }}
+              {{ execution.payloadTitle || operationTypeLabel(execution.operationType) || (typeConfig[execution.operationType] ? t(typeConfig[execution.operationType].labelKey) : execution.operationType) }}
               <span class="harness-detail__id">#{{ execution.executionId }}</span>
             </h1>
             <span class="harness-detail__status" :style="{ color: statusColor(execution.status) }">
@@ -208,6 +300,26 @@ onMounted(() => {
             <span class="harness-detail__stat-value">{{ (execution.totalTokens ?? 0).toLocaleString() }}</span>
             <span class="harness-detail__stat-label">Token</span>
           </div>
+        </div>
+        <div class="harness-detail__actions">
+          <button
+            v-if="execution.status === 'failed'"
+            class="harness-detail__action-btn"
+            :disabled="actionLoading"
+            @click="retryTask"
+          >
+            <RotateCw :size="14" />
+            {{ t('harness.retryExecution') }}
+          </button>
+          <button
+            v-if="execution.status === 'running' || execution.status === 'pending' || execution.status === 'paused'"
+            class="harness-detail__action-btn harness-detail__action-btn--danger"
+            :disabled="actionLoading"
+            @click="cancelTask"
+          >
+            <XCircle :size="14" />
+            {{ t('harness.cancelExecution') }}
+          </button>
         </div>
       </div>
 
@@ -814,5 +926,40 @@ onMounted(() => {
   padding: 0 var(--space-1);
   background: var(--surface-secondary);
   border-radius: var(--radius-xs, 2px);
+}
+
+.harness-detail__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.harness-detail__action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  font-size: var(--font-body-sm);
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.harness-detail__action-btn:hover:not(:disabled) {
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.harness-detail__action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.harness-detail__action-btn--danger:hover:not(:disabled) {
+  color: var(--error);
+  border-color: var(--error);
 }
 </style>

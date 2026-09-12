@@ -48,11 +48,18 @@ export interface ExecutionRecord {
   createdAt: string | null
   totalTokens: number | null
   errorMessage: string | null
+  payloadTitle: string | null
   sourceName: string | null
   totalSteps: number | null
   completedSteps: number | null
   currentStepName: string | null
   steps: ExecutionStepInfo[] | null
+}
+
+export interface TaskReceiptInfo {
+  executionId: number
+  taskType: string
+  status: string
 }
 
 export interface PageResult<T> {
@@ -66,6 +73,7 @@ export interface PageResult<T> {
 export function listExecutionsPaged(params: {
   scopeId: number
   type?: string
+  status?: string
   page?: number
   size?: number
 }): Promise<PageResult<ExecutionRecord>> {
@@ -78,6 +86,10 @@ export function getExecution(id: number): Promise<ExecutionRecord> {
 
 export function cancelExecution(id: number): Promise<void> {
   return api.post(`/harness/executions/${id}/cancel`)
+}
+
+export function retryExecution(id: number): Promise<TaskReceiptInfo> {
+  return api.post(`/harness/executions/${id}/retry`)
 }
 
 export function createExecutionSSE(id: number): EventSource {
@@ -417,7 +429,7 @@ export function countConflictRulings(): Promise<{ pending: number }> {
   return api.get('/harness/conflict-rulings/count')
 }
 
-export function executeRuling(id: number, action: string, detail?: string): Promise<ConflictReviewInfo> {
+export function executeRuling(id: number, action: string, detail?: string): Promise<TaskReceiptInfo> {
   return api.post(`/harness/conflict-rulings/${id}/execute`, { action, detail: detail ?? null })
 }
 

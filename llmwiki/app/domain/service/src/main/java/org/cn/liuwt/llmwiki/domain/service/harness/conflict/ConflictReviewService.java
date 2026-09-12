@@ -156,6 +156,29 @@ public class ConflictReviewService {
         return review;
     }
 
+    public ConflictReviewDO getReview(Long reviewId) {
+        return conflictReviewMapper.selectById(reviewId);
+    }
+
+    public void prepareForRetry(Long reviewId) {
+        ConflictReviewDO review = conflictReviewMapper.selectById(reviewId);
+        if (review == null || !"failed".equals(review.getStatus())) {
+            return;
+        }
+        conflictReviewMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ConflictReviewDO>()
+                .eq(ConflictReviewDO::getId, reviewId)
+                .eq(ConflictReviewDO::getStatus, "failed")
+                .set(ConflictReviewDO::getStatus, "pending")
+                .set(ConflictReviewDO::getExecutionError, null)
+                .set(ConflictReviewDO::getRulingAction, null)
+                .set(ConflictReviewDO::getRulingDetail, null)
+                .set(ConflictReviewDO::getDecidedBy, null)
+                .set(ConflictReviewDO::getDecidedAt, null)
+                .set(ConflictReviewDO::getExecutedAt, null));
+        log.info("Prepared conflict_review id={} for retry", reviewId);
+    }
+
     public void cancelRuling(Long reviewId) {
         ConflictReviewDO review = conflictReviewMapper.selectById(reviewId);
         if (review == null) {
@@ -254,7 +277,7 @@ public class ConflictReviewService {
 
     private boolean isResolvable(LintFindingDO f) {
         return f.getStatus() != null
-            && java.util.Set.of("open", "awaiting_approval").contains(f.getStatus());
+            && java.util.Set.of("open", "awaiting_approval", "deferred", "failed").contains(f.getStatus());
     }
 
     private boolean isPagePairMatch(LintFindingDO f, Long pageA, Long pageB) {

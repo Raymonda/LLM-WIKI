@@ -160,6 +160,15 @@ public enum ErrorCode {
     PATCH_OP_UNKNOWN("PATCH_011", "Unknown operation: {0}"),
     PATCH_SECTION_UNSUPPORTED("PATCH_012", "Structured path does not support section {0}: {1}"),
 
+    // Background task
+    TASK_TYPE_UNSUPPORTED("TASK_001", "Unsupported task type: {0}"),
+    TASK_DUPLICATE("TASK_002", "An active task for the same business object already exists: executionId={0}"),
+    TASK_NOT_FOUND("TASK_003", "Task not found: {0}"),
+    TASK_SCOPE_MISMATCH("TASK_004", "Task {0} does not belong to current scope"),
+    TASK_NOT_RETRYABLE("TASK_005", "Task cannot be retried in current state: {0}"),
+    TASK_PAYLOAD_INVALID("TASK_006", "Task payload is incomplete: {0}"),
+    TASK_EXECUTION_FAILED("TASK_007", "Task execution failed: {0}"),
+
     // Lint additional (extended)
     LINT_INVALID_RESOLVE_TYPE("LINT_005", "Only schema_compliance findings in open status can be marked as resolved");
 

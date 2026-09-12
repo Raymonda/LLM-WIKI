@@ -417,6 +417,7 @@ function getRiskHint(action: string): { icon: any; tone: 'error' | 'warning' | '
         :error="store.error"
         :execution="store.execution"
         :start-time="store.lintStartTime"
+        :execution-id="store.execution?.executionId ?? store.latestExecutionId"
         @trigger="store.triggerLint()"
       />
     </div>
@@ -472,6 +473,7 @@ function getRiskHint(action: string): { icon: any; tone: 'error' | 'warning' | '
       :main-tab="store.mainTab"
       :manual-type-filter="store.manualTypeFilter"
       :processing-ids="store.processingIds"
+      :ruling-task-ids="store.rulingTasks"
       :selected-ids="store.selectedIds"
       :selected-count="store.selectedCount"
       :all-current-selected="store.allCurrentSelected"
