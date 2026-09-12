@@ -1,7 +1,10 @@
 package org.cn.liuwt.llmwiki.domain.service.harness.governance.validation;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SchemaConfigDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
+import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageMapper;
 import org.cn.liuwt.llmwiki.domain.model.harness.SchemaStructuredModel;
 import org.cn.liuwt.llmwiki.domain.model.harness.SchemaStructuredModel.*;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.SchemaManager;
@@ -26,6 +29,9 @@ public class SchemaComplianceChecker {
 
     @Autowired
     private SchemaStructuredParser schemaStructuredParser;
+
+    @Autowired(required = false)
+    private WikiPageMapper wikiPageMapper;
 
     @Autowired(required = false)
     private LlmClient chatClient;
@@ -58,7 +64,7 @@ public class SchemaComplianceChecker {
 
         if (structuredModel != null) {
             violations.addAll(validateCategoryStructured(metadataJson, structuredModel));
-            violations.addAll(validatePageStructureStructured(pageContents, structuredModel));
+            violations.addAll(validatePageStructureStructured(scopeId, metadataJson, pageContents, structuredModel));
             violations.addAll(validateNamingStructured(metadataJson, structuredModel));
         } else {
             String schemaContent = schema.getConfigValue();
@@ -96,7 +102,7 @@ public class SchemaComplianceChecker {
         if (structuredModel != null) {
             violations.addAll(validateCategoryStructured(metadataJson, structuredModel));
             violations.addAll(validatePlanEntitiesStructured(writingPlanJson, metadataJson, structuredModel));
-            violations.addAll(validatePlanSummaryStructureStructured(writingPlanJson, structuredModel));
+            violations.addAll(validatePlanSummaryStructureStructured(writingPlanJson, metadataJson, structuredModel));
         } else {
             String schemaContent = schema.getConfigValue();
             String categoriesSection = extractSection(schemaContent, 2);
@@ -215,7 +221,7 @@ public class SchemaComplianceChecker {
         }
 
         if (!taxonomy.isValidPath(category)) {
-            List<String> allPaths = taxonomy.flattenPaths();
+            List<String> allPaths = taxonomy.flattenLabelPaths();
             String summary = allPaths.size() <= 5
                 ? String.join("、", allPaths)
                 : String.join("、", allPaths.subList(0, 5)) + "等" + allPaths.size() + "个分类";
@@ -227,12 +233,15 @@ public class SchemaComplianceChecker {
         return List.of();
     }
 
-    private List<SchemaViolation> validatePageStructureStructured(Map<String, String> pageContents, SchemaStructuredModel model) {
+    private List<SchemaViolation> validatePageStructureStructured(Long scopeId, String metadataJson, Map<String, String> pageContents, SchemaStructuredModel model) {
         if (pageContents == null || pageContents.isEmpty()) return List.of();
         Templates templates = model.getTemplates();
         if (templates == null || templates.getPageTemplates() == null || templates.getPageTemplates().isEmpty()) {
             return List.of();
         }
+
+        String metadataCategory = extractMetadataField(metadataJson, "category");
+        boolean singlePage = pageContents.size() == 1;
 
         List<SchemaViolation> violations = new ArrayList<>();
         for (Map.Entry<String, String> entry : pageContents.entrySet()) {
@@ -240,36 +249,79 @@ public class SchemaComplianceChecker {
             String content = entry.getValue();
             if (content == null || content.isEmpty()) continue;
 
-            for (PageTemplate pt : templates.getPageTemplates()) {
-                List<String> requiredLabels = pt.requiredSectionLabels();
-                if (requiredLabels.isEmpty()) continue;
+            String category = resolvePageCategory(scopeId, pagePath);
+            if ((category == null || category.isBlank()) && singlePage) {
+                category = metadataCategory;
+            }
+            if (category == null || category.isBlank()) {
+                log.debug("Page structure check skipped for '{}': category unresolvable", pagePath);
+                continue;
+            }
 
-                Set<String> presentSections = new HashSet<>();
-                for (String line : content.split("\\r?\\n")) {
-                    Matcher m = HEADING_PATTERN.matcher(line.trim());
-                    if (m.find()) {
-                        presentSections.add(m.group(1).trim().toLowerCase());
-                    }
-                }
+            List<PageTemplate> matched = templates.findByCategory(category);
+            if (matched.isEmpty()) {
+                log.debug("Page structure check skipped for '{}': no template matches category '{}'", pagePath, category);
+                continue;
+            }
 
-                for (String required : requiredLabels) {
-                    boolean found = false;
-                    String normalizedRequired = required.toLowerCase();
-                    for (String present : presentSections) {
-                        if (present.contains(normalizedRequired) || normalizedRequired.contains(present)) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
+            Set<String> presentSections = collectPageHeadings(content);
+            Set<String> checkedLabels = new HashSet<>();
+            for (PageTemplate pt : matched) {
+                for (String required : pt.requiredSectionLabels()) {
+                    if (!checkedLabels.add(required)) continue;
+                    if (!hasSection(presentSections, required)) {
                         violations.add(new SchemaViolation(ViolationType.PAGE_STRUCTURE,
-                            "页面「" + pagePath + "」缺少 Schema 模板定义的必需章节「" + required + "」",
+                            "页面「" + pagePath + "」缺少模板「" + pt.getLabel() + "」定义的必需章节「" + required + "」",
                             Severity.MEDIUM, pagePath, "请在页面中补充「" + required + "」章节"));
                     }
                 }
             }
         }
         return violations;
+    }
+
+    private String resolvePageCategory(Long scopeId, String pagePathOrTitle) {
+        WikiPageMapper mapper = this.wikiPageMapper;
+        if (mapper == null || pagePathOrTitle == null || pagePathOrTitle.isBlank()) return null;
+        try {
+            WikiPageDO page = mapper.selectOne(new LambdaQueryWrapper<WikiPageDO>()
+                .eq(WikiPageDO::getScopeId, scopeId)
+                .eq(WikiPageDO::getFilePath, pagePathOrTitle)
+                .orderByAsc(WikiPageDO::getId)
+                .last("LIMIT 1"));
+            if (page == null) {
+                page = mapper.selectOne(new LambdaQueryWrapper<WikiPageDO>()
+                    .eq(WikiPageDO::getScopeId, scopeId)
+                    .eq(WikiPageDO::getTitle, pagePathOrTitle)
+                    .orderByAsc(WikiPageDO::getId)
+                    .last("LIMIT 1"));
+            }
+            return page != null ? page.getCategory() : null;
+        } catch (Exception e) {
+            log.warn("resolvePageCategory failed for '{}': {}", pagePathOrTitle, e.getMessage());
+            return null;
+        }
+    }
+
+    private Set<String> collectPageHeadings(String content) {
+        Set<String> presentSections = new HashSet<>();
+        for (String line : content.split("\\r?\\n")) {
+            Matcher m = HEADING_PATTERN.matcher(line.trim());
+            if (m.find()) {
+                presentSections.add(m.group(1).trim().toLowerCase());
+            }
+        }
+        return presentSections;
+    }
+
+    private boolean hasSection(Set<String> presentSections, String required) {
+        String normalizedRequired = required.toLowerCase();
+        for (String present : presentSections) {
+            if (present.contains(normalizedRequired) || normalizedRequired.contains(present)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private List<SchemaViolation> validateNamingStructured(String metadataJson, SchemaStructuredModel model) {
@@ -331,15 +383,25 @@ public class SchemaComplianceChecker {
         return violations;
     }
 
-    private List<SchemaViolation> validatePlanSummaryStructureStructured(String writingPlanJson, SchemaStructuredModel model) {
+    private List<SchemaViolation> validatePlanSummaryStructureStructured(String writingPlanJson, String metadataJson, SchemaStructuredModel model) {
         Templates templates = model.getTemplates();
         if (templates == null || templates.getPageTemplates() == null || templates.getPageTemplates().isEmpty()) {
             return List.of();
         }
 
+        String category = extractMetadataField(metadataJson, "category");
+        if (category == null || category.isBlank()) return List.of();
+
+        List<PageTemplate> matched = templates.findByCategory(category);
+        if (matched.isEmpty()) {
+            log.debug("Plan summary structure check skipped: no template matches category '{}'", category);
+            return List.of();
+        }
+
         List<SchemaViolation> violations = new ArrayList<>();
-        List<String> requiredLabels = new ArrayList<>();
-        for (PageTemplate pt : templates.getPageTemplates()) {
+        Set<String> requiredLabels = new LinkedHashSet<>();
+        String templateLabel = matched.get(0).getLabel();
+        for (PageTemplate pt : matched) {
             requiredLabels.addAll(pt.requiredSectionLabels());
         }
         if (requiredLabels.isEmpty()) return violations;
@@ -350,26 +412,11 @@ public class SchemaComplianceChecker {
 
             if (root.has("summaryOutline")) {
                 String outline = root.get("summaryOutline").asText();
-                Set<String> presentSections = new HashSet<>();
-                for (String line : outline.split("\\r?\\n")) {
-                    Matcher m = HEADING_PATTERN.matcher(line.trim());
-                    if (m.find()) {
-                        presentSections.add(m.group(1).trim().toLowerCase());
-                    }
-                }
-
+                Set<String> presentSections = collectPageHeadings(outline);
                 for (String required : requiredLabels) {
-                    boolean found = false;
-                    String normalizedRequired = required.toLowerCase();
-                    for (String present : presentSections) {
-                        if (present.contains(normalizedRequired) || normalizedRequired.contains(present)) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
+                    if (!hasSection(presentSections, required)) {
                         violations.add(new SchemaViolation(ViolationType.PAGE_STRUCTURE,
-                            "摘要页大纲缺少 Schema 模板定义的必需章节「" + required + "」",
+                            "摘要页大纲缺少模板「" + templateLabel + "」定义的必需章节「" + required + "」",
                             Severity.MEDIUM, "summaryOutline", "请在摘要页大纲中补充「" + required + "」章节"));
                     }
                 }

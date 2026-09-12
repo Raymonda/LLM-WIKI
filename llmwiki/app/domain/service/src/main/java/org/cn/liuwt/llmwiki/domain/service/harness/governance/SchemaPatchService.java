@@ -660,24 +660,30 @@ public class SchemaPatchService {
         switch (op) {
             case ADD -> {
                 String diffAfter = patch.getDiffAfter() == null ? "" : patch.getDiffAfter();
-                if (diffAfter.contains("###") || diffAfter.contains("章节") || diffAfter.contains("section")) {
-                    PageTemplate pt = new PageTemplate();
-                    pt.setType(slugify(label));
-                    pt.setLabel(label);
-                    List<SectionDef> sections = parseSectionDefsFromDiff(diffAfter);
-                    pt.setSections(sections);
-                    templates.getPageTemplates().add(pt);
+                if (diffAfter.contains("###")) {
+                    PageTemplate existing = findTemplateByLabelOrType(templates, label);
+                    if (existing != null) {
+                        mergeSectionsInto(existing, parseSectionDefsFromDiff(diffAfter));
+                    } else {
+                        PageTemplate pt = new PageTemplate();
+                        pt.setType(slugify(label));
+                        pt.setLabel(label);
+                        List<SectionDef> sections = parseSectionDefsFromDiff(diffAfter);
+                        pt.setSections(sections);
+                        templates.getPageTemplates().add(pt);
+                    }
                 } else {
                     PageTemplate existing = templates.findByType(slugify(label));
-                    if (existing == null) {
-                        throw new BusinessException(ErrorCode.PATCH_CONFLICT, "Page template not found: " + label);
+                    if (existing != null) {
+                        SectionDef sd = new SectionDef();
+                        sd.setId(slugify(extractFirstLine(diffAfter)));
+                        sd.setLabel(extractFirstLine(diffAfter));
+                        sd.setRequired(!diffAfter.contains("可选"));
+                        sd.setOrder(existing.getSections().size() + 1);
+                        existing.getSections().add(sd);
+                    } else {
+                        appendTemplatesNarrative(templates, diffAfter);
                     }
-                    SectionDef sd = new SectionDef();
-                    sd.setId(slugify(extractFirstLine(diffAfter)));
-                    sd.setLabel(extractFirstLine(diffAfter));
-                    sd.setRequired(!diffAfter.contains("可选"));
-                    sd.setOrder(existing.getSections().size() + 1);
-                    existing.getSections().add(sd);
                 }
             }
             case MODIFY -> {
@@ -686,13 +692,14 @@ public class SchemaPatchService {
                 if (existing == null && beforeLabel != null) {
                     existing = templates.findByType(slugify(beforeLabel));
                 }
-                if (existing == null) {
-                    throw new BusinessException(ErrorCode.PATCH_CONFLICT, "Page template not found: " + label);
-                }
-                String newLabel = extractNewLabelFromDiffAfter(patch.getDiffAfter());
-                if (newLabel != null) {
-                    existing.setLabel(newLabel);
-                    existing.setType(slugify(newLabel));
+                if (existing != null) {
+                    String newLabel = extractNewLabelFromDiffAfter(patch.getDiffAfter());
+                    if (newLabel != null) {
+                        existing.setLabel(newLabel);
+                        existing.setType(slugify(newLabel));
+                    }
+                } else {
+                    modifyTemplatesNarrative(templates, patch, label);
                 }
             }
             case DELETE -> {
@@ -714,10 +721,76 @@ public class SchemaPatchService {
                     }
                 }
                 if (!removed) {
+                    removed = removeTemplatesNarrative(templates, patch.getDiffBefore());
+                }
+                if (!removed) {
                     throw new BusinessException(ErrorCode.PATCH_CONFLICT, "Page template or section not found, cannot delete: " + deleteLabel);
                 }
             }
         }
+    }
+
+    /**
+     * section 3 的 section 级规则（如「模板选择规则」）落在 Templates.narrative：
+     * 渲染器将其输出在模板列表之前，解析器按无 H3 归属原样收回，可安全往返。
+     * ADD 的目标既非新模板（无 ### 标题）也非既有模板的新章节时，按规则追加，不再拦截为冲突。
+     */
+    private void appendTemplatesNarrative(Templates templates, String text) {
+        if (text == null || text.isBlank()) return;
+        String addition = text.stripTrailing();
+        String current = templates.getNarrative() == null ? "" : templates.getNarrative();
+        templates.setNarrative(current.isEmpty() ? addition : current + "\n" + addition);
+    }
+
+    private PageTemplate findTemplateByLabelOrType(Templates templates, String label) {
+        if (label == null || label.isBlank()) return null;
+        PageTemplate byType = templates.findByType(slugify(label));
+        if (byType != null) return byType;
+        for (PageTemplate pt : templates.getPageTemplates()) {
+            if (pt.getLabel() != null && pt.getLabel().trim().equalsIgnoreCase(label.trim())) {
+                return pt;
+            }
+        }
+        return null;
+    }
+
+    private void mergeSectionsInto(PageTemplate template, List<SectionDef> incoming) {
+        for (SectionDef sd : incoming) {
+            SectionDef duplicated = null;
+            for (SectionDef es : template.getSections()) {
+                boolean sameId = sd.getId() != null && sd.getId().equalsIgnoreCase(es.getId());
+                boolean sameLabel = sd.getLabel() != null && sd.getLabel().equalsIgnoreCase(es.getLabel());
+                if (sameId || sameLabel) {
+                    duplicated = es;
+                    break;
+                }
+            }
+            if (duplicated != null) {
+                if (sd.isRequired() && !duplicated.isRequired()) {
+                    duplicated.setRequired(true);
+                }
+                continue;
+            }
+            sd.setOrder(template.getSections().size() + 1);
+            template.getSections().add(sd);
+        }
+    }
+
+    private void modifyTemplatesNarrative(Templates templates, SchemaPatchDO patch, String label) {
+        String narrative = templates.getNarrative();
+        if (narrative == null || patch.getDiffBefore() == null || !narrative.contains(patch.getDiffBefore())) {
+            throw new BusinessException(ErrorCode.PATCH_CONFLICT, "Page template or narrative rule not found: " + label);
+        }
+        templates.setNarrative(replaceSingle(narrative, patch.getDiffBefore(), patch.getDiffAfter(), "templates narrative"));
+    }
+
+    private boolean removeTemplatesNarrative(Templates templates, String diffBefore) {
+        String narrative = templates.getNarrative();
+        if (narrative == null || diffBefore == null || diffBefore.isBlank() || !narrative.contains(diffBefore)) {
+            return false;
+        }
+        templates.setNarrative(replaceSingle(narrative, diffBefore, "", "templates narrative").strip());
+        return true;
     }
 
     private void applySection4Patch(SchemaStructuredModel model, SchemaPatchDO patch, SchemaPatchModel.Operation op) {

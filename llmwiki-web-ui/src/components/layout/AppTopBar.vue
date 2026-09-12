@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
@@ -32,15 +32,40 @@ const isTeamMode = computed(() => currentScope.value?.scopeType === 'team')
 
 let pollTimer: number | null = null
 let patchPollTimer: number | null = null
+let patchCountSeq = 0
 
 async function refreshPatchCount() {
+  const seq = ++patchCountSeq
   try {
     const { pending, conflictRulings } = await countPendingPatches()
-    patchCount.value = pending + (conflictRulings ?? 0)
+    if (seq === patchCountSeq) {
+      patchCount.value = pending + (conflictRulings ?? 0)
+    }
   } catch {
     // silent
   }
 }
+
+async function refreshUnreadCount() {
+  try {
+    activityStore.unreadCount = await getUnreadCount()
+  } catch {
+    // silent
+  }
+}
+
+watch(() => authStore.scopeId, () => {
+  refreshPatchCount()
+  refreshUnreadCount()
+})
+
+function handleOpenPatchDrawer() {
+  patchDrawerOpen.value = true
+}
+
+watch(patchDrawerOpen, (open) => {
+  if (open) refreshPatchCount()
+})
 
 onMounted(async () => {
   try {
@@ -48,19 +73,11 @@ onMounted(async () => {
   } catch {
     activityStore.unreadCount = 0
   }
-  pollTimer = window.setInterval(async () => {
-    try {
-      activityStore.unreadCount = await getUnreadCount()
-    } catch {
-      // silent
-    }
-  }, 30000)
+  pollTimer = window.setInterval(refreshUnreadCount, 30000)
   refreshPatchCount()
   patchPollTimer = window.setInterval(refreshPatchCount, 30000)
 
-  window.addEventListener('open-patch-drawer', () => {
-    patchDrawerOpen.value = true
-  })
+  window.addEventListener('open-patch-drawer', handleOpenPatchDrawer)
 })
 
 onUnmounted(() => {
@@ -72,6 +89,7 @@ onUnmounted(() => {
     clearInterval(patchPollTimer)
     patchPollTimer = null
   }
+  window.removeEventListener('open-patch-drawer', handleOpenPatchDrawer)
 })
 
 function handleSearch() {

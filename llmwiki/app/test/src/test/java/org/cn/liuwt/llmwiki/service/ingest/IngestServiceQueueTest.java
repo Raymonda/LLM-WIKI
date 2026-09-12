@@ -5,7 +5,9 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.IngestBatchDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
+import org.cn.liuwt.llmwiki.common.dal.mapper.IngestBatchMapper;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel.ExecutionStepModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
@@ -38,6 +40,9 @@ class IngestServiceQueueTest {
     @Mock
     private ExecutionMapper executionMapper;
 
+    @Mock
+    private IngestBatchMapper batchMapper;
+
     @InjectMocks
     private IngestService ingestService;
 
@@ -45,6 +50,7 @@ class IngestServiceQueueTest {
     static void initTableInfo() {
         MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
         TableInfoHelper.initTableInfo(assistant, ExecutionDO.class);
+        TableInfoHelper.initTableInfo(assistant, IngestBatchDO.class);
     }
 
     @Test
@@ -145,8 +151,58 @@ class IngestServiceQueueTest {
         assertFalse(queued);
     }
 
+    @Test
+    void shouldReviveCompletedBatchWhenQueueResume() {
+        when(executionMapper.update(any(), any())).thenReturn(1);
+        ExecutionDO executionDO = new ExecutionDO();
+        executionDO.setId(11L);
+        executionDO.setBatchId(88L);
+        when(executionMapper.selectById(11L)).thenReturn(executionDO);
+        when(batchMapper.update(any(), any())).thenReturn(1);
+        ArgumentCaptor<LambdaUpdateWrapper<IngestBatchDO>> captor = batchCaptor();
+
+        boolean queued = ingestService.queueResume(11L, null);
+
+        assertTrue(queued);
+        verify(batchMapper).update(any(), captor.capture());
+        LambdaUpdateWrapper<IngestBatchDO> wrapper = captor.getValue();
+        wrapper.getSqlSegment();
+        Map<String, Object> params = wrapper.getParamNameValuePairs();
+        assertTrue(params.containsValue("completed"));
+        assertTrue(params.containsValue("active"));
+    }
+
+    @Test
+    void shouldReturnFalseAndSkipBatchReviveWhenQueueResumeCasLoses() {
+        when(executionMapper.update(any(), any())).thenReturn(0);
+
+        boolean queued = ingestService.queueResume(11L, null);
+
+        assertFalse(queued);
+        verify(executionMapper, never()).selectById(anyLong());
+        verify(batchMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void shouldNotTouchBatchWhenResumedExecutionHasNoBatch() {
+        when(executionMapper.update(any(), any())).thenReturn(1);
+        ExecutionDO executionDO = new ExecutionDO();
+        executionDO.setId(11L);
+        when(executionMapper.selectById(11L)).thenReturn(executionDO);
+
+        boolean queued = ingestService.queueResume(11L, null);
+
+        assertTrue(queued);
+        verify(batchMapper, never()).update(any(), any());
+    }
+
     @SuppressWarnings("unchecked")
     private ArgumentCaptor<LambdaUpdateWrapper<ExecutionDO>> captor() {
+        return ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    private ArgumentCaptor<LambdaUpdateWrapper<IngestBatchDO>> batchCaptor() {
         return ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
     }
 

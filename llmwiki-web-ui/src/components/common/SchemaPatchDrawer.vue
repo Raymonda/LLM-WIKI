@@ -147,6 +147,7 @@ async function onBatchReject() {
     toast.info(t('schemaPatch.toastBatchReject', [r.processed, r.failed ? t('schemaPatch.failedSuffix', [r.failed]) : '']))
     selectedIds.value = new Set()
     await load()
+    emit('applied')
   } catch (e: any) {
     toast.error(e?.message || t('schemaPatch.toastBatchRejectFail'))
   } finally {
@@ -163,6 +164,7 @@ async function onBatchIgnore() {
     toast.info(t('schemaPatch.toastBatchIgnore', [r.processed, r.failed ? t('schemaPatch.failedSuffix', [r.failed]) : '']))
     selectedIds.value = new Set()
     await load()
+    emit('applied')
   } catch (e: any) {
     toast.error(e?.message || t('schemaPatch.toastBatchIgnoreFail'))
   } finally {
@@ -256,6 +258,7 @@ async function onReject(p: SchemaPatchInfo) {
     await rejectPatch(p.id)
     removeFromBoth(p.id)
     toast.info(t('schemaPatch.toastReject'))
+    emit('applied')
   } catch (e: any) {
     toast.error(e?.message || t('schemaPatch.toastOpFail'))
   } finally {
@@ -269,6 +272,7 @@ async function onIgnore(p: SchemaPatchInfo) {
     await ignorePatch(p.id)
     removeFromBoth(p.id)
     toast.info(t('schemaPatch.toastIgnore'))
+    emit('applied')
   } catch (e: any) {
     toast.error(e?.message || t('schemaPatch.toastOpFail'))
   } finally {
@@ -283,6 +287,7 @@ async function onPromote(p: SchemaPatchInfo) {
     observingPatches.value = observingPatches.value.filter(x => x.id !== p.id)
     pendingPatches.value = [...pendingPatches.value, { ...p, status: 'PENDING' }]
     toast.success(t('schemaPatch.toastPromote'))
+    emit('applied')
   } catch (e: any) {
     toast.error(e?.message || t('schemaPatch.toastPromoteFail'))
   } finally {
@@ -300,6 +305,7 @@ async function onExecuteRuling(ruling: ConflictReviewInfo, action: string) {
     const receipt = await executeRuling(ruling.id, action)
     submittedRulings.value = new Map(submittedRulings.value).set(ruling.id, receipt.executionId)
     toast.success(t('schemaPatch.rulingSubmitted'))
+    emit('applied')
   } catch (e: any) {
     toast.error(e?.message || t('schemaPatch.toastRulingExecFail'))
   } finally {
@@ -313,6 +319,7 @@ async function onCancelRuling(ruling: ConflictReviewInfo) {
     await cancelRuling(ruling.id)
     toast.info(t('schemaPatch.toastRulingCancel'))
     conflictRulings.value = conflictRulings.value.filter(r => r.id !== ruling.id)
+    emit('applied')
   } catch (e: any) {
     toast.error(e?.message || t('schemaPatch.toastOpFail'))
   } finally {

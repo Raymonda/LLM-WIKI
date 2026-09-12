@@ -6,6 +6,8 @@ import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
 import org.cn.liuwt.llmwiki.service.harness.mq.IngestDispatcher;
 import org.cn.liuwt.llmwiki.service.harness.mq.PipelineTaskMessage;
+import org.cn.liuwt.llmwiki.service.ingest.IngestBatchScheduler;
+import org.cn.liuwt.llmwiki.service.ingest.IngestService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,6 +32,12 @@ public class BackgroundTaskService {
     @Autowired
     private IngestDispatcher ingestDispatcher;
 
+    @Autowired
+    private IngestService ingestService;
+
+    @Autowired
+    private IngestBatchScheduler ingestBatchScheduler;
+
     public TaskReceipt submit(Long scopeId, Long submittedBy, String taskType, Map<String, Object> payload) {
         BackgroundTaskHandler handler = requireHandler(taskType);
         assertNoActiveDuplicate(handler, scopeId, payload, null);
@@ -53,6 +61,9 @@ public class BackgroundTaskService {
         if (!"failed".equals(execution.getStatus())) {
             throw new BusinessException(ErrorCode.TASK_NOT_RETRYABLE, execution.getStatus());
         }
+        if ("ingest".equals(execution.getType())) {
+            return retryIngest(execution, submittedBy);
+        }
         BackgroundTaskHandler handler = registry.getHandler(execution.getType());
         if (handler == null) {
             throw new BusinessException(ErrorCode.TASK_TYPE_UNSUPPORTED, execution.getType());
@@ -65,6 +76,15 @@ public class BackgroundTaskService {
         log.info("Background task retried: executionId={}, taskType={}, by={}",
             executionId, execution.getType(), submittedBy);
         return new TaskReceipt(executionId, execution.getType(), "running");
+    }
+
+    private TaskReceipt retryIngest(ExecutionModel execution, Long submittedBy) {
+        if (!ingestService.queueResume(execution.getId(), null)) {
+            throw new BusinessException(ErrorCode.TASK_NOT_RETRYABLE, execution.getStatus());
+        }
+        ingestBatchScheduler.kick(execution.getScopeId());
+        log.info("Ingest execution retried: executionId={}, by={}", execution.getId(), submittedBy);
+        return new TaskReceipt(execution.getId(), execution.getType(), "pending");
     }
 
     private BackgroundTaskHandler requireHandler(String taskType) {

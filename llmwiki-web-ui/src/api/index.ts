@@ -2,6 +2,14 @@ import axios from 'axios'
 import { useAuthStore } from '@/stores/auth'
 import { i18n } from '@/locales'
 
+function interpolate(template: string, args?: unknown[]): string {
+  if (!args || args.length === 0) return template
+  return template.replace(/\{(\d+)\}/g, (placeholder, index) => {
+    const value = args[Number(index)]
+    return value === null || value === undefined ? placeholder : String(value)
+  })
+}
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000,
@@ -32,7 +40,7 @@ api.interceptors.response.use(
     const i18nKey = `errors.${data.code}`
     const localizedMsg = te(i18nKey)
       ? t(i18nKey, data.args || [])
-      : (data.msg || 'Request failed')
+      : interpolate(data.msg || 'Request failed', data.args)
     const error = new Error(localizedMsg) as any
     error.code = data.code
     error.extra = data.extra

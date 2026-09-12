@@ -5,6 +5,8 @@ import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
 import org.cn.liuwt.llmwiki.service.harness.mq.IngestDispatcher;
 import org.cn.liuwt.llmwiki.service.harness.mq.PipelineTaskMessage;
+import org.cn.liuwt.llmwiki.service.ingest.IngestBatchScheduler;
+import org.cn.liuwt.llmwiki.service.ingest.IngestService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -32,6 +34,12 @@ class BackgroundTaskRetryTest {
 
     @Mock
     private IngestDispatcher ingestDispatcher;
+
+    @Mock
+    private IngestService ingestService;
+
+    @Mock
+    private IngestBatchScheduler ingestBatchScheduler;
 
     @InjectMocks
     private BackgroundTaskService service;
@@ -82,6 +90,33 @@ class BackgroundTaskRetryTest {
 
         assertEquals("TASK_005", ex.getCode());
         verify(executionTracker, never()).resetExecutionForRetry(any());
+    }
+
+    @Test
+    void shouldQueueResumeAndKickSchedulerWhenRetryingIngest() {
+        ExecutionModel failed = execution(60L, "ingest", 1L, "failed");
+        when(executionTracker.getExecution(60L)).thenReturn(failed);
+        when(ingestService.queueResume(60L, null)).thenReturn(true);
+
+        TaskReceipt receipt = service.retry(1L, 60L, 7L);
+
+        assertEquals("ingest", receipt.taskType());
+        assertEquals("pending", receipt.status());
+        verify(ingestService).queueResume(60L, null);
+        verify(ingestBatchScheduler).kick(1L);
+        verify(ingestDispatcher, never()).dispatchTask(any(), any());
+    }
+
+    @Test
+    void shouldRejectIngestRetryWhenQueueResumeCasLoses() {
+        ExecutionModel failed = execution(60L, "ingest", 1L, "failed");
+        when(executionTracker.getExecution(60L)).thenReturn(failed);
+        when(ingestService.queueResume(60L, null)).thenReturn(false);
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.retry(1L, 60L, 7L));
+
+        assertEquals("TASK_005", ex.getCode());
+        verify(ingestBatchScheduler, never()).kick(any());
     }
 
     private static ExecutionModel execution(Long id, String type, Long scopeId, String status) {

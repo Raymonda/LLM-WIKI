@@ -16,6 +16,7 @@ const emit = defineEmits<{
   (e: 'reanalyze', executionId: number, guidance?: string): void
   (e: 'retry', executionId: number): void
   (e: 'retry-all'): void
+  (e: 'view', executionId: number): void
 }>()
 
 const { t } = useI18n()
@@ -49,6 +50,10 @@ function onReanalyze(executionId: number, guidance?: string) {
 
 function onRetry(executionId: number) {
   emit('retry', executionId)
+}
+
+function onView(executionId: number) {
+  emit('view', executionId)
 }
 </script>
 
@@ -85,6 +90,7 @@ function onRetry(executionId: number) {
           @confirm="onConfirm"
           @reanalyze="onReanalyze"
           @retry="onRetry"
+          @view="onView"
         />
       </div>
     </div>

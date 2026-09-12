@@ -216,6 +216,7 @@ export default {
   inboxGroupFailed: 'Failed',
   itemTokens: 'Token {0}',
   itemViewAnalysis: 'View analysis',
+  inboxViewTask: 'View task progress',
   itemHideAnalysis: 'Hide analysis',
   itemConfirmWrite: 'Confirm & write',
   statusQueued: 'Queued',
@@ -235,4 +236,6 @@ export default {
   inboxRetryAll: 'Retry all',
   inboxRetryAllMessage: 'Retry {0} failed item(s)?',
   inboxRetryAllPartial: '{0} retry request(s) failed to submit',
+  batchBarMore: 'More batches ({0})',
+  batchBarCollapse: 'Show less',
 }

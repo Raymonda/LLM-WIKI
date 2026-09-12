@@ -37,28 +37,54 @@ public class SchemaStructuredModel {
         public List<String> flattenPaths() {
             List<String> paths = new ArrayList<>();
             for (TaxonomyNode root : roots) {
-                flattenNode(root, "", paths);
+                flattenNode(root, "", paths, false);
+            }
+            return paths;
+        }
+
+        public List<String> flattenLabelPaths() {
+            List<String> paths = new ArrayList<>();
+            for (TaxonomyNode root : roots) {
+                flattenNode(root, "", paths, true);
             }
             return paths;
         }
 
         public boolean isValidPath(String path) {
             if (path == null || path.isBlank()) return false;
-            String normalized = path.trim().toLowerCase();
-            List<String> allPaths = flattenPaths();
-            for (String p : allPaths) {
-                if (p.equalsIgnoreCase(normalized)) return true;
-                if (normalized.startsWith(p + "/") || p.startsWith(normalized + "/")) return true;
+            String[] segments = path.trim().split("/");
+            List<TaxonomyNode> level = roots;
+            for (String rawSegment : segments) {
+                String segment = rawSegment.trim().toLowerCase();
+                if (segment.isEmpty()) return false;
+                TaxonomyNode next = null;
+                for (TaxonomyNode node : level) {
+                    if (matchesSegment(node, segment)) {
+                        next = node;
+                        break;
+                    }
+                }
+                if (next == null) return false;
+                if (next.getChildren() == null || next.getChildren().isEmpty()) return true;
+                level = next.getChildren();
             }
-            return false;
+            return true;
         }
 
-        private void flattenNode(TaxonomyNode node, String parentPath, List<String> paths) {
-            String currentPath = parentPath.isEmpty() ? node.getId() : parentPath + "/" + node.getId();
+        private boolean matchesSegment(TaxonomyNode node, String segment) {
+            String id = node.getId() == null ? "" : node.getId().trim().toLowerCase();
+            String label = node.getLabel() == null ? "" : node.getLabel().trim().toLowerCase();
+            return segment.equals(id) || segment.equals(label);
+        }
+
+        private void flattenNode(TaxonomyNode node, String parentPath, List<String> paths, boolean useLabel) {
+            String name = useLabel ? node.getLabel() : node.getId();
+            if (name == null || name.isBlank()) name = useLabel ? node.getId() : node.getLabel();
+            String currentPath = parentPath.isEmpty() ? name : parentPath + "/" + name;
             paths.add(currentPath);
             if (node.getChildren() != null) {
                 for (TaxonomyNode child : node.getChildren()) {
-                    flattenNode(child, currentPath, paths);
+                    flattenNode(child, currentPath, paths, useLabel);
                 }
             }
         }
@@ -83,6 +109,51 @@ public class SchemaStructuredModel {
                 if (type.equalsIgnoreCase(t.getType())) return t;
             }
             return null;
+        }
+
+        public List<PageTemplate> findByCategory(String categoryPath) {
+            if (categoryPath == null || categoryPath.isBlank()) return List.of();
+            String[] segments = categoryPath.trim().toLowerCase().split("/");
+            for (int i = segments.length - 1; i >= 0; i--) {
+                List<PageTemplate> exact = matchExact(segments[i].trim());
+                if (!exact.isEmpty()) return exact;
+            }
+            for (int i = segments.length - 1; i >= 0; i--) {
+                List<PageTemplate> fuzzy = matchBySubstring(segments[i].trim());
+                if (!fuzzy.isEmpty()) return fuzzy;
+            }
+            return List.of();
+        }
+
+        private List<PageTemplate> matchExact(String segment) {
+            if (segment.isEmpty()) return List.of();
+            List<PageTemplate> matched = new ArrayList<>();
+            for (PageTemplate t : pageTemplates) {
+                String type = t.getType() == null ? "" : t.getType().trim().toLowerCase();
+                String label = t.getLabel() == null ? "" : t.getLabel().trim().toLowerCase();
+                if ((!type.isEmpty() && type.equals(segment)) || (!label.isEmpty() && label.equals(segment))) {
+                    matched.add(t);
+                }
+            }
+            return matched;
+        }
+
+        private List<PageTemplate> matchBySubstring(String segment) {
+            if (segment.length() < 2) return List.of();
+            List<PageTemplate> matched = new ArrayList<>();
+            for (PageTemplate t : pageTemplates) {
+                if (containsEither(t.getType(), segment) || containsEither(t.getLabel(), segment)) {
+                    matched.add(t);
+                }
+            }
+            return matched;
+        }
+
+        private boolean containsEither(String candidate, String segment) {
+            if (candidate == null) return false;
+            String normalized = candidate.trim().toLowerCase();
+            if (normalized.length() < 2) return false;
+            return normalized.contains(segment) || segment.contains(normalized);
         }
     }
 

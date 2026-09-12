@@ -7,6 +7,7 @@ import {
   cancelIngest,
   deleteIngest,
   executeIngest,
+  getIngestProgress,
   reanalyzeIngest,
   pauseIngest,
   resumeIngest,
@@ -254,6 +255,15 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
       const parseDoc = task.stepStates.find(s => s.name === 'UPLOAD')
       const analyzeChunks = task.stepStates.find(s => s.name === 'ANALYZE')
       return parseDoc?.status === 'completed' && analyzeChunks?.status === 'completed'
+    }
+
+    function syncStageFromSteps(task: IngestTask) {
+      if (task.currentStep !== 'analyzing') return
+      if (!isPhase1Completed(task)) return
+      const phase2Reached = task.stepStates.some(s =>
+        (s.name === 'WRITE' || s.name === 'COMPLETE')
+        && (s.status === 'running' || s.status === 'completed'))
+      if (phase2Reached) task.currentStep = 'executing'
     }
 
     function getOrCreateTask(id: number): IngestTask {
@@ -688,6 +698,8 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
         }
       }
 
+      if (task.isPhaseRunning && !task.tickTimer) startTaskTick(task)
+      syncStageFromSteps(task)
     })
 
     es.addEventListener('phase1_done', (e: MessageEvent) => {
@@ -868,6 +880,85 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
     }
   }
 
+  function ensureTaskForExecution(execInfo: ExecutionInfo): IngestTask {
+    const existing = tasks.value.get(execInfo.executionId)
+    if (existing) return existing
+    const plain = createEmptyTask()
+    plain.executionId = execInfo.executionId
+    plain.executionStatus = execInfo.status
+    plain.totalTokens = execInfo.totalTokens || 0
+    plain.sourceId = execInfo.sourceId || null
+    if (execInfo.sourceId && execInfo.sourceName) {
+      plain.uploadedFile = {
+        id: execInfo.sourceId,
+        name: execInfo.sourceName,
+        size: 0,
+        format: '',
+      }
+    }
+    tasks.value.set(execInfo.executionId, plain)
+    return tasks.value.get(execInfo.executionId)!
+  }
+
+  function applyExecutionInfo(task: IngestTask, execInfo: ExecutionInfo) {
+    if (execInfo.status === 'running') {
+      task.currentStep = isPhase1Completed(task) ? 'executing' : 'analyzing'
+      task.isPhaseRunning = true
+      connectTaskSSE(task)
+      startTaskTick(task)
+    } else if (execInfo.status === 'pending') {
+      task.executionStatus = 'pending'
+      task.currentStep = 'analyzing'
+      task.isPhaseRunning = true
+      connectTaskSSE(task)
+      startTaskTick(task)
+    } else if (execInfo.status === 'completed' || execInfo.status === 'budget_exhausted') {
+      task.executionStatus = execInfo.status
+      task.totalTokens = execInfo.totalTokens || 0
+      task.isPhaseRunning = false
+      task.currentStep = 'done'
+      task.floatingDismissed = true
+      if (execInfo.status === 'budget_exhausted') {
+        task.pipelineError = 'Token 用量已达月度参考值，操作不受限制'
+      }
+      if (execInfo.sourceId && execInfo.sourceName && !task.uploadedFile) {
+        task.uploadedFile = {
+          id: execInfo.sourceId,
+          name: execInfo.sourceName,
+          size: 0,
+          format: '',
+        }
+      }
+      for (const meta of INGEST_STEPS) {
+        autoAdvanceStep(task, meta.name, 'completed')
+      }
+      if (task.entityPages.length === 0 && task.chapterPages.length === 0 && task.affectedPages.length === 0 && !task.summaryPage) {
+        connectTaskSSE(task)
+      } else {
+        scheduleCleanup(task)
+      }
+    } else if (execInfo.status === 'failed') {
+      task.pipelineError = execInfo.errorMessage || '处理失败，请重试'
+      task.isPhaseRunning = false
+    } else if (execInfo.status === 'awaiting_confirmation' || execInfo.status === 'awaiting_review') {
+      task.executionStatus = execInfo.status
+      task.currentStep = 'review'
+      task.isPhaseRunning = false
+      connectTaskSSE(task)
+    } else if (execInfo.status === 'confirmed') {
+      task.executionStatus = 'confirmed'
+      task.currentStep = 'executing'
+      task.isPhaseRunning = true
+      connectTaskSSE(task)
+      startTaskTick(task)
+    } else if (execInfo.status === 'paused') {
+      task.executionStatus = 'paused'
+      task.currentStep = 'paused'
+      task.isPhaseRunning = false
+      connectTaskSSE(task)
+    }
+  }
+
   async function recoverActiveTasks(scopeId: number) {
     if (initializing.value) return
     initializing.value = true
@@ -885,88 +976,29 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
       }
 
       for (const execInfo of activeList) {
-        let task = tasks.value.get(execInfo.executionId)
-        if (!task) {
-          const plain = createEmptyTask()
-          plain.executionId = execInfo.executionId
-          plain.executionStatus = execInfo.status
-          plain.totalTokens = execInfo.totalTokens || 0
-          plain.sourceId = execInfo.sourceId || null
-          if (execInfo.sourceId && execInfo.sourceName) {
-            plain.uploadedFile = {
-              id: execInfo.sourceId,
-              name: execInfo.sourceName,
-              size: 0,
-              format: '',
-            }
-          }
-          tasks.value.set(execInfo.executionId, plain)
-          task = tasks.value.get(execInfo.executionId)!
-        }
-
-        if (execInfo.status === 'running') {
-          task.currentStep = isPhase1Completed(task) ? 'executing' : 'analyzing'
-          task.isPhaseRunning = true
-          connectTaskSSE(task)
-          startTaskTick(task)
-        } else if (execInfo.status === 'pending') {
-          task.currentStep = 'upload'
-          task.isPhaseRunning = false
-        } else if (execInfo.status === 'completed' || execInfo.status === 'budget_exhausted') {
-          task.executionStatus = execInfo.status
-          task.totalTokens = execInfo.totalTokens || 0
-          task.isPhaseRunning = false
-          task.currentStep = 'done'
-          task.floatingDismissed = true
-          if (execInfo.status === 'budget_exhausted') {
-            task.pipelineError = 'Token 用量已达月度参考值，操作不受限制'
-          }
-          if (execInfo.sourceId && execInfo.sourceName && !task.uploadedFile) {
-            task.uploadedFile = {
-              id: execInfo.sourceId,
-              name: execInfo.sourceName,
-              size: 0,
-              format: '',
-            }
-          }
-          for (const meta of INGEST_STEPS) {
-            autoAdvanceStep(task, meta.name, 'completed')
-          }
-          if (task.entityPages.length === 0 && task.chapterPages.length === 0 && task.affectedPages.length === 0 && !task.summaryPage) {
-            connectTaskSSE(task)
-          } else {
-            scheduleCleanup(task)
-          }
-        } else if (execInfo.status === 'failed') {
-          task.pipelineError = execInfo.errorMessage || '处理失败，请重试'
-          task.isPhaseRunning = false
-        } else if (execInfo.status === 'awaiting_confirmation' || execInfo.status === 'awaiting_review') {
-          task.executionStatus = execInfo.status
-          task.currentStep = 'review'
-          task.isPhaseRunning = false
-          connectTaskSSE(task)
-        } else if (execInfo.status === 'paused') {
-          task.executionStatus = 'paused'
-          task.currentStep = 'paused'
-          task.isPhaseRunning = false
-        }
+        const task = ensureTaskForExecution(execInfo)
+        applyExecutionInfo(task, execInfo)
       }
 
       if (activeTaskId.value == null) {
         const runningTask = activeList.find(e => e.status === 'running')
         const reviewTask = activeList.find(e => e.status === 'awaiting_confirmation' || e.status === 'awaiting_review')
+        const pausedTask = activeList.find(e => e.status === 'paused')
+        const confirmedTask = activeList.find(e => e.status === 'confirmed')
         const completedTask = activeList.find(e => e.status === 'completed' || e.status === 'budget_exhausted')
         const pendingTask = activeList.find(e => e.status === 'pending')
-        const target = runningTask || reviewTask || completedTask || pendingTask
+        const target = runningTask || reviewTask || pausedTask || confirmedTask || completedTask || pendingTask
         if (target) setActiveTask(target.executionId)
       } else {
         const current = tasks.value.get(activeTaskId.value)
         if (!current || current.currentStep === 'upload' && current.executionId === 0) {
           const runningTask = activeList.find(e => e.status === 'running')
           const reviewTask = activeList.find(e => e.status === 'awaiting_confirmation' || e.status === 'awaiting_review')
+          const pausedTask = activeList.find(e => e.status === 'paused')
+          const confirmedTask = activeList.find(e => e.status === 'confirmed')
           const completedTask = activeList.find(e => e.status === 'completed' || e.status === 'budget_exhausted')
           const pendingTask = activeList.find(e => e.status === 'pending')
-          const target = runningTask || reviewTask || completedTask || pendingTask
+          const target = runningTask || reviewTask || pausedTask || confirmedTask || completedTask || pendingTask
           if (target) setActiveTask(target.executionId)
         }
       }
@@ -975,6 +1007,20 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
     } finally {
       initializing.value = false
     }
+  }
+
+  async function openTask(executionId: number) {
+    const existing = tasks.value.get(executionId)
+    if (!existing || (existing.stepStates.length === 0 && !existing.isPhaseRunning)) {
+      try {
+        const execInfo = await getIngestProgress(executionId)
+        const task = ensureTaskForExecution(execInfo)
+        applyExecutionInfo(task, execInfo)
+      } catch (e) {
+        console.error('Failed to open task:', e)
+      }
+    }
+    setActiveTask(executionId)
   }
 
   function clear() {
@@ -1296,6 +1342,7 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
     closeEventSource,
     recoverActiveTasks,
     setActiveTask,
+    openTask,
     removeTask,
     cancelTaskForClose,
   }

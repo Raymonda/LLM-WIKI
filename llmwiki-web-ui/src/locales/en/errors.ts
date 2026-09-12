@@ -14,4 +14,8 @@ export default {
   WIKI_002: 'Raw directory is immutable',
   LINT_001: 'A health check is already running',
   QUERY_001: 'Query execution failed',
+  TASK_001: 'Retry is not supported for this task type yet: {0}',
+  TASK_003: 'Task not found: {0}',
+  TASK_004: 'Task {0} does not belong to the current scope',
+  TASK_005: 'Task cannot be retried in its current state: {0}',
 }

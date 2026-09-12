@@ -55,6 +55,22 @@ const batchMode = computed(() => batchStore.selectedBatchId != null)
 const selectedBatchInfo = computed(
   () => batchStore.inbox.find(b => b.batchId === batchStore.selectedBatchId) ?? null,
 )
+
+const BATCH_BAR_COLLAPSED_LIMIT = 6
+const batchBarExpanded = ref(false)
+const visibleBatchChips = computed(() => {
+  const list = batchInbox.value
+  if (batchBarExpanded.value || list.length <= BATCH_BAR_COLLAPSED_LIMIT) return list
+  const head = list.slice(0, BATCH_BAR_COLLAPSED_LIMIT)
+  const selected = list.find(b => b.batchId === batchStore.selectedBatchId)
+  if (selected && !head.some(b => b.batchId === selected.batchId)) {
+    head[BATCH_BAR_COLLAPSED_LIMIT - 1] = selected
+  }
+  return head
+})
+const hiddenBatchCount = computed(() =>
+  Math.max(0, batchInbox.value.length - visibleBatchChips.value.length),
+)
 const batchItems = computed(() => batchStore.currentBatch?.items ?? [])
 const userGuidance = computed({
   get: () => store.userGuidance,
@@ -364,7 +380,13 @@ async function handlePauseExecution() {
   await store.pauseExecution()
 }
 
+const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'cancelled', 'budget_exhausted']
+
 async function handleCloseTask(task: { executionId: number; isPhaseRunning: boolean; status: string }) {
+  if (TERMINAL_TASK_STATUSES.includes(task.status)) {
+    store.deleteExecution(task.executionId)
+    return
+  }
   if (task.isPhaseRunning) {
     await store.pauseExecution()
     const confirmed = await showConfirm({
@@ -422,6 +444,11 @@ async function openBatch(batchId: number) {
 function exitBatch() {
   batchStore.selectBatch(null)
   router.replace({ path: '/ingest' })
+}
+
+function handleInboxItemView(executionId: number) {
+  exitBatch()
+  store.openTask(executionId)
 }
 
 async function runBatchAction(action: () => Promise<unknown>) {
@@ -578,7 +605,7 @@ onMounted(async () => {
         <CheckCircle v-else-if="task.currentStep === 'done'" :size="12" style="color: var(--success)" />
         <ClipboardCheck v-else-if="task.currentStep === 'review'" :size="12" style="color: var(--accent-primary)" />
         <FileText v-else :size="12" />
-        <span>{{ task.sourceName || t('ingest.materialFallback', [task.executionId]) }}</span>
+        <span class="ingest-view__task-tab-name" :title="task.sourceName || t('ingest.materialFallback', [task.executionId])">{{ task.sourceName || t('ingest.materialFallback', [task.executionId]) }}</span>
         <span v-if="task.isPhaseRunning" class="ingest-view__task-tab-progress">{{ Math.round(task.progress * 100) }}%</span>
         <span class="ingest-view__task-tab-close" @click.stop="handleCloseTask(task)" :title="t('ingest.closeTask')" role="button">
           <X :size="10" />
@@ -606,9 +633,9 @@ onMounted(async () => {
       :status="progressBarStatus"
     />
 
-    <div v-if="batchInbox.length > 0" class="ingest-view__batch-bar">
+    <div v-if="batchInbox.length > 0" class="ingest-view__batch-bar" :class="{ 'ingest-view__batch-bar--expanded': batchBarExpanded }">
       <button
-        v-for="batch in batchInbox"
+        v-for="batch in visibleBatchChips"
         :key="batch.batchId"
         :class="['ingest-view__batch-chip', { 'ingest-view__batch-chip--active': batch.batchId === batchStore.selectedBatchId }]"
         @click="openBatch(batch.batchId)"
@@ -616,6 +643,14 @@ onMounted(async () => {
         <Layers :size="12" />
         <span>{{ t('ingest.batchSelectLabel') }} #{{ batch.batchId }}</span>
         <span v-if="batch.awaitingCount > 0" class="ingest-view__batch-chip-badge">{{ batch.awaitingCount }}</span>
+      </button>
+      <button
+        v-if="batchInbox.length > BATCH_BAR_COLLAPSED_LIMIT"
+        class="ingest-view__btn-ghost"
+        type="button"
+        @click="batchBarExpanded = !batchBarExpanded"
+      >
+        {{ batchBarExpanded ? t('ingest.batchBarCollapse') : t('ingest.batchBarMore', [hiddenBatchCount]) }}
       </button>
       <button v-if="batchMode" class="ingest-view__btn-ghost" @click="exitBatch">
         {{ t('ingest.batchExitView') }}
@@ -644,6 +679,7 @@ onMounted(async () => {
         @reanalyze="handleItemReanalyze"
         @retry="handleItemRetry"
         @retry-all="handleRetryAllFailed"
+        @view="handleInboxItemView"
       />
     </div>
 
@@ -1242,6 +1278,8 @@ onMounted(async () => {
   margin-bottom: var(--space-4);
   padding: var(--space-2) 0;
   border-bottom: 1px solid var(--border-default);
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .ingest-view__task-tab {
@@ -1256,6 +1294,15 @@ onMounted(async () => {
   font-size: var(--font-small);
   cursor: pointer;
   transition: all 200ms ease;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.ingest-view__task-tab-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ingest-view__task-tab--active {
@@ -2393,6 +2440,11 @@ onMounted(async () => {
   flex-wrap: wrap;
   gap: var(--space-2);
   margin-bottom: var(--space-4);
+}
+
+.ingest-view__batch-bar--expanded {
+  max-height: 168px;
+  overflow-y: auto;
 }
 
 .ingest-view__batch-chip {

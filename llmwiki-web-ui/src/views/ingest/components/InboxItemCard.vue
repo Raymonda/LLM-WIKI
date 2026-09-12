@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronDown, FileText } from 'lucide-vue-next'
+import { ArrowRight, ChevronDown, FileText } from 'lucide-vue-next'
 import type { IngestBatchItemInfo } from '@/api/ingest'
 import { parseAnalyzeOutput } from '@/utils/parseAnalyzeOutput'
 import AnalysisSummaryPanel from './AnalysisSummaryPanel.vue'
@@ -15,6 +15,7 @@ const emit = defineEmits<{
   (e: 'confirm', executionId: number, guidance?: string): void
   (e: 'reanalyze', executionId: number, guidance?: string): void
   (e: 'retry', executionId: number): void
+  (e: 'view', executionId: number): void
 }>()
 
 const { t } = useI18n()
@@ -76,6 +77,10 @@ function submitReanalyze() {
 function submitRetry() {
   emit('retry', props.item.executionId)
 }
+
+function submitView() {
+  emit('view', props.item.executionId)
+}
 </script>
 
 <template>
@@ -90,6 +95,15 @@ function submitRetry() {
       <span v-if="item.totalTokens" class="inbox-item__tokens">
         {{ t('ingest.itemTokens', [item.totalTokens]) }}
       </span>
+      <button
+        class="inbox-item__view"
+        type="button"
+        :title="t('ingest.inboxViewTask')"
+        :aria-label="t('ingest.inboxViewTask')"
+        @click="submitView"
+      >
+        <ArrowRight :size="14" />
+      </button>
     </header>
 
     <p v-if="item.errorMessage" class="inbox-item__error">{{ item.errorMessage }}</p>
@@ -238,6 +252,27 @@ function submitRetry() {
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
+}
+
+.inbox-item__view {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.inbox-item__view:hover {
+  color: var(--accent-primary);
+  background: var(--accent-light);
 }
 
 .inbox-item__error {

@@ -1,6 +1,7 @@
 package org.cn.liuwt.llmwiki.service.ingest;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionStepDO;
@@ -33,6 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +52,8 @@ public class IngestBatchService {
         Set.of("pending", "confirmed", "awaiting_confirmation", "awaiting_review", "failed");
     private static final Set<String> CANCEL_INTERRUPT_STATUSES = Set.of("running", "paused");
     private static final int INBOX_RETENTION_DAYS = 7;
+    private static final int INBOX_OPEN_LIMIT = 100;
+    private static final int INBOX_CLOSED_LIMIT = 20;
 
     @Autowired private ExecutionMapper executionMapper;
     @Autowired private ExecutionStepMapper executionStepMapper;
@@ -218,23 +222,29 @@ public class IngestBatchService {
 
     public List<IngestBatchInfo> listInbox(Long scopeId) {
         LocalDateTime cutoff = LocalDateTime.now().minusDays(INBOX_RETENTION_DAYS);
-        List<IngestBatchDO> batches = batchMapper.selectList(new LambdaQueryWrapper<IngestBatchDO>()
+        List<IngestBatchDO> openBatches = batchMapper.selectList(new LambdaQueryWrapper<IngestBatchDO>()
             .eq(IngestBatchDO::getScopeId, scopeId)
-            .and(w -> w.in(IngestBatchDO::getStatus, "active", "paused")
-                .or(o -> o.eq(IngestBatchDO::getStatus, "completed").gt(IngestBatchDO::getCompletedAt, cutoff))
-                .or(o -> o.eq(IngestBatchDO::getStatus, "cancelled").gt(IngestBatchDO::getCompletedAt, cutoff)))
-            .orderByDesc(IngestBatchDO::getCreatedAt));
-        if (batches.isEmpty()) {
+            .in(IngestBatchDO::getStatus, "active", "paused")
+            .orderByDesc(IngestBatchDO::getCreatedAt)
+            .last("LIMIT " + INBOX_OPEN_LIMIT));
+        List<IngestBatchDO> closedBatches = batchMapper.selectList(new LambdaQueryWrapper<IngestBatchDO>()
+            .eq(IngestBatchDO::getScopeId, scopeId)
+            .in(IngestBatchDO::getStatus, "completed", "cancelled")
+            .gt(IngestBatchDO::getCompletedAt, cutoff)
+            .orderByDesc(IngestBatchDO::getCompletedAt)
+            .last("LIMIT " + INBOX_CLOSED_LIMIT));
+        if (openBatches.isEmpty() && closedBatches.isEmpty()) {
             return List.of();
         }
+        List<IngestBatchDO> batches = new ArrayList<>(openBatches);
+        batches.addAll(closedBatches);
+        batches.sort(Comparator.comparing(IngestBatchDO::getCreatedAt,
+            Comparator.nullsLast(Comparator.<LocalDateTime>reverseOrder())));
         List<Long> batchIds = batches.stream().map(IngestBatchDO::getId).toList();
-        Map<Long, List<ExecutionDO>> itemsByBatch = executionMapper.selectList(new LambdaQueryWrapper<ExecutionDO>()
-                .in(ExecutionDO::getBatchId, batchIds))
-            .stream()
-            .collect(Collectors.groupingBy(ExecutionDO::getBatchId));
+        Map<Long, Map<String, Integer>> countsByBatch = loadStatusCounts(batchIds);
         List<IngestBatchInfo> result = new ArrayList<>();
         for (IngestBatchDO batch : batches) {
-            result.add(toBatchInfo(batch, itemsByBatch.getOrDefault(batch.getId(), List.of())));
+            result.add(toBatchInfo(batch, countsByBatch.getOrDefault(batch.getId(), Map.of())));
         }
         return result;
     }
@@ -325,7 +335,7 @@ public class IngestBatchService {
         return model;
     }
 
-    private IngestBatchInfo toBatchInfo(IngestBatchDO batch, List<ExecutionDO> items) {
+    private IngestBatchInfo toBatchInfo(IngestBatchDO batch, Map<String, Integer> statusCounts) {
         IngestBatchInfo info = new IngestBatchInfo();
         info.setBatchId(batch.getId());
         info.setStatus(batch.getStatus());
@@ -333,20 +343,41 @@ public class IngestBatchService {
         info.setGuidance(batch.getGuidance());
         info.setCreatedAt(batch.getCreatedAt());
         info.setCompletedAt(batch.getCompletedAt());
-        for (ExecutionDO item : items) {
-            String status = item.getStatus() == null ? "" : item.getStatus();
+        for (Map.Entry<String, Integer> entry : statusCounts.entrySet()) {
+            String status = entry.getKey() == null ? "" : entry.getKey();
+            int count = entry.getValue() == null ? 0 : entry.getValue();
             switch (status) {
-                case "awaiting_confirmation", "awaiting_review" -> info.setAwaitingCount(info.getAwaitingCount() + 1);
-                case "pending", "paused" -> info.setPendingCount(info.getPendingCount() + 1);
-                case "running" -> info.setRunningCount(info.getRunningCount() + 1);
-                case "confirmed" -> info.setConfirmedCount(info.getConfirmedCount() + 1);
-                case "completed" -> info.setCompletedCount(info.getCompletedCount() + 1);
-                case "failed", "budget_exhausted" -> info.setFailedCount(info.getFailedCount() + 1);
-                case "cancelled" -> info.setCancelledCount(info.getCancelledCount() + 1);
+                case "awaiting_confirmation", "awaiting_review" -> info.setAwaitingCount(info.getAwaitingCount() + count);
+                case "pending", "paused" -> info.setPendingCount(info.getPendingCount() + count);
+                case "running" -> info.setRunningCount(info.getRunningCount() + count);
+                case "confirmed" -> info.setConfirmedCount(info.getConfirmedCount() + count);
+                case "completed" -> info.setCompletedCount(info.getCompletedCount() + count);
+                case "failed", "budget_exhausted" -> info.setFailedCount(info.getFailedCount() + count);
+                case "cancelled" -> info.setCancelledCount(info.getCancelledCount() + count);
                 default -> { }
             }
         }
         return info;
+    }
+
+    private Map<Long, Map<String, Integer>> loadStatusCounts(List<Long> batchIds) {
+        List<Map<String, Object>> rows = executionMapper.selectMaps(new QueryWrapper<ExecutionDO>()
+            .in("batch_id", batchIds)
+            .select("batch_id", "status", "COUNT(*) AS cnt")
+            .groupBy("batch_id", "status"));
+        Map<Long, Map<String, Integer>> countsByBatch = new HashMap<>();
+        for (Map<String, Object> row : rows) {
+            Object batchIdValue = row.get("batch_id");
+            Object countValue = row.get("cnt");
+            if (batchIdValue == null || countValue == null) {
+                continue;
+            }
+            Long batchId = ((Number) batchIdValue).longValue();
+            String status = row.get("status") == null ? "" : String.valueOf(row.get("status"));
+            countsByBatch.computeIfAbsent(batchId, k -> new HashMap<>())
+                .merge(status, ((Number) countValue).intValue(), Integer::sum);
+        }
+        return countsByBatch;
     }
 
     private IngestBatchItemInfo toItemInfo(ExecutionDO execution, SourceDO source, String analyzeOutput, Boolean phase1Completed) {

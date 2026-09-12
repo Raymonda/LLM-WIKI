@@ -3,6 +3,7 @@ package org.cn.liuwt.llmwiki.service.ingest;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.IngestBatchDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.LintFindingDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
@@ -11,6 +12,7 @@ import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageLinkDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageSourceDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageTagDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
+import org.cn.liuwt.llmwiki.common.dal.mapper.IngestBatchMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageKeywordMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageLinkMapper;
@@ -84,6 +86,9 @@ public class IngestService {
     @Autowired
     private ExecutionMapper executionMapper;
 
+    @Autowired
+    private IngestBatchMapper batchMapper;
+
     public ExecutionModel createExecution(Long scopeId, Long sourceId) {
         ExecutionModel execution = executionTracker.createExecution("ingest", scopeId, sourceId, null);
         executionTracker.updateExecutionStatus(execution.getId(), "running");
@@ -146,7 +151,26 @@ public class IngestService {
         if (guidance != null && !guidance.isBlank()) {
             update.set(ExecutionDO::getGuidance, guidance);
         }
-        return executionMapper.update(null, update) == 1;
+        if (executionMapper.update(null, update) != 1) {
+            return false;
+        }
+        reviveCompletedBatch(executionId);
+        return true;
+    }
+
+    private void reviveCompletedBatch(Long executionId) {
+        ExecutionDO execution = executionMapper.selectById(executionId);
+        if (execution == null || execution.getBatchId() == null) {
+            return;
+        }
+        int rows = batchMapper.update(null, new LambdaUpdateWrapper<IngestBatchDO>()
+            .eq(IngestBatchDO::getId, execution.getBatchId())
+            .eq(IngestBatchDO::getStatus, "completed")
+            .set(IngestBatchDO::getStatus, "active")
+            .set(IngestBatchDO::getCompletedAt, null));
+        if (rows == 1) {
+            log.info("Revived completed batch {} for resumed executionId={}", execution.getBatchId(), executionId);
+        }
     }
 
     @Transactional

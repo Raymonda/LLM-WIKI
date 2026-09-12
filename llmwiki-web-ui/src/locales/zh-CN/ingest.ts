@@ -216,6 +216,7 @@ export default {
   inboxGroupFailed: '失败',
   itemTokens: 'Token {0}',
   itemViewAnalysis: '查看分析详情',
+  inboxViewTask: '查看任务进度',
   itemHideAnalysis: '收起分析详情',
   itemConfirmWrite: '确认写入',
   statusQueued: '排队中',
@@ -235,4 +236,6 @@ export default {
   inboxRetryAll: '全部重试',
   inboxRetryAllMessage: '将重试 {0} 份失败资料，确认继续？',
   inboxRetryAllPartial: '{0} 份资料重试提交失败',
+  batchBarMore: '更多批次（{0}）',
+  batchBarCollapse: '收起',
 }

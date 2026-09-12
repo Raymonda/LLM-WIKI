@@ -4,6 +4,9 @@ import org.cn.liuwt.llmwiki.common.dal.dataobject.SchemaPatchDO;
 import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
 import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.domain.model.harness.SchemaPatchModel.Operation;
+import org.cn.liuwt.llmwiki.domain.model.harness.SchemaStructuredModel;
+import org.cn.liuwt.llmwiki.domain.service.harness.governance.parser.SchemaMarkdownRenderer;
+import org.cn.liuwt.llmwiki.domain.service.harness.governance.parser.SchemaStructuredParser;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.InvocationTargetException;
@@ -187,5 +190,150 @@ class SchemaPatchServiceTest {
         Class<?>[] types = new Class<?>[]{SchemaPatchDO.class, SchemaPatchDO.class};
         assertTrue((Boolean) invoke("conflictsWith", types,
             patch(1L, "MODIFY", "旧 规则", "新 规则"), patch(2L, "MODIFY", "旧\n规则", "新\t规则")));
+    }
+
+    private static final Class<?>[] SECTION3_TYPES =
+        new Class<?>[]{SchemaStructuredModel.class, SchemaPatchDO.class, Operation.class};
+
+    private SchemaPatchDO section3Patch(Long id, String operation, String before, String after) {
+        SchemaPatchDO p = patch(id, operation, before, after);
+        p.setSectionTitle("## 3. 页面模板");
+        return p;
+    }
+
+    @Test
+    void section3AddFallsBackToNarrativeRuleWhenNoTemplateMatches() throws Exception {
+        SchemaStructuredModel model = new SchemaStructuredModel();
+        SchemaPatchDO p = section3Patch(35L, "ADD", null,
+            "- **模板选择规则**：每篇文档根据其所属分类选择一个对应模板进行校验，不应同时套用全部模板");
+        invoke("applySection3Patch", SECTION3_TYPES, model, p, Operation.ADD);
+        assertEquals("- **模板选择规则**：每篇文档根据其所属分类选择一个对应模板进行校验，不应同时套用全部模板",
+            model.getTemplates().getNarrative());
+        assertTrue(model.getTemplates().getPageTemplates().isEmpty());
+    }
+
+    @Test
+    void section3AddAppendsNarrativeRuleKeepingExistingNarrative() throws Exception {
+        SchemaStructuredModel model = new SchemaStructuredModel();
+        model.getTemplates().setNarrative("既有页面契约");
+        SchemaPatchDO p = section3Patch(36L, "ADD", null, "- **模板选择规则**：按分类匹配唯一模板");
+        invoke("applySection3Patch", SECTION3_TYPES, model, p, Operation.ADD);
+        assertEquals("既有页面契约\n- **模板选择规则**：按分类匹配唯一模板",
+            model.getTemplates().getNarrative());
+    }
+
+    @Test
+    void section3AddStillCreatesTemplateWhenDiffHasHeading() throws Exception {
+        SchemaStructuredModel model = new SchemaStructuredModel();
+        SchemaPatchDO p = section3Patch(37L, "ADD", null,
+            "### 市场日报\n\n1. 市场回顾（必需）\n2. 来源引用（必需）");
+        invoke("applySection3Patch", SECTION3_TYPES, model, p, Operation.ADD);
+        assertEquals(1, model.getTemplates().getPageTemplates().size());
+        assertEquals("市场日报", model.getTemplates().getPageTemplates().get(0).getLabel());
+        assertEquals(2, model.getTemplates().getPageTemplates().get(0).getSections().size());
+        assertEquals(null, model.getTemplates().getNarrative());
+
+        SchemaPatchDO rule = section3Patch(38L, "ADD", null,
+            "- **模板选择规则**：规则文本里出现「必需章节」也不得被误判为新模板");
+        invoke("applySection3Patch", SECTION3_TYPES, model, rule, Operation.ADD);
+        assertEquals(1, model.getTemplates().getPageTemplates().size());
+        assertTrue(model.getTemplates().getNarrative().contains("模板选择规则"));
+    }
+
+    @Test
+    void section3AddAppendsSectionWhenTemplateExists() throws Exception {
+        SchemaStructuredModel model = new SchemaStructuredModel();
+        SchemaStructuredModel.PageTemplate pt = new SchemaStructuredModel.PageTemplate();
+        pt.setType("基金月报");
+        pt.setLabel("基金月报");
+        model.getTemplates().getPageTemplates().add(pt);
+        SchemaPatchDO p = section3Patch(39L, "ADD", null, "- 基金月报：新增风险提示（可选）");
+        invoke("applySection3Patch", SECTION3_TYPES, model, p, Operation.ADD);
+        assertEquals(1, model.getTemplates().getPageTemplates().size());
+        assertEquals(1, pt.getSections().size());
+        assertFalse(pt.getSections().get(0).isRequired());
+        assertEquals(null, model.getTemplates().getNarrative());
+    }
+
+    @Test
+    void section3ModifyReplacesMatchingNarrativeRule() throws Exception {
+        SchemaStructuredModel model = new SchemaStructuredModel();
+        model.getTemplates().setNarrative("- **模板选择规则**：按分类匹配唯一模板");
+        SchemaPatchDO p = section3Patch(40L, "MODIFY",
+            "- **模板选择规则**：按分类匹配唯一模板",
+            "- **模板选择规则**：按分类匹配模板，摘要页不强制套用实体模板");
+        invoke("applySection3Patch", SECTION3_TYPES, model, p, Operation.MODIFY);
+        assertEquals("- **模板选择规则**：按分类匹配模板，摘要页不强制套用实体模板",
+            model.getTemplates().getNarrative());
+    }
+
+    @Test
+    void section3ModifyRejectsWhenNeitherTemplateNorNarrativeMatches() {
+        SchemaStructuredModel model = new SchemaStructuredModel();
+        SchemaPatchDO p = section3Patch(41L, "MODIFY", "- 不存在的规则", "- 新规则");
+        BusinessException ex = expectBusinessException("applySection3Patch", SECTION3_TYPES,
+            model, p, Operation.MODIFY);
+        assertEquals(ErrorCode.PATCH_CONFLICT.getCode(), ex.getCode());
+    }
+
+    @Test
+    void section3DeleteRemovesMatchingNarrativeRule() throws Exception {
+        SchemaStructuredModel model = new SchemaStructuredModel();
+        model.getTemplates().setNarrative("- **模板选择规则**：按分类匹配唯一模板\n- **引用规则**：保留原文");
+        SchemaPatchDO p = section3Patch(42L, "DELETE", "- **模板选择规则**：按分类匹配唯一模板", null);
+        invoke("applySection3Patch", SECTION3_TYPES, model, p, Operation.DELETE);
+        assertEquals("- **引用规则**：保留原文", model.getTemplates().getNarrative());
+    }
+
+    @Test
+    void templatesNarrativeRuleSurvivesRenderParseRoundTrip() throws Exception {
+        SchemaStructuredModel model = new SchemaStructuredModel();
+        SchemaPatchDO p = section3Patch(43L, "ADD", null,
+            "- **模板选择规则**：每篇文档根据其所属分类选择一个对应模板进行校验");
+        invoke("applySection3Patch", SECTION3_TYPES, model, p, Operation.ADD);
+
+        String markdown = new SchemaMarkdownRenderer().render(model);
+        assertTrue(markdown.contains("## 3. 页面模板"));
+        assertTrue(markdown.contains("- **模板选择规则**：每篇文档根据其所属分类选择一个对应模板进行校验"));
+
+        SchemaStructuredModel parsed = new SchemaStructuredParser().parse(markdown);
+        assertEquals("- **模板选择规则**：每篇文档根据其所属分类选择一个对应模板进行校验",
+            parsed.getTemplates().getNarrative());
+    }
+
+    @Test
+    void section3AddWithHeadingMergesIntoSameLabelTemplateInsteadOfDuplicating() throws Exception {
+        SchemaStructuredModel model = new SchemaStructuredModel();
+        SchemaPatchDO first = section3Patch(44L, "ADD", null,
+            "### 基金月报\n\n1. 基金概况（必需）\n2. 来源引用（必需）");
+        invoke("applySection3Patch", SECTION3_TYPES, model, first, Operation.ADD);
+        assertEquals(1, model.getTemplates().getPageTemplates().size());
+
+        SchemaPatchDO second = section3Patch(45L, "ADD", null,
+            "### 基金月报\n\n1. 报告期间（必需）\n2. 来源引用（必需）\n3. 风险提示（可选）");
+        invoke("applySection3Patch", SECTION3_TYPES, model, second, Operation.ADD);
+
+        assertEquals(1, model.getTemplates().getPageTemplates().size());
+        SchemaStructuredModel.PageTemplate merged = model.getTemplates().getPageTemplates().get(0);
+        assertEquals(List.of("基金概况", "来源引用", "报告期间", "风险提示"),
+            merged.getSections().stream().map(SchemaStructuredModel.SectionDef::getLabel).toList());
+        assertEquals(4, merged.getSections().size());
+        assertFalse(merged.getSections().get(3).isRequired());
+        assertTrue(model.getTemplates().getNarrative() == null);
+    }
+
+    @Test
+    void section3AddWithHeadingStillCreatesDistinctTemplate() throws Exception {
+        SchemaStructuredModel model = new SchemaStructuredModel();
+        SchemaPatchDO first = section3Patch(46L, "ADD", null,
+            "### 基金月报\n\n1. 基金概况（必需）");
+        invoke("applySection3Patch", SECTION3_TYPES, model, first, Operation.ADD);
+
+        SchemaPatchDO second = section3Patch(47L, "ADD", null,
+            "### 市场日报\n\n1. 市场回顾（必需）");
+        invoke("applySection3Patch", SECTION3_TYPES, model, second, Operation.ADD);
+
+        assertEquals(2, model.getTemplates().getPageTemplates().size());
+        assertEquals("市场日报", model.getTemplates().getPageTemplates().get(1).getLabel());
     }
 }

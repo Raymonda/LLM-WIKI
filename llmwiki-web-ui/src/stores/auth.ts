@@ -37,6 +37,7 @@ export const useAuthStore = defineStore('auth', () => {
       localStorage.setItem('llmwiki-userId', String(user.id))
       localStorage.setItem('llmwiki-language', language.value)
       scopes.value = user.scopes || []
+      reconcileQueryScopes()
     } catch {
       clearAuth()
     }
@@ -57,6 +58,7 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem('llmwiki-systemRole', systemRole.value)
     localStorage.setItem('llmwiki-scopeId', String(newUser.scopeId))
     localStorage.setItem('llmwiki-userId', String(newUser.id))
+    reconcileQueryScopes()
   }
 
   function setScopes(newScopes: ScopeBriefInfo[]) {
@@ -83,9 +85,29 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem('llmwiki-queryScopes', JSON.stringify(ids))
   }
 
+  function reconcileQueryScopes() {
+    if (queryScopes.value.length === 0) return
+    const accessible = new Set(scopes.value.map(s => s.scopeId))
+    const valid = queryScopes.value.filter(id => accessible.has(id))
+    if (valid.length === queryScopes.value.length) return
+    queryScopes.value = valid
+    if (valid.length > 0) {
+      localStorage.setItem('llmwiki-queryScopes', JSON.stringify(valid))
+    } else {
+      localStorage.removeItem('llmwiki-queryScopes')
+    }
+  }
+
   function effectiveQueryScopes(): number[] {
-    if (queryScopes.value.length > 0) return queryScopes.value
-    return scopeId.value ? [scopeId.value] : []
+    const accessible = scopes.value.map(s => s.scopeId)
+    const selected = accessible.length > 0
+      ? queryScopes.value.filter(id => accessible.includes(id))
+      : queryScopes.value
+    if (selected.length > 0) return selected
+    if (scopeId.value && (accessible.length === 0 || accessible.includes(scopeId.value))) {
+      return [scopeId.value]
+    }
+    return []
   }
 
   function clearAuth() {
@@ -96,6 +118,7 @@ export const useAuthStore = defineStore('auth', () => {
     scopeId.value = 0
     userId.value = 0
     scopes.value = []
+    queryScopes.value = []
     initialized.value = false
     localStorage.removeItem('llmwiki-token')
     localStorage.removeItem('llmwiki-username')
@@ -103,6 +126,7 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('llmwiki-systemRole')
     localStorage.removeItem('llmwiki-scopeId')
     localStorage.removeItem('llmwiki-userId')
+    localStorage.removeItem('llmwiki-queryScopes')
   }
 
   function isAuthenticated() {
