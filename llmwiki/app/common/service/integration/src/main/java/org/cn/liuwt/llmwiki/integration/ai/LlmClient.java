@@ -80,6 +80,9 @@ public class LlmClient {
     @Autowired
     private AiSlotRouter slotRouter;
 
+    @Autowired
+    private AiRuntimeConfigHolder configHolder;
+
     @Autowired(required = false)
     private ContextBudgetManager contextBudgetManager;
 
@@ -127,31 +130,29 @@ public class LlmClient {
             ((ThreadPoolExecutor) llmExecutor).setCorePoolSize(executorCoreSize);
             ((ThreadPoolExecutor) llmExecutor).setMaximumPoolSize(executorMaxSize);
         }
-
-        if (slotRouter.isMultiProviderMode()) {
-            initMultiProvider();
-        } else {
-            initLegacy();
-        }
+        applyRuntimeConfig();
     }
 
-    private void initMultiProvider() {
-        ChatModel mainModel = slotRouter.getModel("main");
-        if (mainModel != null) {
-            this.chatClient = ChatClient.builder(mainModel).build();
-            this.apiKeyValid = true;
-            log.info("LlmClient initialized in multi-provider mode, main slot active");
+    public void applyRuntimeConfig() {
+        AiRuntimeConfig cfg = configHolder.get();
+        if (!cfg.isEmpty()) {
+            ChatModel mainModel = slotRouter.getModel("main");
+            if (mainModel != null) {
+                this.chatClient = ChatClient.builder(mainModel).build();
+                this.apiKeyValid = true;
+                log.info("LlmClient applied runtime config, main slot active");
+            } else {
+                this.chatClient = null;
+                this.apiKeyValid = false;
+                log.warn("Runtime AI config present but 'main' slot unavailable");
+            }
+            this.queryMultimodalChatModel = slotRouter.getModel("query-multimodal");
+            this.deepAnalysisChatModel = slotRouter.getModel("deep-analysis");
+            this.deepMultimodalChatModel = slotRouter.getModel("deep-multimodal");
         } else {
-            log.warn("Multi-provider mode enabled but 'main' slot has no available provider");
+            this.apiKeyValid = StringUtils.hasText(apiKey) && !PLACEHOLDER_KEY.equals(apiKey);
+            initLegacy();
         }
-
-        this.queryMultimodalChatModel = slotRouter.getModel("query-multimodal");
-        this.deepAnalysisChatModel = slotRouter.getModel("deep-analysis");
-        this.deepMultimodalChatModel = slotRouter.getModel("deep-multimodal");
-
-        if (queryMultimodalChatModel != null) log.info("Slot 'query-multimodal' active");
-        if (deepAnalysisChatModel != null) log.info("Slot 'deep-analysis' active");
-        if (deepMultimodalChatModel != null) log.info("Slot 'deep-multimodal' active");
     }
 
     private void initLegacy() {

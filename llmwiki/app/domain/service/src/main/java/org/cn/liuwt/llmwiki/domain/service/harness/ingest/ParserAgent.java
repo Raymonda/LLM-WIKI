@@ -96,7 +96,10 @@ public class ParserAgent {
                 && ("pdf".equals(format.toLowerCase()) || "docx".equals(format.toLowerCase()) || "doc".equals(format.toLowerCase())
                     || "pptx".equals(format.toLowerCase()) || "ppt".equals(format.toLowerCase()));
             String ocrModel = ocrProperties.getModel();
-            String apiKey = dashscopeApiKey;
+            AiSlotRouter.Endpoint ocrEndpoint = slotRouter.getEndpoint("ocr");
+            AiSlotRouter.Endpoint diagramEndpoint = slotRouter.getEndpoint("diagram");
+            String apiKey = ocrEndpoint.apiKey() != null && !ocrEndpoint.apiKey().isBlank()
+                ? ocrEndpoint.apiKey() : dashscopeApiKey;
             boolean needsAssets = multimodalMain || diagramEnable
                 || "pdf".equalsIgnoreCase(format) || "docx".equalsIgnoreCase(format)
                 || "doc".equalsIgnoreCase(format) || "pptx".equalsIgnoreCase(format)
@@ -126,15 +129,13 @@ public class ParserAgent {
             } catch (IOException e) {
                 throw new RuntimeException("准备本地解析临时文件失败: " + e.getMessage(), e);
             }
-            String diagramApiKey = diagramProperties.getApiKey();
-            if (diagramApiKey == null || diagramApiKey.isBlank()) {
-                diagramApiKey = apiKey;
-            }
+            String diagramApiKey = diagramEndpoint.apiKey() != null && !diagramEndpoint.apiKey().isBlank()
+                ? diagramEndpoint.apiKey()
+                : (diagramProperties.getApiKey() != null && !diagramProperties.getApiKey().isBlank()
+                    ? diagramProperties.getApiKey() : apiKey);
 
             long timeout = diagramEnable ? Math.max(120, diagramProperties.getTimeoutMs() / 1000) : 120;
             PythonProcessRunner runner = new PythonProcessRunner(timeout);
-            AiSlotRouter.Endpoint ocrEndpoint = slotRouter.getEndpoint("ocr");
-            AiSlotRouter.Endpoint diagramEndpoint = slotRouter.getEndpoint("diagram");
             runner.setOcrBaseUrl(ocrEndpoint.baseUrl());
             runner.setDiagramBaseUrl(diagramEndpoint.baseUrl());
 
