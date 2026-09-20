@@ -35,14 +35,15 @@ public class AiConnectionTester {
 
     public AiConnectionTestResult test(String baseUrl, String apiKey, String model) {
         long start = System.currentTimeMillis();
+        String normalizedBaseUrl = AiBaseUrlNormalizer.normalize(baseUrl);
         try {
-            CompletableFuture.supplyAsync(() -> doCall(baseUrl, apiKey, model), executor)
+            CompletableFuture.supplyAsync(() -> doCall(normalizedBaseUrl, apiKey, model), executor)
                 .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
             long elapsed = System.currentTimeMillis() - start;
             return new AiConnectionTestResult(true, elapsed, "ok");
         } catch (Exception e) {
             long elapsed = System.currentTimeMillis() - start;
-            log.debug("AI connection test failed: baseUrl={}, model={}", baseUrl, model, e);
+            log.debug("AI connection test failed: baseUrl={}, model={}", normalizedBaseUrl, model, e);
             return new AiConnectionTestResult(false, elapsed, converge(e));
         }
     }

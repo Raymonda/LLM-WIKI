@@ -9,7 +9,11 @@ public record AiRuntimeConfig(Map<String, ProviderEntry> providers, Map<String, 
         slots = slots == null ? Map.of() : Map.copyOf(slots);
     }
 
-    public record ProviderEntry(String baseUrl, String apiKey, boolean enabled) {}
+    public record ProviderEntry(String baseUrl, String apiKey, boolean enabled) {
+        public ProviderEntry {
+            baseUrl = AiBaseUrlNormalizer.normalize(baseUrl);
+        }
+    }
     public record SlotEntry(String provider, String model, boolean multimodal) {}
 
     public boolean isEmpty() { return providers.isEmpty(); }

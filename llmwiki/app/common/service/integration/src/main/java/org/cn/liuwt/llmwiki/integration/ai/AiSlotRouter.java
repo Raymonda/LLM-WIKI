@@ -31,7 +31,11 @@ public class AiSlotRouter {
         this.holder = holder;
     }
 
-    public record Endpoint(String baseUrl, String apiKey, String model) {}
+    public record Endpoint(String baseUrl, String apiKey, String model) {
+        public Endpoint {
+            baseUrl = AiBaseUrlNormalizer.normalize(baseUrl);
+        }
+    }
 
     public ChatModel getModel(String slotName) {
         AiRuntimeConfig cfg = holder.get();
