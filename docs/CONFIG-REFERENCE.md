@@ -60,7 +60,7 @@ llmwiki:
 
 Slot 说明：`main` 主对话；`multimodal` / `query-multimodal` / `deep-multimodal` 图像理解；
 `deep-analysis` 深度分析；`ocr` 扫描件识别；`diagram` 图表生成。
-未配置的 slot 回退到单 key 模式的对应分档模型。
+slot 未指定 model 时回退 `spring.ai.openai.chat.options.model`。
 
 ## 内部调优参数（环境变量覆盖）
 
@@ -136,7 +136,6 @@ Slot 说明：`main` 主对话；`multimodal` / `query-multimodal` / `deep-multi
 | `OCR_TIMEOUT_MS` | 120000 | OCR 超时 |
 | `DIAGRAM_ENABLED` | false | 图表生成开关 |
 | `DIAGRAM_MODEL` | kimi-k2.6 | 图表生成模型 |
-| `DIAGRAM_API_KEY` | 空 | 图表生成 API Key |
 | `DIAGRAM_MAX_IMAGES` | 15 | 单文档最大处理图片数 |
 | `DIAGRAM_TIMEOUT_MS` | 180000 | 单图超时 |
 | `DIAGRAM_DPI` | 200 | 渲染 DPI |

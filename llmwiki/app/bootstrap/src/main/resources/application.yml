@@ -55,12 +55,9 @@ mybatis-plus:
 llmwiki:
   wiki-data-path: ${WIKI_DATA_PATH:./wiki-data}
   ai:
-    # 单 key 模式：模型分档如下；多 Provider 模式（providers/slots）配置示例见 docs/CONFIG-REFERENCE.md
+    # 单 key 模式全场景共用 spring.ai.openai 主模型；Provider/槽位分档推荐在「系统配置 → 通用设置」维护（DB 热刷新），
+    # YAML providers/slots 示例见 docs/CONFIG-REFERENCE.md
     multimodal: ${AI_MULTIMODAL:false}
-    multimodal-model: ${AI_MULTIMODAL_MODEL:qwen3.7-plus}
-    query-multimodal-model: ${AI_QUERY_MULTIMODAL_MODEL:${AI_MULTIMODAL_MODEL:qwen3.7-plus}}
-    deep-analysis-model: ${AI_DEEP_ANALYSIS_MODEL:deepseek-v4-pro}
-    deep-multimodal-model: ${AI_MULTIMODAL_MODEL:${AI_MULTIMODAL_MODEL:qwen3.7-plus}}
     multimodal-max-images: ${AI_MULTIMODAL_MAX_IMAGES:10}
   storage:
     provider: ${STORAGE_PROVIDER:local}

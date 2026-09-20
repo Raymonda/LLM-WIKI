@@ -58,9 +58,6 @@ public class ParserAgent {
     @Value("${llmwiki.ai.multimodal:false}")
     private boolean multimodalMainEnabled;
 
-    @Value("${llmwiki.ai.multimodal-model:qwen3.6-flash}")
-    private String multimodalModelName;
-
     public void parseAndLoad(IngestContext context) {
         Long scopeId = context.getScopeId();
         Long sourceId = context.getSourceId();
@@ -130,9 +127,7 @@ public class ParserAgent {
                 throw new RuntimeException("准备本地解析临时文件失败: " + e.getMessage(), e);
             }
             String diagramApiKey = diagramEndpoint.apiKey() != null && !diagramEndpoint.apiKey().isBlank()
-                ? diagramEndpoint.apiKey()
-                : (diagramProperties.getApiKey() != null && !diagramProperties.getApiKey().isBlank()
-                    ? diagramProperties.getApiKey() : apiKey);
+                ? diagramEndpoint.apiKey() : apiKey;
 
             long timeout = diagramEnable ? Math.max(120, diagramProperties.getTimeoutMs() / 1000) : 120;
             PythonProcessRunner runner = new PythonProcessRunner(timeout);
@@ -147,7 +142,7 @@ public class ParserAgent {
                     diagramProperties.getDpi(), diagramProperties.getJpegQuality(), diagramProperties.getConcurrency(),
                     diagramProperties.getScoreThreshold(), diagramProperties.getLargeDrawingRatio(),
                     diagramProperties.getSignificantImageRatio(), diagramProperties.getPayloadGateMb(),
-                    multimodalModelName);
+                    slotRouter.resolveModel("multimodal"));
                 if (tempAssetsDir != null) {
                     uploadAssetsToStorage(scopeIdStr, tempAssetsDir);
                 }

@@ -7,7 +7,6 @@ public class DiagramProperties {
 
     private boolean enabled = false;
     private String model = "kimi-k2.6";
-    private String apiKey = "";
     private int maxImages = 15;
     private long timeoutMs = 180000;
     private int dpi = 200;
@@ -22,8 +21,6 @@ public class DiagramProperties {
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
     public String getModel() { return model; }
     public void setModel(String model) { this.model = model; }
-    public String getApiKey() { return apiKey; }
-    public void setApiKey(String apiKey) { this.apiKey = apiKey; }
     public int getMaxImages() { return maxImages; }
     public void setMaxImages(int maxImages) { this.maxImages = maxImages; }
     public long getTimeoutMs() { return timeoutMs; }

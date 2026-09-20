@@ -173,10 +173,7 @@ At least one AI provider API key is required. Everything else has sensible defau
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_DASHSCOPE_API_KEY` | *(required*)* | DashScope API key (default provider) |
-| `AI_DEEPSEEK_API_KEY` | *(empty)* | DeepSeek API key (multi-provider mode) |
-| `AI_MOONSHOT_API_KEY` | *(empty)* | Moonshot/Kimi API key (multi-provider mode) |
-| `AI_OPENAI_API_KEY` | *(empty)* | OpenAI API key (multi-provider mode) |
+| `AI_DASHSCOPE_API_KEY` | *(required*)* | DashScope API key (legacy single-key fallback; multi-provider setup recommended via System Settings -> General) |
 | `MYSQL_URL` | `jdbc:mysql://localhost:3306/llmwiki?...` | MySQL JDBC URL |
 | `MYSQL_USER` | `llmwiki` | MySQL username |
 | `MYSQL_PASSWORD` | `llmwiki_2024` | MySQL password |

@@ -173,10 +173,7 @@ llmwiki:
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `AI_DASHSCOPE_API_KEY` | *（必填）* | DashScope API Key（默认提供商） |
-| `AI_DEEPSEEK_API_KEY` | *（空）* | DeepSeek API Key（多提供商模式） |
-| `AI_MOONSHOT_API_KEY` | *（空）* | Moonshot/Kimi API Key（多提供商模式） |
-| `AI_OPENAI_API_KEY` | *（空）* | OpenAI API Key（多提供商模式） |
+| `AI_DASHSCOPE_API_KEY` | *（必填）* | DashScope API Key（legacy 单 key 兜底；多提供商推荐在「系统配置 → 通用设置」维护） |
 | `MYSQL_URL` | `jdbc:mysql://localhost:3306/llmwiki?...` | MySQL JDBC 连接串 |
 | `MYSQL_USER` | `llmwiki` | MySQL 用户名 |
 | `MYSQL_PASSWORD` | `llmwiki_2024` | MySQL 密码 |

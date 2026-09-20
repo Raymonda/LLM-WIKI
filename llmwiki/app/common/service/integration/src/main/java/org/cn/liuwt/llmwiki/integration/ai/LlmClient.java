@@ -2,8 +2,6 @@ package org.cn.liuwt.llmwiki.integration.ai;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.openai.OpenAiChatModel;
-import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -104,18 +102,6 @@ public class LlmClient {
     @Value("${spring.ai.openai.chat.options.model:}")
     private String modelName;
 
-    @Value("${llmwiki.ai.multimodal-model:${spring.ai.openai.chat.options.model:}}")
-    private String multimodalModelName;
-
-    @Value("${llmwiki.ai.query-multimodal-model:${llmwiki.ai.multimodal-model:${spring.ai.openai.chat.options.model:}}}")
-    private String queryMultimodalModelName;
-
-    @Value("${llmwiki.ai.deep-analysis-model:${spring.ai.openai.chat.options.model:}}")
-    private String deepAnalysisModelName;
-
-    @Value("${llmwiki.ai.deep-multimodal-model:${llmwiki.ai.multimodal-model:${spring.ai.openai.chat.options.model:}}}")
-    private String deepMultimodalModelName;
-
     @Value("${spring.ai.openai.base-url:https://dashscope.aliyuncs.com/compatible-mode}")
     private String baseUrl;
 
@@ -159,27 +145,9 @@ public class LlmClient {
         if (legacyChatModel != null) {
             this.chatClient = ChatClient.builder(legacyChatModel).build();
         }
-
-        if (legacyChatModel instanceof OpenAiChatModel openAiModel) {
-            if (queryMultimodalModelName != null && !queryMultimodalModelName.equals(modelName)) {
-                this.queryMultimodalChatModel = openAiModel.mutate()
-                    .defaultOptions(OpenAiChatOptions.builder().model(queryMultimodalModelName).build())
-                    .build();
-                log.info("Query multimodal ChatModel created: model={}", queryMultimodalModelName);
-            }
-            if (deepAnalysisModelName != null && !deepAnalysisModelName.equals(modelName)) {
-                this.deepAnalysisChatModel = openAiModel.mutate()
-                    .defaultOptions(OpenAiChatOptions.builder().model(deepAnalysisModelName).build())
-                    .build();
-                log.info("Deep analysis ChatModel created: model={}", deepAnalysisModelName);
-            }
-            if (deepMultimodalModelName != null && !deepMultimodalModelName.equals(modelName)) {
-                this.deepMultimodalChatModel = openAiModel.mutate()
-                    .defaultOptions(OpenAiChatOptions.builder().model(deepMultimodalModelName).build())
-                    .build();
-                log.info("Deep multimodal ChatModel created: model={}", deepMultimodalModelName);
-            }
-        }
+        this.queryMultimodalChatModel = null;
+        this.deepAnalysisChatModel = null;
+        this.deepMultimodalChatModel = null;
     }
 
     @PreDestroy
@@ -443,7 +411,7 @@ public class LlmClient {
         AiSlotRouter.Endpoint endpoint = slotRouter.getEndpoint("multimodal");
         String resolvedApiKey = endpoint.apiKey();
         String chatUrl = endpoint.baseUrl() + "/v1/chat/completions";
-        String resolvedModel = StringUtils.hasText(endpoint.model()) ? endpoint.model() : multimodalModelName;
+        String resolvedModel = StringUtils.hasText(endpoint.model()) ? endpoint.model() : modelName;
 
         Throwable lastException = null;
         for (int attempt = 1; attempt <= maxRetryAttempts; attempt++) {
