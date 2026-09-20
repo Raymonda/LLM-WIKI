@@ -4,7 +4,7 @@ import org.cn.liuwt.llmwiki.common.dal.dataobject.IngestBatchDO;
 import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
 import org.cn.liuwt.llmwiki.common.util.result.Result;
 import org.cn.liuwt.llmwiki.domain.service.system.ScopeService;
-import org.cn.liuwt.llmwiki.facade.model.IngestBatchCreateResponse;
+import org.cn.liuwt.llmwiki.facade.model.IngestBatchCreateInfo;
 import org.cn.liuwt.llmwiki.facade.model.IngestBatchRequest;
 import org.cn.liuwt.llmwiki.service.ingest.IngestBatchScheduler;
 import org.cn.liuwt.llmwiki.service.ingest.IngestBatchService;
@@ -19,6 +19,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -50,17 +51,32 @@ class IngestBatchControllerTest {
         request.setSourceIds(List.of(1L, 2L));
         when(jwtTokenProvider.getCurrentScopeId()).thenReturn(100L);
         when(jwtTokenProvider.getCurrentUserId()).thenReturn(7L);
-        IngestBatchCreateResponse response = new IngestBatchCreateResponse();
-        response.setBatchId(9L);
-        response.setExecutionIds(List.of(11L, 12L));
-        response.setWarnings(List.of());
-        when(ingestBatchService.createBatch(100L, 7L, List.of(1L, 2L), null)).thenReturn(response);
+        IngestBatchCreateInfo info = new IngestBatchCreateInfo(9L, 2, 0, List.of(), List.of());
+        when(ingestBatchService.createBatch(100L, 7L, List.of(1L, 2L), null, null, null)).thenReturn(info);
 
-        Result<IngestBatchCreateResponse> result = controller.createBatch(request);
+        Result<IngestBatchCreateInfo> result = controller.createBatch(request);
 
         assertTrue(result.isSuccess());
-        assertEquals(9L, result.getData().getBatchId());
+        assertEquals(9L, result.getData().batchId());
         verify(ingestBatchScheduler).kick(100L);
+    }
+
+    @Test
+    void shouldNotKickSchedulerWhenAllSourcesSkippedAsDuplicates() {
+        IngestBatchRequest request = new IngestBatchRequest();
+        request.setSourceIds(List.of(1L));
+        when(jwtTokenProvider.getCurrentScopeId()).thenReturn(100L);
+        when(jwtTokenProvider.getCurrentUserId()).thenReturn(7L);
+        IngestBatchCreateInfo info = new IngestBatchCreateInfo(null, 0, 1,
+            List.of(new IngestBatchCreateInfo.SkippedItem(1L, "a.md", 2L, "duplicate_of_processed")),
+            List.of("内容与已处理来源重复，已跳过: a.md（同 b.md）"));
+        when(ingestBatchService.createBatch(100L, 7L, List.of(1L), null, null, null)).thenReturn(info);
+
+        Result<IngestBatchCreateInfo> result = controller.createBatch(request);
+
+        assertTrue(result.isSuccess());
+        assertNull(result.getData().batchId());
+        verify(ingestBatchScheduler, never()).kick(any());
     }
 
     @Test

@@ -14,6 +14,7 @@ public class IngestBatchDO {
     private String status;
     private Integer totalCount;
     private String guidance;
+    private String mode;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private LocalDateTime completedAt;

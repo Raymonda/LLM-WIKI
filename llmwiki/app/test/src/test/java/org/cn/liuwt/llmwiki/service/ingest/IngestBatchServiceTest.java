@@ -11,7 +11,8 @@ import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
-import org.cn.liuwt.llmwiki.facade.model.IngestBatchCreateResponse;
+import org.cn.liuwt.llmwiki.domain.service.wiki.SourceService;
+import org.cn.liuwt.llmwiki.facade.model.IngestBatchCreateInfo;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -36,6 +37,7 @@ class IngestBatchServiceTest {
     @Mock private IngestBatchMapper batchMapper;
     @Mock private SourceMapper sourceMapper;
     @Mock private ExecutionTracker executionTracker;
+    @Mock private SourceService sourceService;
 
     @InjectMocks
     private IngestBatchService service;
@@ -51,7 +53,7 @@ class IngestBatchServiceTest {
         ReflectionTestUtils.setField(service, "maxBatchSize", 2);
         List<Long> sourceIds = List.of(1L, 2L, 3L);
 
-        assertThrows(BusinessException.class, () -> service.createBatch(10L, 7L, sourceIds, null));
+        assertThrows(BusinessException.class, () -> service.createBatch(10L, 7L, sourceIds, null, null, null));
     }
 
     @Test
@@ -77,10 +79,10 @@ class IngestBatchServiceTest {
         created.setId(500L);
         when(executionTracker.createExecution(eq("ingest"), eq(10L), eq(1L), isNull())).thenReturn(created);
 
-        IngestBatchCreateResponse response = service.createBatch(10L, 7L, List.of(1L, 2L), "指引领");
+        IngestBatchCreateInfo info = service.createBatch(10L, 7L, List.of(1L, 2L), "指引领", null, null);
 
-        assertEquals(1, response.getExecutionIds().size());
-        assertEquals(1, response.getWarnings().size());
+        assertEquals(1, info.acceptedCount());
+        assertEquals(1, info.warnings().size());
     }
 
     @Test
@@ -102,9 +104,9 @@ class IngestBatchServiceTest {
         created.setId(500L);
         when(executionTracker.createExecution(eq("ingest"), eq(10L), eq(1L), isNull())).thenReturn(created);
 
-        IngestBatchCreateResponse response = service.createBatch(10L, 7L, List.of(1L, 2L), null);
+        IngestBatchCreateInfo info = service.createBatch(10L, 7L, List.of(1L, 2L), null, null, null);
 
-        assertEquals(1, response.getExecutionIds().size());
-        assertEquals(1, response.getWarnings().size());
+        assertEquals(1, info.acceptedCount());
+        assertEquals(1, info.warnings().size());
     }
 }

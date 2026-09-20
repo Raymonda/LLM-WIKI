@@ -9,4 +9,6 @@ public class IngestBatchRequest {
     private Long scopeId;
     private List<Long> sourceIds;
     private String guidance;
+    private String mode;
+    private Boolean forceReingest;
 }

@@ -6,7 +6,7 @@ import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.common.util.result.Result;
 import org.cn.liuwt.llmwiki.domain.service.system.ScopeService;
 import org.cn.liuwt.llmwiki.facade.model.IngestBatchConfirmRequest;
-import org.cn.liuwt.llmwiki.facade.model.IngestBatchCreateResponse;
+import org.cn.liuwt.llmwiki.facade.model.IngestBatchCreateInfo;
 import org.cn.liuwt.llmwiki.facade.model.IngestBatchDetailInfo;
 import org.cn.liuwt.llmwiki.facade.model.IngestBatchInfo;
 import org.cn.liuwt.llmwiki.facade.model.IngestBatchRequest;
@@ -35,13 +35,16 @@ public class IngestBatchController {
     private ScopeService scopeService;
 
     @PostMapping
-    public Result<IngestBatchCreateResponse> createBatch(@RequestBody IngestBatchRequest request) {
+    public Result<IngestBatchCreateInfo> createBatch(@RequestBody IngestBatchRequest request) {
         Long scopeId = resolveScopeId(request.getScopeId());
         Long userId = jwtTokenProvider.getCurrentUserId();
-        IngestBatchCreateResponse response = ingestBatchService.createBatch(
-            scopeId, userId, request.getSourceIds(), request.getGuidance());
-        ingestBatchScheduler.kick(scopeId);
-        return Result.success(response);
+        IngestBatchCreateInfo info = ingestBatchService.createBatch(
+            scopeId, userId, request.getSourceIds(), request.getGuidance(),
+            request.getMode(), request.getForceReingest());
+        if (info.batchId() != null) {
+            ingestBatchScheduler.kick(scopeId);
+        }
+        return Result.success(info);
     }
 
     @GetMapping("/inbox")

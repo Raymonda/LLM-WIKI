@@ -15,9 +15,11 @@ import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
 import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel.ExecutionStepModel;
+import org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
-import org.cn.liuwt.llmwiki.facade.model.IngestBatchCreateResponse;
+import org.cn.liuwt.llmwiki.domain.service.wiki.SourceService;
+import org.cn.liuwt.llmwiki.facade.model.IngestBatchCreateInfo;
 import org.cn.liuwt.llmwiki.facade.model.IngestBatchDetailInfo;
 import org.cn.liuwt.llmwiki.facade.model.IngestBatchInfo;
 import org.cn.liuwt.llmwiki.facade.model.IngestBatchItemInfo;
@@ -64,12 +66,14 @@ public class IngestBatchService {
     @Autowired private IngestDispatcher ingestDispatcher;
     @Autowired private ExecutionNodeRegistry registry;
     @Autowired private MqHealthService mqHealthService;
+    @Autowired private SourceService sourceService;
 
-    @Value("${llmwiki.ingest.batch.max-size:50}")
+    @Value("${llmwiki.ingest.batch.max-size:200}")
     private int maxBatchSize;
 
     @Transactional
-    public IngestBatchCreateResponse createBatch(Long scopeId, Long userId, List<Long> sourceIds, String guidance) {
+    public IngestBatchCreateInfo createBatch(Long scopeId, Long userId, List<Long> sourceIds,
+                                             String guidance, String mode, Boolean forceReingest) {
         if (sourceIds == null || sourceIds.isEmpty()) {
             throw new BusinessException(ErrorCode.INGEST_BATCH_EMPTY);
         }
@@ -88,6 +92,7 @@ public class IngestBatchService {
 
         List<String> warnings = new ArrayList<>();
         List<Long> accepted = new ArrayList<>();
+        List<IngestBatchCreateInfo.SkippedItem> skipped = new ArrayList<>();
         for (Long sourceId : distinct) {
             SourceDO source = sourceMap.get(sourceId);
             if (source == null || !scopeId.equals(source.getScopeId())) {
@@ -98,6 +103,15 @@ public class IngestBatchService {
                 warnings.add("来源已废弃，请先恢复: " + source.getName());
                 continue;
             }
+            if (!Boolean.TRUE.equals(forceReingest) && source.getContentHash() != null) {
+                SourceModel dup = sourceService.findDuplicateSource(scopeId, source.getContentHash());
+                if (dup != null && !dup.getId().equals(source.getId())) {
+                    skipped.add(new IngestBatchCreateInfo.SkippedItem(
+                        source.getId(), source.getName(), dup.getId(), "duplicate_of_processed"));
+                    warnings.add("内容与已处理来源重复，已跳过: " + source.getName() + "（同 " + dup.getName() + "）");
+                    continue;
+                }
+            }
             if (busySourceIds.contains(sourceId)) {
                 warnings.add("已有进行中的处理任务，已跳过: " + source.getName());
                 continue;
@@ -105,18 +119,23 @@ public class IngestBatchService {
             accepted.add(sourceId);
         }
         if (accepted.isEmpty()) {
-            throw new BusinessException(ErrorCode.INGEST_BATCH_EMPTY);
+            if (!skipped.isEmpty()) {
+                log.info("Batch creation short-circuited: all {} source(s) duplicate processed ones, scopeId={}",
+                    skipped.size(), scopeId);
+                return new IngestBatchCreateInfo(null, 0, skipped.size(), skipped, warnings);
+            }
+            throw new BusinessException(ErrorCode.INGEST_BATCH_EMPTY, String.join("; ", warnings));
         }
 
         IngestBatchDO batch = new IngestBatchDO();
         batch.setScopeId(scopeId);
         batch.setUserId(userId);
         batch.setStatus("active");
+        batch.setMode("auto".equals(mode) ? "auto" : "review");
         batch.setTotalCount(accepted.size());
         batch.setGuidance(guidance);
         batchMapper.insert(batch);
 
-        List<Long> executionIds = new ArrayList<>();
         for (Long sourceId : accepted) {
             ExecutionModel execution = executionTracker.createExecution("ingest", scopeId, sourceId, null);
             ExecutionDO patch = new ExecutionDO();
@@ -124,14 +143,9 @@ public class IngestBatchService {
             patch.setBatchId(batch.getId());
             patch.setGuidance(guidance);
             executionMapper.updateById(patch);
-            executionIds.add(execution.getId());
         }
 
-        IngestBatchCreateResponse response = new IngestBatchCreateResponse();
-        response.setBatchId(batch.getId());
-        response.setExecutionIds(executionIds);
-        response.setWarnings(warnings);
-        return response;
+        return new IngestBatchCreateInfo(batch.getId(), accepted.size(), skipped.size(), skipped, warnings);
     }
 
     public int confirmItems(Long batchId, List<Long> executionIds) {
