@@ -149,9 +149,9 @@ export default {
   basicSlots: 'Basic Models',
   overrideSlots: 'Advanced: Scenario Overrides',
   overrideSlotsHint: 'Scenarios left empty follow the fast model; overrides take effect immediately',
-  slotModelPlaceholderMain: 'deepseek-v4.1-flash',
-  slotModelPlaceholderMultimodal: 'qwen3.8-flash',
-  slotModelPlaceholderOcr: 'qwen-vl-ocr',
+  slotModelPlaceholderMain: 'e.g. qwen-plus',
+  slotModelPlaceholderMultimodal: 'e.g. qwen-vl-plus',
+  slotModelPlaceholderOcr: 'e.g. qwen-vl-ocr',
   aiConfigHint: 'Changes take effect immediately after saving, no restart required. API keys are stored encrypted and only used by the backend to call model services.',
   apiKeyKeepHint: 'Configured. Leave blank to keep unchanged',
   apiKeyPlaceholder: 'sk-...',
@@ -161,4 +161,5 @@ export default {
   testLatency: '{0} ms',
   providerNameInvalid: 'Invalid provider name: must start with a lowercase letter or digit, contain only lowercase letters, digits and hyphens, up to 32 characters',
   mainSlotRequired: 'Please select an enabled provider for the fast model',
+  slotModelRequired: 'Please enter a model name for "{0}"',
 }

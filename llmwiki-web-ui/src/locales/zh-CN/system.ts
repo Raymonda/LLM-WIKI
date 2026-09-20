@@ -149,9 +149,9 @@ export default {
   basicSlots: '基础模型',
   overrideSlots: '高级：按场景覆写',
   overrideSlotsHint: '留空的场景自动跟随快速模型，覆写后即时生效',
-  slotModelPlaceholderMain: 'deepseek-v4.1-flash',
-  slotModelPlaceholderMultimodal: 'qwen3.8-flash',
-  slotModelPlaceholderOcr: 'qwen-vl-ocr',
+  slotModelPlaceholderMain: '示例：qwen-plus',
+  slotModelPlaceholderMultimodal: '示例：qwen-vl-plus',
+  slotModelPlaceholderOcr: '示例：qwen-vl-ocr',
   aiConfigHint: '保存后立即生效，无需重启服务。API Key 加密存储，仅用于后端调用模型服务。',
   apiKeyKeepHint: '已配置，留空保持不变',
   apiKeyPlaceholder: 'sk-...',
@@ -161,4 +161,5 @@ export default {
   testLatency: '{0} ms',
   providerNameInvalid: '提供商名称不合法：需以小写字母或数字开头，仅含小写字母、数字、连字符，最长 32 字符',
   mainSlotRequired: '请为快速模型选择一个已启用的提供商',
+  slotModelRequired: '请填写「{0}」的模型名称',
 }

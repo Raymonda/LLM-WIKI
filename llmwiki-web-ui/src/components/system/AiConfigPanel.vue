@@ -205,6 +205,12 @@ async function save() {
     toastStore.warning(t('system.mainSlotRequired'))
     return
   }
+  const slotMissingModel = [...basicSlots.value, ...overrideSlots.value]
+    .find(s => s.provider && !s.model.trim())
+  if (slotMissingModel) {
+    toastStore.warning(t('system.slotModelRequired', [slotLabel(slotMissingModel.slot)]))
+    return
+  }
   saving.value = true
   try {
     const payloadProviders: AiProviderInput[] = providers.value.map(p => ({
@@ -318,7 +324,7 @@ onMounted(load)
               <span class="ai-config__actions">
                 <button
                   class="ai-config__btn-secondary"
-                  :disabled="!s.provider || slotTests[s.slot]?.testing"
+                  :disabled="!s.provider || !s.model.trim() || slotTests[s.slot]?.testing"
                   @click="testSlot(s)"
                 >
                   <Loader2 v-if="slotTests[s.slot]?.testing" :size="14" class="ai-config__spin" />
@@ -384,7 +390,7 @@ onMounted(load)
                   <span class="ai-config__actions">
                     <button
                       class="ai-config__btn-secondary"
-                      :disabled="!s.provider || slotTests[s.slot]?.testing"
+                      :disabled="!s.provider || !s.model.trim() || slotTests[s.slot]?.testing"
                       @click="testSlot(s)"
                     >
                       <Loader2 v-if="slotTests[s.slot]?.testing" :size="14" class="ai-config__spin" />

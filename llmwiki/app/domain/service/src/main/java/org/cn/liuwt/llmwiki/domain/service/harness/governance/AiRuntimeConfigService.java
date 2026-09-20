@@ -208,6 +208,9 @@ public class AiRuntimeConfigService {
                 if (s.provider() == null || !names.contains(s.provider())) {
                     throw new BusinessException("槽位 " + s.slot() + " 引用了不存在的提供商: " + s.provider());
                 }
+                if (s.model() == null || s.model().isBlank()) {
+                    throw new BusinessException("槽位 " + s.slot() + " 已选择提供商，必须填写模型名称");
+                }
                 if ("main".equals(s.slot()) && Boolean.TRUE.equals(enabledByName.get(s.provider()))) {
                     hasMain = true;
                 }

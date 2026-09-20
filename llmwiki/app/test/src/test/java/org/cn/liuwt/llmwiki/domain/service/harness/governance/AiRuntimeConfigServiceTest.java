@@ -101,6 +101,15 @@ class AiRuntimeConfigServiceTest {
     }
 
     @Test
+    void shouldRejectBlankModelWhenSlotHasProvider() {
+        Harness h = harness();
+        AiRuntimeConfigSaveRequest bad = new AiRuntimeConfigSaveRequest(
+            List.of(new AiProviderInput("dash", "https://x", "sk-y", true)),
+            List.of(new AiSlotInput("main", "dash", "", false)));
+        assertThrows(BusinessException.class, () -> h.svc().save(bad, 1L));
+    }
+
+    @Test
     void shouldFallbackToYamlWhenDbEmptyWhenResolvingEffective() {
         Harness h = harness();
         AiProviderProperties props = new AiProviderProperties();

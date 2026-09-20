@@ -54,12 +54,16 @@ public class AiSlotRouter {
             return "main".equals(slotName) ? null : getModel("main");
         }
 
-        if (StringUtils.hasText(slot.model()) && baseModel instanceof OpenAiChatModel openAiModel) {
+        String effectiveModel = StringUtils.hasText(slot.model()) ? slot.model() : legacyModel;
+        if (StringUtils.hasText(effectiveModel) && baseModel instanceof OpenAiChatModel openAiModel) {
             return openAiModel.mutate()
-                .defaultOptions(OpenAiChatOptions.builder().model(slot.model()).build())
+                .defaultOptions(OpenAiChatOptions.builder().model(effectiveModel).build())
                 .build();
         }
 
+        if (!StringUtils.hasText(effectiveModel)) {
+            log.warn("Slot '{}' has no model configured and no legacy model fallback; calls will fail until configured", slotName);
+        }
         return baseModel;
     }
 

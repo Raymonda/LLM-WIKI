@@ -208,6 +208,7 @@ public class LlmClient {
         if (chatClient == null) {
             throw new IllegalStateException("ChatClient not available");
         }
+        ensureModelConfigured("main");
         java.util.concurrent.atomic.AtomicInteger charCount = new java.util.concurrent.atomic.AtomicInteger(0);
         TokenUsageContext.Context ctx = TokenUsageContext.get();
         return chatClient.prompt()
@@ -228,6 +229,7 @@ public class LlmClient {
         if (chatClient == null) {
             throw new IllegalStateException("ChatClient not available");
         }
+        ensureModelConfigured("main");
         java.util.concurrent.atomic.AtomicInteger charCount = new java.util.concurrent.atomic.AtomicInteger(0);
         TokenUsageContext.Context ctx = TokenUsageContext.get();
         return chatClient.prompt()
@@ -273,6 +275,7 @@ public class LlmClient {
         if (chatClient == null) {
             throw new IllegalStateException("ChatClient not available");
         }
+        ensureModelConfigured("main");
 
         ContextBudgetManager.ContextBudgetResult budgetResult = applyBudgetSafely(systemPrompt, userMessage);
         String effectiveSystemPrompt = budgetResult != null ? budgetResult.systemPrompt() : systemPrompt;
@@ -357,7 +360,7 @@ public class LlmClient {
                         log.warn("Retry delay execution failed, proceeding immediately: {}", de.getMessage());
                     }
                 } else {
-                    throw new RuntimeException("LLM call failed", lastException);
+                    throw new RuntimeException("LLM call failed: " + (lastException != null ? lastException.getMessage() : "unknown"), lastException);
                 }
             } catch (InterruptedException e) {
                 cancelFuture(future);
@@ -366,7 +369,8 @@ public class LlmClient {
             }
         }
 
-        throw new RuntimeException("LLM call failed after " + effectiveMaxAttempts + " attempts", lastException);
+        throw new RuntimeException("LLM call failed after " + effectiveMaxAttempts + " attempts: "
+            + (lastException != null ? lastException.getMessage() : "unknown"), lastException);
     }
 
     private boolean isRetryable(Throwable e) {
@@ -399,6 +403,17 @@ public class LlmClient {
         }
     }
 
+    private void ensureModelConfigured(String slotName) {
+        ensureModelConfigured(slotRouter != null ? slotRouter.resolveModel(slotName) : modelName, slotName);
+    }
+
+    private void ensureModelConfigured(String resolvedModel, String slotName) {
+        if (!StringUtils.hasText(resolvedModel)) {
+            throw new IllegalStateException(
+                "AI 模型未配置（槽位 " + slotName + "）：请在系统设置 → 通用设置中填写模型名称后重试");
+        }
+    }
+
     private String chatWithRetryMultimodal(String systemPrompt, String userText, List<MultimodalImageInput> images) {
         if (!isAvailable()) {
             throw new IllegalStateException("ChatClient not available or API key invalid");
@@ -412,6 +427,7 @@ public class LlmClient {
         String resolvedApiKey = endpoint.apiKey();
         String chatUrl = endpoint.baseUrl() + "/v1/chat/completions";
         String resolvedModel = StringUtils.hasText(endpoint.model()) ? endpoint.model() : modelName;
+        ensureModelConfigured(resolvedModel, "multimodal");
 
         Throwable lastException = null;
         for (int attempt = 1; attempt <= maxRetryAttempts; attempt++) {
@@ -500,7 +516,7 @@ public class LlmClient {
                         throw new RuntimeException("Retry interrupted", ie);
                     }
                 } else {
-                    throw new RuntimeException("LLM multimodal call failed", lastException);
+                    throw new RuntimeException("LLM multimodal call failed: " + (lastException != null ? lastException.getMessage() : "unknown"), lastException);
                 }
             } catch (InterruptedException e) {
                 cancelFuture(future);
@@ -509,7 +525,8 @@ public class LlmClient {
             }
         }
 
-        throw new RuntimeException("LLM multimodal call failed after " + maxRetryAttempts + " attempts", lastException);
+        throw new RuntimeException("LLM multimodal call failed after " + maxRetryAttempts + " attempts: "
+            + (lastException != null ? lastException.getMessage() : "unknown"), lastException);
     }
 
     private String jsonEscape(String s) {

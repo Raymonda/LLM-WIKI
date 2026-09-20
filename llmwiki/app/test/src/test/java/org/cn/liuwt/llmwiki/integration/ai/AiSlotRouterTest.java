@@ -79,4 +79,33 @@ class AiSlotRouterTest {
         assertNull(registry.getModel("off"));
         assertNotNull(registry.getProviderEntry("off"));
     }
+
+    @Test
+    void shouldFallbackToLegacyModelWhenSlotModelBlank() {
+        AiProviderRegistry registry = new AiProviderRegistry();
+        AiSlotRouter router = router(registry, new AiRuntimeConfig(
+            Map.of("dash", new AiRuntimeConfig.ProviderEntry("https://a", "sk-x", true)),
+            Map.of("main", new AiRuntimeConfig.SlotEntry("dash", "", false))));
+        injectLegacyModel(router, "qwen-turbo");
+        assertNotSame(registry.getModel("dash"), router.getModel("main"));
+        assertEquals("qwen-turbo", router.resolveModel("main"));
+    }
+
+    @Test
+    void shouldReturnBaseModelWhenSlotModelBlankAndNoLegacyFallback() {
+        AiProviderRegistry registry = new AiProviderRegistry();
+        AiSlotRouter router = router(registry, new AiRuntimeConfig(
+            Map.of("dash", new AiRuntimeConfig.ProviderEntry("https://a", "sk-x", true)),
+            Map.of("main", new AiRuntimeConfig.SlotEntry("dash", "", false))));
+        assertSame(registry.getModel("dash"), router.getModel("main"));
+        assertNull(router.resolveModel("main"));
+    }
+
+    private static void injectLegacyModel(AiSlotRouter router, String model) {
+        try {
+            var f = AiSlotRouter.class.getDeclaredField("legacyModel");
+            f.setAccessible(true);
+            f.set(router, model);
+        } catch (Exception e) { throw new RuntimeException(e); }
+    }
 }
