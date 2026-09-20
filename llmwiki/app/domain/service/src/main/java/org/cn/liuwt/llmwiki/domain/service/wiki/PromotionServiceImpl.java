@@ -103,20 +103,14 @@ public class PromotionServiceImpl implements PromotionService {
             promotedPage.setPromotedFromUsername(null);
             wikiPageMapper.updateById(promotedPage);
 
-            ScopeDO targetScope = scopeMapper.selectById(promotedPage.getScopeId());
-            if (targetScope != null) {
-                UserDO owner = userMapper.selectById(targetScope.getOwnerId());
-                if (owner != null) {
-                    notificationService.createNotification(
-                        owner.getId(),
-                        "page_recalled",
-                        "知识页面被召回",
-                        "贡献者将知识《" + promotedPage.getTitle() + "》标记为 private，页面已替换为存根",
-                        promotedPage.getScopeId(),
-                        promotedPage.getId()
-                    );
-                }
-            }
+            notificationService.createScopeNotification(
+                promotedPage.getScopeId(),
+                "page_recalled",
+                "知识页面被召回",
+                "贡献者将知识《" + promotedPage.getTitle() + "》标记为 private，页面已替换为存根",
+                promotedPage.getId(),
+                null
+            );
         }
 
         log.info("Soft recall completed: source scopeId={}, pageId={}, recalled {} promoted pages",

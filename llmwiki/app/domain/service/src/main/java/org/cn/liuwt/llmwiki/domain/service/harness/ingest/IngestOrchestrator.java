@@ -107,7 +107,9 @@ public class IngestOrchestrator {
 
             executionTracker.updateExecutionStatus(executionId, "running");
 
-            boolean suppressAll = suppressNotifications || isBatchContext(executionTracker.getExecution(executionId));
+            ExecutionModel currentExecution = executionTracker.getExecution(executionId);
+            boolean suppressAll = suppressNotifications || isBatchContext(currentExecution);
+            Long submittedBy = currentExecution != null ? currentExecution.getSubmittedBy() : null;
 
             SourceDO sourceDO = sourceMapper.selectOne(
                 new LambdaQueryWrapper<SourceDO>()
@@ -120,13 +122,14 @@ public class IngestOrchestrator {
 
             String sourceName = sourceDO.getName() != null ? sourceDO.getName() : "未知文件";
             if (!suppressAll) {
-                notificationService.createNotification(scopeId, "ingest_started",
+                notificationService.createPersonalNotification(submittedBy, "ingest_started",
                     "正在处理 — " + sourceName,
                     "AI 正在分析文档内容，完成后可查看生成的知识页面",
                     scopeId, null, executionId);
             }
 
             IngestContext context = new IngestContext(scopeId, sourceId, executionId, guidance);
+            context.setSubmittedBy(submittedBy);
             context.setSuppressNotifications(suppressAll);
             int totalTokens = 0;
             executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_START,
@@ -175,8 +178,8 @@ public class IngestOrchestrator {
                     java.util.Map.of("pipeline", "ingest",
                         "message", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
                 executionTracker.failExecution(executionId, e.getMessage());
-                if (!suppressNotifications) {
-                    notificationService.createNotification(scopeId, "ingest_failed",
+                if (!suppressAll) {
+                    notificationService.createPersonalNotification(submittedBy, "ingest_failed",
                         "处理失败 — " + sourceName,
                         e.getMessage() != null ? e.getMessage() : "未知错误，请重试",
                         scopeId, null, executionId);
@@ -198,7 +201,7 @@ public class IngestOrchestrator {
                     completeContent = "文档已成功处理，知识页面已更新";
                 }
                 if (!suppressAll) {
-                    notificationService.createNotification(scopeId, "ingest_completed",
+                    notificationService.createPersonalNotification(submittedBy, "ingest_completed",
                         "处理完成 — " + sourceName,
                         completeContent,
                         scopeId, null, executionId);
@@ -228,13 +231,15 @@ public class IngestOrchestrator {
         executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_END,
             java.util.Map.of("pipeline", "ingest", "status", reviewStatus, "totalTokens", totalTokens));
         if (!suppressNotifications) {
+            ExecutionModel execution = executionTracker.getExecution(executionId);
+            Long submittedBy = execution != null ? execution.getSubmittedBy() : null;
             if (schemaReview) {
-                notificationService.createNotification(scopeId, "ingest_awaiting_review",
+                notificationService.createPersonalNotification(submittedBy, "ingest_awaiting_review",
                     "需要评审 — " + sourceName,
                     "分析结果存在 Schema 合规违规，请审阅后确认是否继续写入知识库",
                     scopeId, null, executionId);
             } else {
-                notificationService.createNotification(scopeId, "ingest_awaiting_confirmation",
+                notificationService.createPersonalNotification(submittedBy, "ingest_awaiting_confirmation",
                     "分析完成 — " + sourceName,
                     "请审阅分析结果，确认后写入知识库",
                     scopeId, null, executionId);

@@ -49,7 +49,7 @@ public class IngestBatchService {
     private static final Set<String> ACTIVE_EXECUTION_STATUSES =
         Set.of("pending", "running", "awaiting_confirmation", "confirmed", "paused");
     private static final Set<String> CANCEL_CLEANUP_STATUSES =
-        Set.of("pending", "confirmed", "awaiting_confirmation", "awaiting_review", "failed");
+        Set.of("pending", "confirmed", "awaiting_confirmation", "awaiting_review");
     private static final Set<String> CANCEL_INTERRUPT_STATUSES = Set.of("running", "paused");
     private static final int INBOX_RETENTION_DAYS = 7;
     private static final int INBOX_OPEN_LIMIT = 100;

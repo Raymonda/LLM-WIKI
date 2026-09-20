@@ -22,6 +22,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    host: true,
     proxy: {
       '/api/lint': {
         target: 'http://localhost:8080',

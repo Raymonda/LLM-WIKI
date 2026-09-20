@@ -2148,7 +2148,7 @@ public class WriterAgent {
         if (notificationService != null && context != null && !context.isSuppressNotifications()) {
             String content = "页面「" + (pageTitle == null ? "" : pageTitle) + "」未执行按条增量更新（"
                 + (reason == null ? "" : reason) + "），本次摄入未更新该页。";
-            notificationService.createNotification(scopeId, "ingest_entity_update_skipped",
+            notificationService.createPersonalNotification(context.getSubmittedBy(), "ingest_entity_update_skipped",
                 "实体页增量更新降级", content, scopeId, pageId, executionId);
         }
     }

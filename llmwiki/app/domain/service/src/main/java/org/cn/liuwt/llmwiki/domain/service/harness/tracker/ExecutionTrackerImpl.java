@@ -172,26 +172,36 @@ public class ExecutionTrackerImpl implements ExecutionTracker {
     }
 
     @Override
-    public void cancelExecution(Long executionId, String reason) {
-        ExecutionDO executionDO = executionMapper.selectById(executionId);
-        if (executionDO != null) {
-            executionDO.setStatus("cancelled");
-            executionDO.setErrorMessage(reason);
-            executionDO.setCompletedAt(LocalDateTime.now());
-            executionMapper.updateById(executionDO);
-            eventPublisher.publishExecutionStatus(executionId, executionDO.getType(), "cancelled", null);
+    public boolean cancelExecution(Long executionId, String reason) {
+        int rows = executionMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ExecutionDO>()
+                .eq(ExecutionDO::getId, executionId)
+                .notIn(ExecutionDO::getStatus, "completed", "cancelled", "failed")
+                .set(ExecutionDO::getStatus, "cancelled")
+                .set(ExecutionDO::getCompletedAt, LocalDateTime.now()));
+        if (rows != 1) {
+            log.info("Execution {} already in terminal state, skipping cancelExecution ({})", executionId, reason);
+            return false;
         }
+        ExecutionDO updated = executionMapper.selectById(executionId);
+        eventPublisher.publishExecutionStatus(executionId, updated != null ? updated.getType() : null, "cancelled", null);
+        return true;
     }
 
     @Override
-    public void pauseExecution(Long executionId, String reason) {
-        ExecutionDO executionDO = executionMapper.selectById(executionId);
-        if (executionDO != null) {
-            executionDO.setStatus("paused");
-            executionDO.setErrorMessage(reason);
-            executionMapper.updateById(executionDO);
-            eventPublisher.publishExecutionStatus(executionId, executionDO.getType(), "paused", null);
+    public boolean pauseExecution(Long executionId, String reason) {
+        int rows = executionMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ExecutionDO>()
+                .eq(ExecutionDO::getId, executionId)
+                .notIn(ExecutionDO::getStatus, "completed", "cancelled", "failed")
+                .set(ExecutionDO::getStatus, "paused"));
+        if (rows != 1) {
+            log.info("Execution {} already in terminal state, skipping pauseExecution ({})", executionId, reason);
+            return false;
         }
+        ExecutionDO updated = executionMapper.selectById(executionId);
+        eventPublisher.publishExecutionStatus(executionId, updated != null ? updated.getType() : null, "paused", null);
+        return true;
     }
 
     @Override
@@ -370,6 +380,15 @@ public class ExecutionTrackerImpl implements ExecutionTracker {
     }
 
     @Override
+    public void clearStepStartedAt(Long executionId) {
+        executionStepMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ExecutionStepDO>()
+                .eq(ExecutionStepDO::getExecutionId, executionId)
+                .isNotNull(ExecutionStepDO::getStartedAt)
+                .set(ExecutionStepDO::getStartedAt, null));
+    }
+
+    @Override
     public void resetStepForRetry(Long stepId) {
         ExecutionStepDO stepDO = executionStepMapper.selectById(stepId);
         if (stepDO != null) {
@@ -393,7 +412,9 @@ public class ExecutionTrackerImpl implements ExecutionTracker {
                     .eq(ExecutionDO::getId, executionId)
                     .set(ExecutionDO::getStatus, "running")
                     .set(ExecutionDO::getErrorMessage, null)
-                    .set(ExecutionDO::getCompletedAt, null));
+                    .set(ExecutionDO::getCompletedAt, null)
+                    .set(ExecutionDO::getStartedAt, LocalDateTime.now())
+                    .set(ExecutionDO::getNodeId, null));
             eventPublisher.publishExecutionStatus(executionId, executionDO.getType(), "running", null);
         }
     }

@@ -738,7 +738,7 @@ public class PipelineOrchestrator {
         if (!findings.isEmpty()) {
             String title = String.format("知识体检完成，发现 %d 个诊断项", findings.size());
             String content = String.format("其中高优先级 %d 项、中优先级 %d 项。点击查看详情。", highCount, mediumCount);
-            notificationService.createNotification(scopeId, "lint_completed", title, content, scopeId, null);
+            notificationService.createPersonalNotification(execution.getSubmittedBy(), "lint_completed", title, content, scopeId, null, execution.getId());
         }
 
         return executionTracker.getExecution(execution.getId());

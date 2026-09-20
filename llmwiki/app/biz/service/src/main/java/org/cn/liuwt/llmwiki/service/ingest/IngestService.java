@@ -37,6 +37,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
@@ -147,13 +148,16 @@ public class IngestService {
             .in(ExecutionDO::getStatus, "failed", "paused")
             .set(ExecutionDO::getStatus, "pending")
             .set(ExecutionDO::getErrorMessage, null)
-            .set(ExecutionDO::getCompletedAt, null);
+            .set(ExecutionDO::getCompletedAt, null)
+            .set(ExecutionDO::getNodeId, null)
+            .set(ExecutionDO::getStartedAt, LocalDateTime.now());
         if (guidance != null && !guidance.isBlank()) {
             update.set(ExecutionDO::getGuidance, guidance);
         }
         if (executionMapper.update(null, update) != 1) {
             return false;
         }
+        executionTracker.clearStepStartedAt(executionId);
         reviveCompletedBatch(executionId);
         return true;
     }
@@ -200,13 +204,16 @@ public class IngestService {
         LambdaUpdateWrapper<ExecutionDO> update = new LambdaUpdateWrapper<ExecutionDO>()
             .eq(ExecutionDO::getId, executionId)
             .in(ExecutionDO::getStatus, "awaiting_confirmation", "awaiting_review")
-            .set(ExecutionDO::getStatus, "pending");
+            .set(ExecutionDO::getStatus, "pending")
+            .set(ExecutionDO::getNodeId, null)
+            .set(ExecutionDO::getStartedAt, LocalDateTime.now());
         if (guidance != null && !guidance.isBlank()) {
             update.set(ExecutionDO::getGuidance, guidance);
         }
         if (executionMapper.update(null, update) != 1) {
             return false;
         }
+        executionTracker.clearStepStartedAt(executionId);
         executionTracker.resetStepForRetry(targetStepId);
         return true;
     }
@@ -233,7 +240,9 @@ public class IngestService {
     }
 
     public void cancelExecution(Long executionId, Long scopeId) {
-        markExecutionCancelled(executionId);
+        if (!markExecutionCancelled(executionId)) {
+            return;
+        }
         cleanupCancelledExecution(executionId, scopeId);
     }
 
@@ -241,11 +250,13 @@ public class IngestService {
      * 仅落库取消状态（execution + running steps + source），不触碰已生成产物。
      * 必须先于线程中断调用：pipeline 在检查点读取 execution 状态并主动退出。
      */
-    public void markExecutionCancelled(Long executionId) {
+    public boolean markExecutionCancelled(Long executionId) {
         ExecutionModel exec = executionTracker.getExecution(executionId);
-        if (exec == null) return;
+        if (exec == null) return false;
 
-        executionTracker.cancelExecution(executionId, "用户手动取消");
+        if (!executionTracker.cancelExecution(executionId, "用户手动取消")) {
+            return false;
+        }
 
         List<ExecutionStepModel> steps = executionTracker.listSteps(executionId);
         for (ExecutionStepModel step : steps) {
@@ -259,6 +270,7 @@ public class IngestService {
             sourceDO.setStatus("cancelled");
             sourceMapper.updateById(sourceDO);
         }
+        return true;
     }
 
     /**
@@ -267,7 +279,11 @@ public class IngestService {
      */
     public void cleanupCancelledExecution(Long executionId, Long scopeId) {
         ExecutionModel exec = executionTracker.getExecution(executionId);
-        Long sourceId = exec != null ? exec.getSourceId() : null;
+        if (exec == null || !"cancelled".equals(exec.getStatus())) {
+            log.info("Skip cleanup for executionId={}: status is not cancelled", executionId);
+            return;
+        }
+        Long sourceId = exec.getSourceId();
 
         cleanupHalfProducts(scopeId, sourceId);
 
@@ -276,11 +292,13 @@ public class IngestService {
         log.info("Execution id={} cancelled and cleaned up for scopeId={}", executionId, scopeId);
     }
 
-    public void pauseExecution(Long executionId, Long scopeId) {
+    public boolean pauseExecution(Long executionId, Long scopeId) {
         ExecutionModel exec = executionTracker.getExecution(executionId);
-        if (exec == null) return;
+        if (exec == null) return false;
 
-        executionTracker.pauseExecution(executionId, "用户手动暂停");
+        if (!executionTracker.pauseExecution(executionId, "用户手动暂停")) {
+            return false;
+        }
 
         List<ExecutionStepModel> steps = executionTracker.listSteps(executionId);
         for (ExecutionStepModel step : steps) {
@@ -290,6 +308,7 @@ public class IngestService {
         }
 
         log.info("Execution id={} paused for scopeId={}", executionId, scopeId);
+        return true;
     }
 
     private void cleanupHalfProducts(Long scopeId, Long sourceId) {

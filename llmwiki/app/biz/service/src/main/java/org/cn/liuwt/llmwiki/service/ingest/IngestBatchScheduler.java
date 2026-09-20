@@ -317,7 +317,8 @@ public class IngestBatchScheduler {
 
         long awaiting = items.stream().filter(i ->
             "awaiting_confirmation".equals(i.getStatus()) || "awaiting_review".equals(i.getStatus())).count();
-        long failed = items.stream().filter(i -> "failed".equals(i.getStatus())).count();
+        long failed = items.stream().filter(i ->
+            "failed".equals(i.getStatus()) || "budget_exhausted".equals(i.getStatus())).count();
         long cancelled = items.stream().filter(i -> "cancelled".equals(i.getStatus())).count();
         long completed = items.stream().filter(i -> "completed".equals(i.getStatus())).count();
 
@@ -330,10 +331,17 @@ public class IngestBatchScheduler {
         boolean analysisDone = items.stream().noneMatch(i ->
             "pending".equals(i.getStatus()) || "running".equals(i.getStatus()) || "paused".equals(i.getStatus()));
         if (analysisDone) {
-            String detail = batch.getTotalCount() != null && batch.getTotalCount() == 1
-                ? (awaiting >= 1 ? "分析完成，待审阅" : "分析失败")
-                : "本批 " + awaiting + " 份待审阅、" + failed + " 份失败";
-            notifyOnce(batch, "ingest_batch_analyzed", "分析完成", detail);
+            boolean anyAnalyzedOutcome = awaiting > 0 || failed > 0;
+            if (anyAnalyzedOutcome) {
+                String detail;
+                if (batch.getTotalCount() != null && batch.getTotalCount() == 1) {
+                    detail = awaiting >= 1 ? "分析完成，待审阅" : "分析失败";
+                } else {
+                    detail = "本批 " + awaiting + " 份待审阅、" + failed + " 份失败"
+                        + (cancelled > 0 ? "、" + cancelled + " 份取消" : "");
+                }
+                notifyOnce(batch, "ingest_batch_analyzed", "分析完成", detail);
+            }
         }
         boolean allTerminal = items.stream().allMatch(i -> TERMINAL_EXECUTION_STATUSES.contains(i.getStatus()));
         if (allTerminal && !"completed".equals(batch.getStatus()) && !"cancelled".equals(batch.getStatus())) {

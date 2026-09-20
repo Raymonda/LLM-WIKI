@@ -1189,10 +1189,10 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
   async function deleteExecution(executionId: number) {
     try {
       await deleteIngest(executionId)
+      removeTask(executionId)
     } catch (e: any) {
       console.error('删除任务失败:', e.message)
     }
-    removeTask(executionId)
   }
 
   async function cancelExecution() {
@@ -1200,10 +1200,10 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
     if (!task || !task.executionId) return
     try {
       await cancelIngest(task.executionId)
+      removeTask(task.executionId)
     } catch (e: any) {
       task.pipelineError = e.message || '取消失败'
     }
-    removeTask(task.executionId)
   }
 
   async function cancelTaskForClose(executionId: number) {

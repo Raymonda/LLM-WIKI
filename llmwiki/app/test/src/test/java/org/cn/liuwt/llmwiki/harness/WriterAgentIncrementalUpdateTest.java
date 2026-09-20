@@ -158,7 +158,7 @@ class WriterAgentIncrementalUpdateTest {
         assertEquals("conflict-warning", existing.getHealthStatus());
         assertEquals(2, existing.getSourceCount());
         verify(wikiPageMapper).update(isNull(), any());
-        verify(notificationService, never()).createNotification(any(), any(), any(), any(), any(), any(), any());
+        verify(notificationService, never()).createPersonalNotification(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -170,12 +170,14 @@ class WriterAgentIncrementalUpdateTest {
         WikiPageDO existing = entityPage();
         stubLockedPageRead(existing);
 
-        WikiPageDO result = invokeApply(agent, existing, new IngestContext(1L, 2L, 100L, null));
+        IngestContext context = new IngestContext(1L, 2L, 100L, null);
+        context.setSubmittedBy(42L);
+        WikiPageDO result = invokeApply(agent, existing, context);
 
         assertNull(result, "degraded update must return null and leave the page unchanged");
         verify(storageProvider, never()).write(anyString(), anyString(), any());
         verify(executionEventLog).append(eq("100"), eq("error"), anyMap());
-        verify(notificationService).createNotification(eq(1L), eq("ingest_entity_update_skipped"),
+        verify(notificationService).createPersonalNotification(eq(42L), eq("ingest_entity_update_skipped"),
             eq("实体页增量更新降级"), contains("未执行按条增量更新"), eq(1L), eq(77L), eq(100L));
     }
 
@@ -193,7 +195,7 @@ class WriterAgentIncrementalUpdateTest {
         WikiPageDO result = invokeApply(agent, existing, context);
 
         assertNull(result);
-        verify(notificationService, never()).createNotification(any(), any(), any(), any(), any(), any(), any());
+        verify(notificationService, never()).createPersonalNotification(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test

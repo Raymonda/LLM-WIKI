@@ -94,10 +94,10 @@ public class LintFindingCleanupService {
             log.info("Expired {} awaiting_approval findings back to open status", totalExpired);
             for (Long scopeId : scopeIds) {
                 try {
-                    notificationService.createNotification(scopeId, "awaiting_expired",
+                    notificationService.createScopeNotification(scopeId, "awaiting_expired",
                         "裁决请求过期提醒",
                         "有 " + totalExpired + " 条裁决请求因超过 7 天未处理已自动转回待处理状态，请及时处理。",
-                        scopeId, null);
+                        null, null);
                 } catch (Exception e) {
                     log.warn("Failed to create awaiting_expired notification for scope {}", scopeId);
                 }

@@ -134,19 +134,6 @@ public class PipelineTaskConsumer implements RocketMQListener<PipelineTaskMessag
             Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
             log.error("Pipeline task failed for executionId={}, will be retried by RocketMQ", executionId, cause);
 
-            // 内部 orchestrator 可能已将 execution 状态设为 "failed"，
-            // 必须重置为 "running"，否则重试会被终端状态守卫拦截
-            try {
-                ExecutionModel current = executionTracker.getExecution(executionId);
-                if (current != null && TERMINAL_STATUSES.contains(current.getStatus())
-                        && !"cancelled".equals(current.getStatus())) {
-                    executionTracker.updateExecutionStatus(executionId, "running");
-                    log.info("Reset execution {} from '{}' to 'running' for MQ retry", executionId, current.getStatus());
-                }
-            } catch (Exception resetErr) {
-                log.warn("Failed to reset execution status for retry: executionId={}", executionId, resetErr);
-            }
-
             if (cause instanceof RuntimeException re) throw re;
             throw new RuntimeException("Pipeline task failed: executionId=" + executionId, cause);
         } catch (InterruptedException ie) {

@@ -167,8 +167,8 @@ public class ConflictRoutingService {
                 String title = "检测到内容重复";
                 String content = String.format("页面「%s」与「%s」内容高度相似（相似度%.0f%%），建议合并或处理。（裁决ID: %d）",
                     newPage.getTitle(), existingPage.getTitle(), similarity * 100, reviewId);
-                notificationService.createNotification(scopeId, "conflict_pending_review",
-                    title, content, scopeId, existingPage.getId(), executionId);
+                notificationService.createScopeNotification(scopeId, "conflict_pending_review",
+                    title, content, existingPage.getId(), executionId);
                 log.info("Duplicate conflict dispatched: '{}' ↔ '{}' (similarity={}%)",
                     newPage.getTitle(), existingPage.getTitle(), String.format("%.0f", similarity * 100));
             } catch (Exception e) {
@@ -319,8 +319,8 @@ public class ConflictRoutingService {
         String title = "冲突已自动处理";
         String content = String.format("页面「%s」与「%s」存在冲突，已按策略【%s】自动合并。",
             pageA.getTitle(), pageB.getTitle(), strategy.getLabel());
-        notificationService.createNotification(scopeId, "conflict_auto_resolved", 
-            title, content, scopeId, pageB.getId(), executionId);
+        notificationService.createScopeNotification(scopeId, "conflict_auto_resolved", 
+            title, content, pageB.getId(), executionId);
     }
 
     private void sendPendingReviewNotification(Long scopeId, Long executionId,
@@ -329,8 +329,8 @@ public class ConflictRoutingService {
         String content = String.format("页面「%s」与「%s」存在%s冲突，建议按【%s】处理，请人工确认。（裁决ID: %d）",
             pageA.getTitle(), pageB.getTitle(), 
             conflictType != null ? conflictType : "", strategy.getLabel(), reviewId);
-        notificationService.createNotification(scopeId, "conflict_pending_review",
-            title, content, scopeId, pageB.getId(), executionId);
+        notificationService.createScopeNotification(scopeId, "conflict_pending_review",
+            title, content, pageB.getId(), executionId);
     }
 
     private void sendDeferredNotification(Long scopeId, Long executionId,
@@ -338,8 +338,8 @@ public class ConflictRoutingService {
         String title = "冲突已暂缓";
         String content = String.format("页面「%s」与「%s」存在%s冲突，已标注并存，将在下次 Lint 时重新评估。",
             pageA.getTitle(), pageB.getTitle(), conflictType != null ? conflictType : "");
-        notificationService.createNotification(scopeId, "conflict_deferred",
-            title, content, scopeId, pageB.getId(), executionId);
+        notificationService.createScopeNotification(scopeId, "conflict_deferred",
+            title, content, pageB.getId(), executionId);
     }
 
     private String readPageContent(Long scopeId, String filePath) {

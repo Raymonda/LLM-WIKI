@@ -349,8 +349,8 @@ public class ConflictDomainService {
         String title = "冲突裁决待确认";
         String content = String.format("Lint 发现「%s」存在冲突，裁决方案已生成，路由策略：%s，请人工确认后执行。",
             finding.getTitle(), route.reason());
-        notificationService.createNotification(scopeId, "conflict_review_reminder",
-            title, content, scopeId, finding.getAssetId(), executionId);
+        notificationService.createScopeNotification(scopeId, "conflict_review_reminder",
+            title, content, finding.getAssetId(), executionId);
     }
 
     private void sendAutoExecutedNotification(Long scopeId, Long executionId,
@@ -358,8 +358,8 @@ public class ConflictDomainService {
         String title = "冲突已自动执行";
         String content = String.format("Lint 冲突「%s」已按策略【%s】自动执行裁决方案。路由：%s。如有异议请回滚。",
             finding.getTitle(), route.strategy().getLabel(), route.reason());
-        notificationService.createNotification(scopeId, "conflict_auto_executed",
-            title, content, scopeId, finding.getAssetId(), executionId);
+        notificationService.createScopeNotification(scopeId, "conflict_auto_executed",
+            title, content, finding.getAssetId(), executionId);
     }
 
     private void applyConflictRewrite(Long scopeId, String targetPath, String rewritten, LintFindingDO finding) {

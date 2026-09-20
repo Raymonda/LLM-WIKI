@@ -233,7 +233,7 @@ public class MergeService {
         try {
             String title = "知识合并完成";
             String content = String.format("已合并 %d 个页面，新页面已写入知识库。点击查看执行详情。", originalPageIds.size());
-            notificationService.createNotification(scopeId, "merge_completed",
+            notificationService.createPersonalNotification(resolveSubmittedBy(executionId), "merge_completed",
                 title, content, scopeId, null, executionId);
         } catch (Exception e) {
             log.warn("Failed to send merge completed notification: executionId={}", executionId);
@@ -244,10 +244,20 @@ public class MergeService {
         try {
             String title = "知识合并失败";
             String content = "合并过程出现错误：" + (error != null && error.length() > 200 ? error.substring(0, 200) + "..." : error);
-            notificationService.createNotification(scopeId, "merge_failed",
+            notificationService.createPersonalNotification(resolveSubmittedBy(executionId), "merge_failed",
                 title, content, scopeId, null, executionId);
         } catch (Exception e) {
             log.warn("Failed to send merge failed notification: executionId={}", executionId);
+        }
+    }
+
+    private Long resolveSubmittedBy(Long executionId) {
+        try {
+            org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel execution = executionTracker.getExecution(executionId);
+            return execution != null ? execution.getSubmittedBy() : null;
+        } catch (Exception e) {
+            log.warn("Failed to resolve submittedBy for notification: executionId={}", executionId);
+            return null;
         }
     }
 

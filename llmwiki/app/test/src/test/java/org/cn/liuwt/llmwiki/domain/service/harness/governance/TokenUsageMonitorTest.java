@@ -94,7 +94,7 @@ class TokenUsageMonitorTest {
 
         monitor.recordUsage(7L, 100000);
 
-        verify(notificationService, times(1)).createNotification(any(), any(), any(), any(), any(), any());
+        verify(notificationService, times(1)).createScopeNotification(eq(7L), any(), any(), any(), any(), any());
         verify(budgetMapper).update(eq(null), any());
         verify(budgetMapper, never()).updateById(any(ScopeBudgetDO.class));
     }

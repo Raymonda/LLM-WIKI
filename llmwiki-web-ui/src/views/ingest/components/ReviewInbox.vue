@@ -37,6 +37,7 @@ const groups = computed(() =>
       key: group.key,
       label: t(GROUP_LABEL_KEYS[group.key]),
       items: group.items,
+      retryableCount: group.items.filter((item) => item.status === 'failed').length,
     })),
 )
 
@@ -71,7 +72,7 @@ function onView(executionId: number) {
         <span class="review-inbox__group-label">{{ group.label }}</span>
         <span class="review-inbox__group-count">{{ group.items.length }}</span>
         <button
-          v-if="group.key === 'failed' && group.items.length >= 2"
+          v-if="group.key === 'failed' && group.retryableCount >= 2"
           class="review-inbox__group-action"
           type="button"
           :disabled="busy"

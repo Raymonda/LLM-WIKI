@@ -15,8 +15,9 @@ public interface ExecutionTracker {
     void updateExecutionStatus(Long executionId, String status);
     void updateExecutionStatus(Long executionId, String status, String complianceViolations);
     void failExecution(Long executionId, String errorMessage);
-    void cancelExecution(Long executionId, String reason);
-    void pauseExecution(Long executionId, String reason);
+    boolean cancelExecution(Long executionId, String reason);
+    boolean pauseExecution(Long executionId, String reason);
+    void clearStepStartedAt(Long executionId);
     void updateStepStatus(Long stepId, String status);
     void updateStepOutputData(Long stepId, String outputData);
     void completeStep(Long stepId, String outputData, Integer tokensUsed, Integer durationMs);

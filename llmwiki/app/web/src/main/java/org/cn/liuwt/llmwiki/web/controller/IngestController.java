@@ -302,7 +302,9 @@ public class IngestController {
             return Result.failed(ErrorCode.INGEST_ALREADY_FINISHED_CANCEL);
         }
 
-        ingestService.markExecutionCancelled(id);
+        if (!ingestService.markExecutionCancelled(id)) {
+            return Result.failed(ErrorCode.INGEST_ALREADY_FINISHED_CANCEL);
+        }
 
         if (ingestDispatcher.isMqAvailable() && mqHealthService.shouldAttempt()) {
             try {
@@ -332,14 +334,12 @@ public class IngestController {
 
         String currentStatus = execution.getStatus();
         boolean wasActive = "running".equals(currentStatus) || "pending".equals(currentStatus) || "paused".equals(currentStatus);
-        if (wasActive) {
-            ingestService.markExecutionCancelled(id);
-        }
+        boolean markedCancelled = wasActive && ingestService.markExecutionCancelled(id);
 
         registry.cancelAndRemoveFuture(id);
         registry.completeAndRemoveEmitter(id);
 
-        if (wasActive) {
+        if (markedCancelled) {
             ingestService.cleanupCancelledExecution(id, execution.getScopeId());
         }
 
@@ -363,7 +363,9 @@ public class IngestController {
             return Result.failed(ErrorCode.INGEST_ALREADY_FINISHED_PAUSE);
         }
 
-        ingestService.pauseExecution(id, execution.getScopeId());
+        if (!ingestService.pauseExecution(id, execution.getScopeId())) {
+            return Result.failed(ErrorCode.INGEST_ALREADY_FINISHED_PAUSE);
+        }
 
         if (ingestDispatcher.isMqAvailable() && mqHealthService.shouldAttempt()) {
             try {

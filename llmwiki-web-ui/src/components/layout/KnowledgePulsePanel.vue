@@ -11,24 +11,37 @@ const store = useActivityCenterStore()
 const router = useRouter()
 const { t, locale } = useI18n()
 
-const typeMeta: Record<string, { icon: any; labelKey: string; color: string }> = {
-  ingest_started: { icon: Upload, labelKey: 'common.pulseTypeIngestStarted', color: 'var(--accent-primary)' },
-  ingest_completed: { icon: CheckCircle2, labelKey: 'common.pulseTypeIngestCompleted', color: 'var(--success)' },
-  ingest_failed: { icon: AlertTriangle, labelKey: 'common.pulseTypeIngestFailed', color: 'var(--error)' },
-  merge_completed: { icon: CheckCircle2, labelKey: 'common.pulseTypeMergeCompleted', color: 'var(--success)' },
-  merge_failed: { icon: AlertTriangle, labelKey: 'common.pulseTypeMergeFailed', color: 'var(--error)' },
-  lint_completed: { icon: Shield, labelKey: 'common.pulseTypeLintCompleted', color: 'var(--accent-primary)' },
-  budget_warning: { icon: AlertTriangle, labelKey: 'common.pulseTypeBudgetWarning', color: 'var(--warning)' },
-  budget_exceeded: { icon: AlertTriangle, labelKey: 'common.pulseTypeBudgetExceeded', color: 'var(--error)' },
-  awaiting_expired: { icon: Info, labelKey: 'common.pulseTypeAwaitingExpired', color: 'var(--warning)' },
-  page_recalled: { icon: Info, labelKey: 'common.pulseTypePageRecalled', color: 'var(--text-secondary)' },
-  ingest_batch_awaiting: { icon: ClipboardCheck, labelKey: 'common.pulseTypeIngestBatchAwaiting', color: 'var(--accent-primary)' },
-  ingest_batch_analyzed: { icon: CheckCircle2, labelKey: 'common.pulseTypeIngestBatchAnalyzed', color: 'var(--success)' },
-  ingest_batch_completed: { icon: CheckCircle2, labelKey: 'common.pulseTypeIngestBatchCompleted', color: 'var(--success)' },
+type PulseLevel = 'running' | 'success' | 'error' | 'warning' | 'info'
+
+const typeMeta: Record<string, { icon: any; labelKey: string; color: string; level: PulseLevel }> = {
+  ingest_started: { icon: Upload, labelKey: 'common.pulseTypeIngestStarted', color: 'var(--accent-primary)', level: 'running' },
+  ingest_completed: { icon: CheckCircle2, labelKey: 'common.pulseTypeIngestCompleted', color: 'var(--success)', level: 'success' },
+  ingest_failed: { icon: AlertTriangle, labelKey: 'common.pulseTypeIngestFailed', color: 'var(--error)', level: 'error' },
+  ingest_awaiting_confirmation: { icon: ClipboardCheck, labelKey: 'common.pulseTypeIngestAwaitingConfirmation', color: 'var(--warning)', level: 'warning' },
+  ingest_awaiting_review: { icon: ClipboardCheck, labelKey: 'common.pulseTypeIngestAwaitingReview', color: 'var(--warning)', level: 'warning' },
+  ingest_entity_update_skipped: { icon: Info, labelKey: 'common.pulseTypeIngestEntityUpdateSkipped', color: 'var(--warning)', level: 'warning' },
+  merge_completed: { icon: CheckCircle2, labelKey: 'common.pulseTypeMergeCompleted', color: 'var(--success)', level: 'success' },
+  merge_failed: { icon: AlertTriangle, labelKey: 'common.pulseTypeMergeFailed', color: 'var(--error)', level: 'error' },
+  lint_completed: { icon: Shield, labelKey: 'common.pulseTypeLintCompleted', color: 'var(--accent-primary)', level: 'success' },
+  query_save: { icon: Info, labelKey: 'common.pulseTypeQuerySave', color: 'var(--text-secondary)', level: 'info' },
+  index_rebuild: { icon: Info, labelKey: 'common.pulseTypeIndexRebuild', color: 'var(--text-secondary)', level: 'info' },
+  budget_warning: { icon: AlertTriangle, labelKey: 'common.pulseTypeBudgetWarning', color: 'var(--warning)', level: 'warning' },
+  budget_exceeded: { icon: AlertTriangle, labelKey: 'common.pulseTypeBudgetExceeded', color: 'var(--error)', level: 'error' },
+  awaiting_expired: { icon: Info, labelKey: 'common.pulseTypeAwaitingExpired', color: 'var(--warning)', level: 'warning' },
+  page_recalled: { icon: Info, labelKey: 'common.pulseTypePageRecalled', color: 'var(--text-secondary)', level: 'info' },
+  ingest_batch_awaiting: { icon: ClipboardCheck, labelKey: 'common.pulseTypeIngestBatchAwaiting', color: 'var(--accent-primary)', level: 'warning' },
+  ingest_batch_analyzed: { icon: CheckCircle2, labelKey: 'common.pulseTypeIngestBatchAnalyzed', color: 'var(--success)', level: 'success' },
+  ingest_batch_completed: { icon: CheckCircle2, labelKey: 'common.pulseTypeIngestBatchCompleted', color: 'var(--success)', level: 'success' },
+  conflict_ruling: { icon: Info, labelKey: 'common.pulseTypeConflictRuling', color: 'var(--text-secondary)', level: 'info' },
+  conflict_auto_resolved: { icon: CheckCircle2, labelKey: 'common.pulseTypeConflictAutoResolved', color: 'var(--success)', level: 'success' },
+  conflict_pending_review: { icon: AlertTriangle, labelKey: 'common.pulseTypeConflictPendingReview', color: 'var(--warning)', level: 'warning' },
+  conflict_deferred: { icon: Info, labelKey: 'common.pulseTypeConflictDeferred', color: 'var(--text-secondary)', level: 'info' },
+  conflict_review_reminder: { icon: AlertTriangle, labelKey: 'common.pulseTypeConflictReviewReminder', color: 'var(--warning)', level: 'warning' },
+  conflict_auto_executed: { icon: CheckCircle2, labelKey: 'common.pulseTypeConflictAutoExecuted', color: 'var(--success)', level: 'success' },
 }
 
 function getTypeMeta(type: string) {
-  return typeMeta[type] || { icon: Bell, labelKey: '', color: 'var(--text-tertiary)' }
+  return typeMeta[type] || { icon: Bell, labelKey: '', color: 'var(--text-tertiary)', level: 'info' as PulseLevel }
 }
 
 function getTypeLabel(type: string) {
@@ -138,15 +151,10 @@ function formatTime(dateStr: string): string {
           >
             <div
               class="pulse-panel__item-indicator"
-              :class="{
-                'pulse-panel__item-indicator--running': notif.type === 'ingest_started',
-                'pulse-panel__item-indicator--success': notif.type === 'ingest_completed' || notif.type === 'lint_completed' || notif.type === 'merge_completed',
-                'pulse-panel__item-indicator--error': notif.type === 'ingest_failed' || notif.type === 'budget_exceeded' || notif.type === 'merge_failed',
-                'pulse-panel__item-indicator--warning': notif.type === 'budget_warning' || notif.type === 'awaiting_expired',
-              }"
+              :class="`pulse-panel__item-indicator--${getTypeMeta(notif.type).level}`"
             >
               <Loader2
-                v-if="notif.type === 'ingest_started'"
+                v-if="getTypeMeta(notif.type).level === 'running'"
                 :size="14"
                 class="pulse-panel__spin"
               />
@@ -337,6 +345,11 @@ function formatTime(dateStr: string): string {
 .pulse-panel__item-indicator--warning {
   background: var(--warning-light, #fff8e1);
   color: var(--warning);
+}
+
+.pulse-panel__item-indicator--info {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
 }
 
 .pulse-panel__spin {

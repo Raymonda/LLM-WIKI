@@ -84,6 +84,14 @@ const batchSummarySegments = computed(() => {
   return parts.join(' · ')
 })
 
+const batchProgressRatio = computed(() => {
+  const open = batchStore.openBatches
+  const total = open.reduce((sum, batch) => sum + batch.totalCount, 0)
+  if (total <= 0) return 0
+  const done = open.reduce((sum, batch) => sum + batch.completedCount, 0)
+  return done / total
+})
+
 function openBatchWorkspace() {
   const open = batchStore.openBatches
   if (open.length === 1) {
@@ -135,7 +143,8 @@ const secondaryLine = computed(() => {
   if (!task) return ''
   if (task.status === 'paused') return t('ingest.floatingProgressSaved')
   if (task.status === 'cancelled') return t('ingest.floatingPhaseCancelled')
-  if (task.status === 'failed' || task.status === 'budget_exhausted') return task.pipelineError || t('ingest.floatingFailedRetry')
+  if (task.status === 'failed') return task.pipelineError || t('ingest.floatingFailedRetry')
+  if (task.status === 'budget_exhausted') return t('ingest.statusBudgetExhausted')
   if (task.currentStep === 'done') return t('ingest.floatingClickResult')
   if (task.currentStep === 'review') return t('ingest.floatingReviewHint')
   if (store.currentTip) return store.currentTip
@@ -294,6 +303,16 @@ onUnmounted(() => {
       <div class="ingest-floating__tail">
         <ArrowRight :size="14" class="ingest-floating__arrow" />
       </div>
+
+      <div
+        class="ingest-floating__batch-progress"
+        role="progressbar"
+        :aria-valuenow="Math.round(batchProgressRatio * 100)"
+        aria-valuemin="0"
+        aria-valuemax="100"
+      >
+        <div class="ingest-floating__batch-progress-fill" :style="{ width: `${batchProgressRatio * 100}%` }"></div>
+      </div>
     </div>
   </Transition>
 </template>
@@ -392,6 +411,24 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ingest-floating__batch-progress {
+  position: absolute;
+  left: var(--space-3);
+  right: var(--space-3);
+  bottom: 3px;
+  height: 2px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.ingest-floating__batch-progress-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--accent-primary);
+  transition: width 300ms ease;
 }
 
 .ingest-floating__tail {

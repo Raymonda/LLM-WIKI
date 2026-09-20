@@ -194,7 +194,9 @@ public class HarnessController {
 
     @PostMapping("/executions/{id}/cancel")
     public Result<Void> cancelExecution(@PathVariable Long id) {
-        executionTracker.updateExecutionStatus(id, "cancelled");
+        if (!executionTracker.cancelExecution(id, "用户手动取消")) {
+            return Result.failed(ErrorCode.INGEST_ALREADY_FINISHED_CANCEL);
+        }
         return Result.success();
     }
 

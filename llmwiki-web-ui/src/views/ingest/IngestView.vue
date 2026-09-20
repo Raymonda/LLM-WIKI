@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter, useRoute } from 'vue-router'
 import { uploadSource, listSourcesPaged, deprecateSource, undeprecateSource, type SourceInfo, type DuplicateInfo } from '@/api/source'
@@ -7,9 +7,9 @@ import { useAuthStore } from '@/stores/auth'
 import {
   Upload, FileText, CheckCircle, ChevronRight,
   Loader2, AlertTriangle, Archive, ArchiveRestore, ArrowRight, Sparkles,
-  Search, FilePlus, FileEdit, XCircle, RotateCcw, AlertCircle, X,
+  Search, FilePlus, FileEdit, RotateCcw, AlertCircle, X,
   PauseCircle, PlayCircle, ChevronDown, GitBranch, ClipboardCheck,
-  Layers, ChevronLeft
+  Layers, ChevronLeft, List
 } from 'lucide-vue-next'
 import IngestProgressBar from './components/IngestProgressBar.vue'
 import IngestStageNav, { type StageItem } from './components/IngestStageNav.vue'
@@ -18,6 +18,8 @@ import EntityDiscoveryWall from './components/EntityDiscoveryWall.vue'
 import AnalysisSummaryPanel from './components/AnalysisSummaryPanel.vue'
 import BatchOverviewPanel from './components/BatchOverviewPanel.vue'
 import ReviewInbox from './components/ReviewInbox.vue'
+import IngestTaskQueue from './components/IngestTaskQueue.vue'
+import { batchQueueState, isTerminalTaskStatus, taskQueueState } from './queueModel'
 import { useIngestProgressStore } from '@/stores/ingestProgress'
 import { isSourceDeprecated, validateDeprecateForm } from '@/utils/sourceLifecycle'
 import { useIngestBatchStore, groupInboxItems } from '@/stores/ingestBatch'
@@ -56,21 +58,6 @@ const selectedBatchInfo = computed(
   () => batchStore.inbox.find(b => b.batchId === batchStore.selectedBatchId) ?? null,
 )
 
-const BATCH_BAR_COLLAPSED_LIMIT = 6
-const batchBarExpanded = ref(false)
-const visibleBatchChips = computed(() => {
-  const list = batchInbox.value
-  if (batchBarExpanded.value || list.length <= BATCH_BAR_COLLAPSED_LIMIT) return list
-  const head = list.slice(0, BATCH_BAR_COLLAPSED_LIMIT)
-  const selected = list.find(b => b.batchId === batchStore.selectedBatchId)
-  if (selected && !head.some(b => b.batchId === selected.batchId)) {
-    head[BATCH_BAR_COLLAPSED_LIMIT - 1] = selected
-  }
-  return head
-})
-const hiddenBatchCount = computed(() =>
-  Math.max(0, batchInbox.value.length - visibleBatchChips.value.length),
-)
 const batchItems = computed(() => batchStore.currentBatch?.items ?? [])
 const userGuidance = computed({
   get: () => store.userGuidance,
@@ -380,10 +367,8 @@ async function handlePauseExecution() {
   await store.pauseExecution()
 }
 
-const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'cancelled', 'budget_exhausted']
-
 async function handleCloseTask(task: { executionId: number; isPhaseRunning: boolean; status: string }) {
-  if (TERMINAL_TASK_STATUSES.includes(task.status)) {
+  if (isTerminalTaskStatus(task.status)) {
     store.deleteExecution(task.executionId)
     return
   }
@@ -428,6 +413,7 @@ async function handleReanalysis() {
 }
 
 function handleNewSource() {
+  if (batchMode.value) exitBatch()
   store.startNewSource()
 }
 
@@ -449,6 +435,68 @@ function exitBatch() {
 function handleInboxItemView(executionId: number) {
   exitBatch()
   store.openTask(executionId)
+}
+
+const queueOpen = ref(false)
+
+const activeTaskSummary = computed(
+  () => allTaskSummaries.value.find(task => task.executionId === activeTaskId.value) ?? null,
+)
+
+const taskHeaderDisplay = computed(() => {
+  const task = activeTaskSummary.value
+  return task ? taskQueueState(task) : null
+})
+
+const batchHeaderDisplay = computed(() => {
+  const batch = selectedBatchInfo.value
+  return batch ? batchQueueState(batch) : null
+})
+
+const queueBadgeCount = computed(() => {
+  const reviewTasks = allTaskSummaries.value.filter(
+    task => !isTerminalTaskStatus(task.status) && task.currentStep === 'review' && !task.isPhaseRunning,
+  ).length
+  return reviewTasks + batchStore.awaitingTotal
+})
+
+function closeQueue() {
+  queueOpen.value = false
+}
+
+function onQueueKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeQueue()
+}
+
+watch(queueOpen, (open) => {
+  if (open) {
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', onQueueKeydown)
+  } else {
+    document.body.style.overflow = ''
+    window.removeEventListener('keydown', onQueueKeydown)
+  }
+})
+
+onUnmounted(() => {
+  document.body.style.overflow = ''
+  window.removeEventListener('keydown', onQueueKeydown)
+})
+
+function handleSelectTask(executionId: number) {
+  if (batchMode.value) exitBatch()
+  setActiveTask(executionId)
+  closeQueue()
+}
+
+async function handleSelectBatch(batchId: number) {
+  await openBatch(batchId)
+  closeQueue()
+}
+
+function handleQueueNewTask() {
+  handleNewSource()
+  closeQueue()
 }
 
 async function runBatchAction(action: () => Promise<unknown>) {
@@ -517,7 +565,8 @@ async function handleItemRetry(executionId: number) {
 }
 
 async function handleRetryAllFailed() {
-  const failedItems = groupInboxItems(batchItems.value).find((group) => group.key === 'failed')?.items ?? []
+  const failedItems = (groupInboxItems(batchItems.value).find((group) => group.key === 'failed')?.items ?? [])
+    .filter((item) => item.status === 'failed')
   if (failedItems.length === 0) return
   const confirmed = await showConfirm({
     title: t('ingest.inboxRetryAll'),
@@ -591,71 +640,79 @@ onMounted(async () => {
     <h1 class="ingest-view__title">{{ t('ingest.title') }}</h1>
     <p class="ingest-view__subtitle">{{ t('ingest.subtitle') }}</p>
 
-    <div v-if="!batchMode && (allTaskSummaries.length > 0 || activeTaskId === null)" class="ingest-view__task-tabs">
-      <button
-        v-for="task in allTaskSummaries"
-        :key="task.executionId"
-        :class="['ingest-view__task-tab', { 'ingest-view__task-tab--active': task.executionId === activeTaskId, 'ingest-view__task-tab--cancelled': task.status === 'cancelled' }]"
-        @click="setActiveTask(task.executionId)"
-      >
-        <Loader2 v-if="task.isPhaseRunning" :size="12" class="ingest-view__stepper-spin" />
-        <AlertTriangle v-else-if="task.status === 'failed' || task.status === 'budget_exhausted'" :size="12" style="color: var(--error)" />
-        <XCircle v-else-if="task.status === 'cancelled'" :size="12" style="color: var(--text-tertiary)" />
-        <PauseCircle v-else-if="task.status === 'paused'" :size="12" style="color: var(--warning)" />
-        <CheckCircle v-else-if="task.currentStep === 'done'" :size="12" style="color: var(--success)" />
-        <ClipboardCheck v-else-if="task.currentStep === 'review'" :size="12" style="color: var(--accent-primary)" />
-        <FileText v-else :size="12" />
-        <span class="ingest-view__task-tab-name" :title="task.sourceName || t('ingest.materialFallback', [task.executionId])">{{ task.sourceName || t('ingest.materialFallback', [task.executionId]) }}</span>
-        <span v-if="task.isPhaseRunning" class="ingest-view__task-tab-progress">{{ Math.round(task.progress * 100) }}%</span>
-        <span class="ingest-view__task-tab-close" @click.stop="handleCloseTask(task)" :title="t('ingest.closeTask')" role="button">
-          <X :size="10" />
-        </span>
-      </button>
-      <button class="ingest-view__task-tab ingest-view__task-tab--new" @click="handleNewSource">
-        <Upload :size="12" />
-        <span>{{ t('ingest.newTask') }}</span>
-      </button>
-    </div>
+    <button
+      type="button"
+      class="ingest-view__queue-toggle"
+      @click="queueOpen = true"
+    >
+      <List :size="16" />
+      <span>{{ t('ingest.queueTitle') }}</span>
+      <span v-if="queueBadgeCount > 0" class="ingest-view__queue-toggle-badge">{{ queueBadgeCount }}</span>
+    </button>
 
-    <IngestStageNav
-      v-if="!batchMode"
-      class="ingest-view__stage-nav"
-      :stages="stages"
-      :current-key="stageNavKey"
-      :error-key="stageErrorKey"
-    />
+    <div class="ingest-view__body">
+      <div
+        v-if="queueOpen"
+        class="ingest-view__queue-mask"
+        @click="closeQueue"
+      ></div>
+      <IngestTaskQueue
+        class="ingest-view__queue"
+        :class="{ 'ingest-view__queue--open': queueOpen }"
+        :tasks="allTaskSummaries"
+        :active-task-id="activeTaskId"
+        :batches="batchInbox"
+        :selected-batch-id="batchStore.selectedBatchId"
+        :new-task-active="!batchMode && activeTaskId === null"
+        @new-task="handleQueueNewTask"
+        @select-task="handleSelectTask"
+        @close-task="handleCloseTask"
+        @select-batch="handleSelectBatch"
+      />
 
-    <IngestProgressBar
-      v-if="!batchMode && currentStep !== 'upload'"
-      class="ingest-view__progress"
-      :progress="effectiveProgress"
-      :remaining-ms="remainingMs"
-      :status="progressBarStatus"
-    />
+      <div class="ingest-view__workspace">
+        <div v-if="batchMode && selectedBatchInfo && batchHeaderDisplay" class="ingest-view__ws-header">
+          <Layers :size="16" class="ingest-view__ws-header-icon" />
+          <span class="ingest-view__ws-header-name" :title="`${t('ingest.batchSelectLabel')} #${selectedBatchInfo.batchId}`">
+            {{ t('ingest.batchSelectLabel') }} #{{ selectedBatchInfo.batchId }}
+          </span>
+          <span :class="['ingest-view__ws-status', `ingest-view__ws-status--${batchHeaderDisplay.tone}`]">
+            {{ t(batchHeaderDisplay.labelKey) }}
+          </span>
+          <button type="button" class="ingest-view__btn-ghost" @click="exitBatch">
+            {{ t('ingest.batchExitView') }}
+          </button>
+        </div>
+        <div v-else-if="activeTaskSummary && taskHeaderDisplay" class="ingest-view__ws-header">
+          <component
+            :is="taskHeaderDisplay.icon"
+            :size="16"
+            :class="['ingest-view__ws-header-icon', { 'ingest-view__stepper-spin': taskHeaderDisplay.tone === 'running' }]"
+          />
+          <span class="ingest-view__ws-header-name" :title="activeTaskSummary.sourceName || t('ingest.materialFallback', [activeTaskSummary.executionId])">
+            {{ activeTaskSummary.sourceName || t('ingest.materialFallback', [activeTaskSummary.executionId]) }}
+          </span>
+          <span :class="['ingest-view__ws-status', `ingest-view__ws-status--${taskHeaderDisplay.tone}`]">
+            {{ t(taskHeaderDisplay.labelKey) }}
+          </span>
+        </div>
 
-    <div v-if="batchInbox.length > 0" class="ingest-view__batch-bar" :class="{ 'ingest-view__batch-bar--expanded': batchBarExpanded }">
-      <button
-        v-for="batch in visibleBatchChips"
-        :key="batch.batchId"
-        :class="['ingest-view__batch-chip', { 'ingest-view__batch-chip--active': batch.batchId === batchStore.selectedBatchId }]"
-        @click="openBatch(batch.batchId)"
-      >
-        <Layers :size="12" />
-        <span>{{ t('ingest.batchSelectLabel') }} #{{ batch.batchId }}</span>
-        <span v-if="batch.awaitingCount > 0" class="ingest-view__batch-chip-badge">{{ batch.awaitingCount }}</span>
-      </button>
-      <button
-        v-if="batchInbox.length > BATCH_BAR_COLLAPSED_LIMIT"
-        class="ingest-view__btn-ghost"
-        type="button"
-        @click="batchBarExpanded = !batchBarExpanded"
-      >
-        {{ batchBarExpanded ? t('ingest.batchBarCollapse') : t('ingest.batchBarMore', [hiddenBatchCount]) }}
-      </button>
-      <button v-if="batchMode" class="ingest-view__btn-ghost" @click="exitBatch">
-        {{ t('ingest.batchExitView') }}
-      </button>
-    </div>
+        <IngestStageNav
+          v-if="!batchMode"
+          class="ingest-view__stage-nav"
+          :stages="stages"
+          :current-key="stageNavKey"
+          :error-key="stageErrorKey"
+        />
+
+        <IngestProgressBar
+          v-if="!batchMode && currentStep !== 'upload'"
+          class="ingest-view__progress"
+          :progress="effectiveProgress"
+          :remaining-ms="remainingMs"
+          :status="progressBarStatus"
+        />
+
 
     <div v-if="batchMode" class="ingest-view__content">
       <div v-if="batchError" class="ingest-view__error-banner">
@@ -1239,6 +1296,8 @@ onMounted(async () => {
         </div>
       </div>
     </div>
+      </div>
+    </div>
 
     <ConfirmDialog
       :open="confirmState.open"
@@ -1256,7 +1315,7 @@ onMounted(async () => {
 
 <style scoped>
 .ingest-view {
-  max-width: 720px;
+  max-width: 1080px;
 }
 
 .ingest-view__title {
@@ -1272,89 +1331,160 @@ onMounted(async () => {
   margin-bottom: var(--space-6);
 }
 
-.ingest-view__task-tabs {
-  display: flex;
-  gap: var(--space-2);
-  margin-bottom: var(--space-4);
-  padding: var(--space-2) 0;
-  border-bottom: 1px solid var(--border-default);
-  overflow-x: auto;
-  scrollbar-width: thin;
-}
-
-.ingest-view__task-tab {
-  display: inline-flex;
+.ingest-view__queue-toggle {
+  display: none;
   align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-1) var(--space-3);
-  background: var(--bg-secondary);
-  color: var(--text-secondary);
+  gap: var(--space-2);
+  height: var(--btn-height-sm);
+  padding: 0 var(--space-3);
+  margin-bottom: var(--space-4);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  font-size: var(--font-small);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-size: var(--font-body-sm);
+  font-weight: var(--weight-semibold);
   cursor: pointer;
-  transition: all 200ms ease;
-  flex-shrink: 0;
-  white-space: nowrap;
 }
 
-.ingest-view__task-tab-name {
-  max-width: 220px;
+.ingest-view__queue-toggle-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--accent-primary);
+  color: var(--text-on-accent);
+  font-size: var(--font-caption);
+  font-weight: var(--weight-semibold);
+}
+
+.ingest-view__body {
+  display: flex;
+  gap: var(--space-5);
+  align-items: flex-start;
+}
+
+.ingest-view__queue {
+  width: 300px;
+  flex-shrink: 0;
+  position: sticky;
+  top: var(--space-5);
+  max-height: calc(100vh - 120px);
+}
+
+.ingest-view__workspace {
+  flex: 1;
+  min-width: 0;
+  max-width: 760px;
+}
+
+.ingest-view__ws-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+}
+
+.ingest-view__ws-header-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.ingest-view__ws-header-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-body-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ingest-view__task-tab--active {
+.ingest-view__ws-status {
+  flex-shrink: 0;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-full);
+  font-size: var(--font-caption);
+  font-weight: var(--weight-semibold);
+}
+
+.ingest-view__ws-status--running,
+.ingest-view__ws-status--attention {
   background: var(--accent-light);
-  color: var(--text-primary);
-  border-color: var(--accent-primary);
+  color: var(--accent-strong);
 }
 
-.ingest-view__task-tab:hover {
-  border-color: var(--accent-primary);
+.ingest-view__ws-status--paused {
+  background: var(--warning-light);
+  color: var(--warning-strong);
 }
 
-.ingest-view__task-tab-progress {
-  font-size: var(--font-xs);
-  color: var(--accent-primary);
-  margin-left: var(--space-1);
-}
-
-.ingest-view__task-tab--new {
-  background: transparent;
-  color: var(--accent-primary);
-  border-color: var(--accent-primary);
-  border-style: dashed;
-}
-
-.ingest-view__task-tab--new:hover {
-  background: var(--accent-light);
-}
-
-.ingest-view__task-tab--cancelled {
-  opacity: 0.7;
-}
-
-.ingest-view__task-tab-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
-  color: var(--text-tertiary);
-  cursor: pointer;
-  transition: background-color 150ms ease, color 150ms ease;
-  margin-left: var(--space-1);
-}
-
-.ingest-view__task-tab-close:hover {
-  color: var(--error);
+.ingest-view__ws-status--failed {
   background: var(--error-light);
+  color: var(--error-strong);
+}
+
+.ingest-view__ws-status--done {
+  background: var(--success-light);
+  color: var(--success-strong);
+}
+
+.ingest-view__ws-status--cancelled,
+.ingest-view__ws-status--neutral {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+
+.ingest-view__queue-mask {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .ingest-view__queue-toggle {
+    display: inline-flex;
+  }
+
+  .ingest-view__body {
+    display: block;
+  }
+
+  .ingest-view__queue {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(320px, 85vw);
+    max-height: none;
+    z-index: 8500;
+    border-radius: 0;
+    transform: translateX(-105%);
+    transition: transform 240ms ease;
+  }
+
+  .ingest-view__queue--open {
+    transform: translateX(0);
+    box-shadow: var(--shadow-xl);
+  }
+
+  .ingest-view__queue-mask {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 8400;
+    background: rgba(15, 15, 20, 0.45);
+  }
+
+  .ingest-view__workspace {
+    max-width: none;
+  }
 }
 
 /* Stage nav 与顶部进度容器 */
@@ -2432,59 +2562,6 @@ onMounted(async () => {
 .ingest-view__quality-badge--info {
   background: var(--info-light, #eff6ff);
   color: var(--info, #3b82f6);
-}
-
-.ingest-view__batch-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-bottom: var(--space-4);
-}
-
-.ingest-view__batch-bar--expanded {
-  max-height: 168px;
-  overflow-y: auto;
-}
-
-.ingest-view__batch-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  height: var(--btn-height-sm);
-  padding: 0 var(--space-3);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-full);
-  background: var(--surface-card);
-  color: var(--text-secondary);
-  font-size: var(--font-body-sm);
-  cursor: pointer;
-  transition: border-color var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
-}
-
-.ingest-view__batch-chip:hover {
-  border-color: var(--accent-primary);
-  color: var(--text-primary);
-}
-
-.ingest-view__batch-chip--active {
-  border-color: var(--accent-primary);
-  background: var(--accent-light);
-  color: var(--accent-primary);
-}
-
-.ingest-view__batch-chip-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 var(--space-1);
-  border-radius: var(--radius-full);
-  background: var(--warning);
-  color: var(--text-on-accent);
-  font-size: var(--font-caption);
-  font-weight: var(--weight-semibold);
 }
 
 .ingest-view__batch-pending {

@@ -88,23 +88,23 @@ public class TokenUsageMonitor {
         double percent = getUsagePercent(budget);
 
         if (percent >= EXCEEDED_THRESHOLD && (budget.getExceededNotified() == null || budget.getExceededNotified() == 0)) {
-            notificationService.createNotification(
+            notificationService.createScopeNotification(
                 scopeId,
                 "budget_exceeded",
                 "Token 用量超额提醒",
                 "你的知识库本月 Token 用量已达 " + budget.getUsedTokens() + "，超过月度参考值 " + budget.getMonthlyBudget() + "。操作不受限制，但建议关注用量。",
-                scopeId,
+                null,
                 null
             );
             markExceededNotified(scopeId);
             log.info("Sent budget exceeded notification for scope {}", scopeId);
         } else if (percent >= WARNING_THRESHOLD && (budget.getWarningNotified() == null || budget.getWarningNotified() == 0)) {
-            notificationService.createNotification(
+            notificationService.createScopeNotification(
                 scopeId,
                 "budget_warning",
                 "Token 用量接近参考值",
                 "你的知识库本月 Token 用量已达 " + budget.getUsedTokens() + " / " + budget.getMonthlyBudget() + "（" + Math.round(percent * 100) + "%）。操作不受限制，请注意用量趋势。",
-                scopeId,
+                null,
                 null
             );
             markWarningNotified(scopeId);

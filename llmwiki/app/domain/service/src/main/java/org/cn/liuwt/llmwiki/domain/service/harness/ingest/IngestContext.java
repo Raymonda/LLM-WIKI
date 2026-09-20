@@ -71,6 +71,7 @@ public class IngestContext {
     private ComplianceResult productComplianceResult;
     private boolean skipComplianceCheck;
     private boolean suppressNotifications;
+    private Long submittedBy;
     private List<ConflictAnnotation> conflictAnnotations = new ArrayList<>();
     private Map<String, Integer> conflictRouteSummary = new java.util.LinkedHashMap<>();
     private List<String> schemaPatchHints = new ArrayList<>();
@@ -256,6 +257,9 @@ public class IngestContext {
 
     public boolean isSuppressNotifications() { return suppressNotifications; }
     public void setSuppressNotifications(boolean suppressNotifications) { this.suppressNotifications = suppressNotifications; }
+
+    public Long getSubmittedBy() { return submittedBy; }
+    public void setSubmittedBy(Long submittedBy) { this.submittedBy = submittedBy; }
 
     public List<ConflictAnnotation> getConflictAnnotations() { return conflictAnnotations; }
     public void setConflictAnnotations(List<ConflictAnnotation> conflictAnnotations) { this.conflictAnnotations = conflictAnnotations; }

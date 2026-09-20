@@ -25,9 +25,7 @@ const guidance = ref('')
 const isAwaiting = computed(
   () => props.item.status === 'awaiting_confirmation' || props.item.status === 'awaiting_review',
 )
-const isFailed = computed(
-  () => props.item.status === 'failed' || props.item.status === 'budget_exhausted',
-)
+const isFailed = computed(() => props.item.status === 'failed')
 
 const statusMeta = computed(() => {
   switch (props.item.status) {
@@ -45,8 +43,9 @@ const statusMeta = computed(() => {
     case 'cancelled':
       return { label: t('ingest.statusCancelledItem'), tone: 'muted' }
     case 'failed':
-    case 'budget_exhausted':
       return { label: t('ingest.inboxGroupFailed'), tone: 'error' }
+    case 'budget_exhausted':
+      return { label: t('ingest.statusBudgetExhausted'), tone: 'error' }
     case 'running':
       return props.item.phase1Completed
         ? { label: t('ingest.statusWriting'), tone: 'info' }
@@ -54,6 +53,12 @@ const statusMeta = computed(() => {
     default:
       return { label: props.item.status, tone: 'muted' }
   }
+})
+
+const visibleErrorMessage = computed(() => {
+  if (!props.item.errorMessage) return ''
+  if (props.item.status === 'paused' || props.item.status === 'cancelled') return ''
+  return props.item.errorMessage
 })
 
 const displayName = computed(
@@ -106,7 +111,7 @@ function submitView() {
       </button>
     </header>
 
-    <p v-if="item.errorMessage" class="inbox-item__error">{{ item.errorMessage }}</p>
+    <p v-if="visibleErrorMessage" class="inbox-item__error">{{ visibleErrorMessage }}</p>
 
     <div v-if="isAwaiting" class="inbox-item__actions">
       <button

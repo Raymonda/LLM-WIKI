@@ -195,6 +195,35 @@ class IngestBatchSchedulerNotificationTest {
         verify(notificationService).createNotification(eq(7L), eq("ingest_batch_analyzed"), any(), eq("分析失败"), eq(10L), isNull(), isNull(), eq(9L));
     }
 
+    @Test
+    void shouldNotReportFailureWhenSingleItemBatchCancelled() {
+        IngestBatchDO batch = newBatch(1);
+        when(batchMapper.selectById(9L)).thenReturn(batch);
+        ExecutionDO cancelled = item(1L, "cancelled", 9L);
+        when(executionMapper.selectList(any())).thenReturn(List.of(cancelled));
+        when(notificationMapper.selectCount(any())).thenReturn(0L);
+
+        scheduler.handleBatchSettlement(cancelled);
+
+        verify(notificationService, never()).createNotification(any(), eq("ingest_batch_analyzed"), any(), any(), any(), any(), any(), any());
+        verify(notificationService).createNotification(eq(7L), eq("ingest_batch_completed"), any(), contains("1 取消"), eq(10L), isNull(), isNull(), eq(9L));
+    }
+
+    @Test
+    void shouldReportCancelledCountWhenMultiItemBatchPartiallyCancelled() {
+        IngestBatchDO batch = newBatch(3);
+        when(batchMapper.selectById(9L)).thenReturn(batch);
+        ExecutionDO awaiting = item(1L, "awaiting_confirmation", 9L);
+        ExecutionDO failed = item(2L, "failed", 9L);
+        ExecutionDO cancelled = item(3L, "cancelled", 9L);
+        when(executionMapper.selectList(any())).thenReturn(List.of(awaiting, failed, cancelled));
+        when(notificationMapper.selectCount(any())).thenReturn(0L);
+
+        scheduler.handleBatchSettlement(cancelled);
+
+        verify(notificationService).createNotification(eq(7L), eq("ingest_batch_analyzed"), any(), eq("本批 1 份待审阅、1 份失败、1 份取消"), eq(10L), isNull(), isNull(), eq(9L));
+    }
+
     private IngestBatchDO newBatch(int totalCount) {
         IngestBatchDO batch = new IngestBatchDO();
         batch.setId(9L);
