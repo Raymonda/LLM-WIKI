@@ -6,8 +6,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -49,20 +52,36 @@ public class AiConnectionTester {
     }
 
     private Boolean doCall(String baseUrl, String apiKey, String model) {
+        if (model == null || model.isBlank()) {
+            return pingModelsEndpoint(baseUrl, apiKey);
+        }
         OpenAiApi api = OpenAiApi.builder()
             .baseUrl(baseUrl)
             .apiKey(apiKey)
             .build();
-        OpenAiChatOptions.Builder optionsBuilder = OpenAiChatOptions.builder().maxTokens(1);
-        if (model != null && !model.isBlank()) {
-            optionsBuilder.model(model);
-        }
+        OpenAiChatOptions options = OpenAiChatOptions.builder()
+            .maxTokens(1)
+            .model(model)
+            .build();
         OpenAiChatModel chatModel = OpenAiChatModel.builder()
             .openAiApi(api)
-            .defaultOptions(optionsBuilder.build())
+            .defaultOptions(options)
             .retryTemplate(NO_RETRY)
             .build();
         chatModel.call("ping");
+        return Boolean.TRUE;
+    }
+
+    private Boolean pingModelsEndpoint(String baseUrl, String apiKey) {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout((int) TimeUnit.SECONDS.toMillis(5));
+        factory.setReadTimeout((int) TimeUnit.SECONDS.toMillis(TIMEOUT_SECONDS));
+        RestClient restClient = RestClient.builder()
+            .baseUrl(baseUrl)
+            .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
+            .requestFactory(factory)
+            .build();
+        restClient.get().uri("/v1/models").retrieve().toBodilessEntity();
         return Boolean.TRUE;
     }
 

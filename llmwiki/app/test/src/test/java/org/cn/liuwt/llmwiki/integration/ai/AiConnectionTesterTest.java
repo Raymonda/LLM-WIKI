@@ -23,6 +23,18 @@ class AiConnectionTesterTest {
     }
 
     @Test
+    void shouldProbeModelsEndpointWhenModelBlank() {
+        AiConnectionTester tester = new AiConnectionTester();
+        long start = System.currentTimeMillis();
+        AiConnectionTestResult result = tester.test("http://127.0.0.1:1", "sk-dummy", "");
+        long elapsed = System.currentTimeMillis() - start;
+
+        assertFalse(result.ok());
+        assertNotNull(result.message());
+        assertTrue(elapsed < 10_000, "unreachable endpoint must fail within the 10s timeout budget");
+    }
+
+    @Test
     void shouldConvergeErrorMessageWhenFailing() {
         AiConnectionTester tester = new AiConnectionTester();
         AiConnectionTestResult result = tester.test("http://127.0.0.1:1", "sk-dummy", "qwen-plus");
