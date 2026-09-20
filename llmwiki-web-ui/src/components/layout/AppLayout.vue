@@ -104,7 +104,10 @@ watch(() => auth.scopeId, async (newScopeId) => {
           </svg>
           <div class="ai-config-warning__content">
             <p class="ai-config-warning__title">{{ t('common.aiConfigWarningTitle') }}</p>
-            <p class="ai-config-warning__desc">{{ t('common.aiConfigWarningDescPre') }}<code>AI_DASHSCOPE_API_KEY</code>{{ t('common.aiConfigWarningDescMid') }}<code>docker-compose restart app</code>{{ t('common.aiConfigWarningDescPost') }}</p>
+            <p class="ai-config-warning__desc">
+              <template v-if="auth.isSystemAdmin">{{ t('common.aiConfigWarningDescPre') }}<router-link to="/system" class="ai-config-warning__link">{{ t('common.aiConfigWarningDescMid') }}</router-link>{{ t('common.aiConfigWarningDescPost') }}</template>
+              <template v-else>{{ t('common.aiConfigWarningContactAdmin') }}</template>
+            </p>
           </div>
           <button class="ai-config-warning__close" @click="aiNotConfigured = false">×</button>
         </div>
@@ -196,6 +199,16 @@ watch(() => auth.scopeId, async (newScopeId) => {
   padding: 1px 4px;
   border-radius: 3px;
   font-size: 0.85em;
+}
+
+.ai-config-warning__link {
+  color: var(--accent-primary);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+}
+
+.ai-config-warning__link:hover {
+  text-decoration: underline;
 }
 
 .ai-config-warning__close {

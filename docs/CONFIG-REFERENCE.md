@@ -4,6 +4,12 @@
 > 1. **多 Provider 模式**配置示例（需要改 YAML 结构）
 > 2. **内部调优参数**完整清单（全部由代码默认值驱动，用环境变量覆盖即可，无需改 YAML）
 
+## 运行时 AI 配置（推荐）
+
+管理员的「系统配置 → 通用设置」中可直接管理 Provider 与用途槽位，保存后立即生效，无需重启。
+配置加密存储于 `system_config`（scope_id=0, key=ai.runtime）。生效优先级：DB 配置 > llmwiki.ai.providers/slots > spring.ai.openai 单 key。
+加密密钥来自 `AI_CONFIG_SECRET`（缺省派生自 JWT_SECRET）；更换密钥前需先在 UI 重新保存一次所有 Key，否则已存密文无法解密。
+
 ## 多 Provider 模式
 
 在 `application.yml`（或 profile 文件）的 `llmwiki.ai` 下添加 `providers` + `slots`。
