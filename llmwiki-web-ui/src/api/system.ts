@@ -12,6 +12,7 @@ export interface AiSlotView {
   slot: string
   provider: string
   model: string
+  multimodal: boolean
 }
 
 export interface AiRuntimeConfigView {
@@ -30,6 +31,7 @@ export interface AiSlotInput {
   slot: string
   provider: string
   model: string
+  multimodal?: boolean
 }
 
 export interface AiConnectionTestResult {

@@ -18,7 +18,7 @@ class AiConfigRefreshListenerTest {
         assertFalse(client.isAvailable());
         listener.onChange(new AiConfigChangedEvent(new AiRuntimeConfig(
             Map.of("dash", new AiRuntimeConfig.ProviderEntry("https://dashscope.aliyuncs.com/compatible-mode", "sk-x", true)),
-            Map.of("main", new AiRuntimeConfig.SlotEntry("dash", "qwen-plus"))), "test"));
+            Map.of("main", new AiRuntimeConfig.SlotEntry("dash", "qwen-plus", false))), "test"));
         assertTrue(client.isAvailable());
     }
 

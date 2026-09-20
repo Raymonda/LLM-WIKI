@@ -10,6 +10,7 @@ import org.cn.liuwt.llmwiki.facade.model.AiRuntimeConfigDtos.AiProviderView;
 import org.cn.liuwt.llmwiki.facade.model.AiRuntimeConfigDtos.AiRuntimeConfigSaveRequest;
 import org.cn.liuwt.llmwiki.facade.model.AiRuntimeConfigDtos.AiRuntimeConfigView;
 import org.cn.liuwt.llmwiki.facade.model.AiRuntimeConfigDtos.AiSlotInput;
+import org.cn.liuwt.llmwiki.facade.model.AiRuntimeConfigDtos.AiSlotView;
 import org.cn.liuwt.llmwiki.integration.ai.AiConfigChangedEvent;
 import org.cn.liuwt.llmwiki.integration.ai.AiProviderProperties;
 import org.cn.liuwt.llmwiki.integration.ai.AiRuntimeConfig;
@@ -53,7 +54,7 @@ class AiRuntimeConfigServiceTest {
     private static AiRuntimeConfigSaveRequest req(String key) {
         return new AiRuntimeConfigSaveRequest(
             List.of(new AiProviderInput("dash", "https://dashscope.aliyuncs.com/compatible-mode", key, true)),
-            List.of(new AiSlotInput("main", "dash", "qwen-plus")));
+            List.of(new AiSlotInput("main", "dash", "qwen-plus", false)));
     }
 
     @Test
@@ -86,7 +87,7 @@ class AiRuntimeConfigServiceTest {
         Harness h = harness();
         AiRuntimeConfigSaveRequest bad = new AiRuntimeConfigSaveRequest(
             List.of(new AiProviderInput("dash", "https://x", "sk-y", true)),
-            List.of(new AiSlotInput("main", "ghost", "qwen-plus")));
+            List.of(new AiSlotInput("main", "ghost", "qwen-plus", false)));
         assertThrows(BusinessException.class, () -> h.svc().save(bad, 1L));
     }
 
@@ -95,7 +96,7 @@ class AiRuntimeConfigServiceTest {
         Harness h = harness();
         AiRuntimeConfigSaveRequest bad = new AiRuntimeConfigSaveRequest(
             List.of(new AiProviderInput("dash", "https://x", "sk-y", true)),
-            List.of(new AiSlotInput("ocr", "dash", "qwen-vl-ocr")));
+            List.of(new AiSlotInput("ocr", "dash", "qwen-vl-ocr", false)));
         assertThrows(BusinessException.class, () -> h.svc().save(bad, 1L));
     }
 
@@ -110,11 +111,38 @@ class AiRuntimeConfigServiceTest {
         AiProviderProperties.SlotConfig main = new AiProviderProperties.SlotConfig();
         main.setProvider("dash");
         main.setModel("qwen-max");
+        main.setMultimodal(true);
         props.getSlots().put("main", main);
 
         AiRuntimeConfig cfg = h.svc().resolveEffective(props);
         assertFalse(cfg.isEmpty());
         assertEquals("sk-yaml", cfg.providers().get("dash").apiKey());
         assertEquals("qwen-max", cfg.slots().get("main").model());
+        assertTrue(cfg.slots().get("main").multimodal());
+    }
+
+    @Test
+    void shouldPersistMultimodalFlagWhenSaving() {
+        Harness h = harness();
+        h.svc().save(new AiRuntimeConfigSaveRequest(
+            List.of(new AiProviderInput("dash", "https://x", "sk-y", true)),
+            List.of(new AiSlotInput("main", "dash", "qwen-plus", true),
+                new AiSlotInput("ocr", "dash", "qwen-vl-ocr", null))), 1L);
+        AiRuntimeConfigView view = h.svc().getMaskedView();
+        AiSlotView main = view.slots().stream().filter(s -> "main".equals(s.slot())).findFirst().orElseThrow();
+        AiSlotView ocr = view.slots().stream().filter(s -> "ocr".equals(s.slot())).findFirst().orElseThrow();
+        assertTrue(main.multimodal());
+        assertFalse(ocr.multimodal());
+    }
+
+    @Test
+    void shouldDropUnknownSlotsWhenReadingStoredConfig() {
+        Harness h = harness();
+        h.db().put("ai.runtime", "{\"providers\":[{\"name\":\"dash\",\"baseUrl\":\"https://x\",\"enabled\":true}],"
+            + "\"slots\":[{\"slot\":\"main\",\"provider\":\"dash\",\"model\":\"qwen-plus\"},"
+            + "{\"slot\":\"query-multimodal\",\"provider\":\"dash\",\"model\":\"qwen-vl\"}]}");
+        AiRuntimeConfigView view = h.svc().getMaskedView();
+        assertEquals(1, view.slots().size());
+        assertEquals("main", view.slots().get(0).slot());
     }
 }

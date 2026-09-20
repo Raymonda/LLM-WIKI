@@ -163,7 +163,7 @@ llmwiki:
         model: qwen-vl-ocr
 ```
 
-可用槽位：`main`、`multimodal`、`query-multimodal`、`deep-analysis`、`deep-multimodal`、`ocr`、`diagram`。
+可用槽位（5 个）：`main`（快速模型，所有 LLM 调用的默认入口，加 `multimodal: true` 可兼任查询图片理解）、`multimodal`（多模态/图片理解）、`ocr`（扫描件识别）、`deep-analysis` 与 `diagram`（可选场景覆写，缺省时自动跟随 `main`）。
 
 ---
 

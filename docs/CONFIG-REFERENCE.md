@@ -38,29 +38,31 @@ llmwiki:
       main:
         provider: deepseek
         model: deepseek-v4-flash-0731
+        multimodal: true
       multimodal:
-        provider: dashscope
-        model: qwen3.7-plus
-      query-multimodal:
-        provider: dashscope
-        model: qwen3.6-flash
-      deep-analysis:
-        provider: deepseek
-        model: deepseek-v4-pro
-      deep-multimodal:
         provider: dashscope
         model: qwen3.7-plus
       ocr:
         provider: dashscope
         model: qwen-vl-ocr
+      deep-analysis:
+        provider: deepseek
+        model: deepseek-v4-pro
+        multimodal: true
       diagram:
         provider: moonshot
         model: kimi-k2.6
 ```
 
-Slot 说明：`main` 主对话；`multimodal` / `query-multimodal` / `deep-multimodal` 图像理解；
-`deep-analysis` 深度分析；`ocr` 扫描件识别；`diagram` 图表生成。
-slot 未指定 model 时回退 `spring.ai.openai.chat.options.model`。
+Slot 说明（共 5 个）：
+- `main` 快速模型：所有 LLM 调用的默认入口；`multimodal: true` 时兼任查询图片理解
+- `multimodal` 多模态模型：查询/深度模式的图片理解（`main` 未开多模态时生效）
+- `ocr` 扫描件识别
+- `deep-analysis` / `diagram` 为可选场景覆写：缺省不配置时自动跟随 `main`
+
+派生规则：查询图片理解 = `main.multimodal ? main : multimodal`；
+深度图片理解 = `deep-analysis` 覆写且 `multimodal: true` 时取 `deep-analysis`，否则取 `multimodal`。
+slot 未配置或 provider 不可用时回退 `main`；slot 未指定 model 时回退 `spring.ai.openai.chat.options.model`。
 
 ## 内部调优参数（环境变量覆盖）
 

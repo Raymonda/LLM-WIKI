@@ -10,7 +10,7 @@ public record AiRuntimeConfig(Map<String, ProviderEntry> providers, Map<String, 
     }
 
     public record ProviderEntry(String baseUrl, String apiKey, boolean enabled) {}
-    public record SlotEntry(String provider, String model) {}
+    public record SlotEntry(String provider, String model, boolean multimodal) {}
 
     public boolean isEmpty() { return providers.isEmpty(); }
     public static AiRuntimeConfig empty() { return new AiRuntimeConfig(Map.of(), Map.of()); }

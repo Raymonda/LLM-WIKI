@@ -11,7 +11,7 @@ public final class AiRuntimeConfigDtos {
                                  boolean apiKeyConfigured, String apiKeyMasked) {
     }
 
-    public record AiSlotView(String slot, String provider, String model) {
+    public record AiSlotView(String slot, String provider, String model, boolean multimodal) {
     }
 
     public record AiRuntimeConfigView(List<AiProviderView> providers, List<AiSlotView> slots) {
@@ -20,7 +20,7 @@ public final class AiRuntimeConfigDtos {
     public record AiProviderInput(String name, String baseUrl, String apiKey, Boolean enabled) {
     }
 
-    public record AiSlotInput(String slot, String provider, String model) {
+    public record AiSlotInput(String slot, String provider, String model, Boolean multimodal) {
     }
 
     public record AiRuntimeConfigSaveRequest(List<AiProviderInput> providers, List<AiSlotInput> slots) {

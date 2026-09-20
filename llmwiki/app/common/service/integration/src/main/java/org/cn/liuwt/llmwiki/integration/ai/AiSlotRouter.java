@@ -40,24 +40,47 @@ public class AiSlotRouter {
         }
 
         AiRuntimeConfig.SlotEntry slot = cfg.slots().get(slotName);
-        String providerName = slot != null ? slot.provider() : registry.getDefaultProviderName();
-        if (providerName == null) {
-            return null;
+        if (slot == null) {
+            return "main".equals(slotName) ? null : getModel("main");
         }
 
-        ChatModel baseModel = registry.getModel(providerName);
+        ChatModel baseModel = registry.getModel(slot.provider());
         if (baseModel == null) {
-            log.warn("Slot '{}' references provider '{}' which is not available", slotName, providerName);
-            return null;
+            log.warn("Slot '{}' references provider '{}' which is not available", slotName, slot.provider());
+            return "main".equals(slotName) ? null : getModel("main");
         }
 
-        if (slot != null && StringUtils.hasText(slot.model()) && baseModel instanceof OpenAiChatModel openAiModel) {
+        if (StringUtils.hasText(slot.model()) && baseModel instanceof OpenAiChatModel openAiModel) {
             return openAiModel.mutate()
                 .defaultOptions(OpenAiChatOptions.builder().model(slot.model()).build())
                 .build();
         }
 
         return baseModel;
+    }
+
+    public ChatModel getQueryMultimodalModel() {
+        AiRuntimeConfig cfg = holder.get();
+        if (cfg.isEmpty()) {
+            return null;
+        }
+        AiRuntimeConfig.SlotEntry main = cfg.slots().get("main");
+        if (main != null && main.multimodal()) {
+            return getModel("main");
+        }
+        return getModel("multimodal");
+    }
+
+    public ChatModel getDeepMultimodalModel() {
+        AiRuntimeConfig cfg = holder.get();
+        if (cfg.isEmpty()) {
+            return null;
+        }
+        AiRuntimeConfig.SlotEntry deep = cfg.slots().get("deep-analysis");
+        if (deep != null && deep.multimodal()) {
+            return getModel("deep-analysis");
+        }
+        return getModel("multimodal");
     }
 
     public Endpoint getEndpoint(String slotName) {
@@ -67,14 +90,20 @@ public class AiSlotRouter {
         }
 
         AiRuntimeConfig.SlotEntry slot = cfg.slots().get(slotName);
-        String providerName = slot != null ? slot.provider() : registry.getDefaultProviderName();
-        AiRuntimeConfig.ProviderEntry provider = providerName != null ? registry.getProviderEntry(providerName) : null;
+        if (slot == null) {
+            return "main".equals(slotName)
+                ? new Endpoint(legacyBaseUrl, legacyApiKey, legacyModel)
+                : getEndpoint("main");
+        }
+        AiRuntimeConfig.ProviderEntry provider = registry.getProviderEntry(slot.provider());
         if (provider == null) {
-            log.warn("Slot '{}' references unknown provider, falling back to legacy", slotName);
-            return new Endpoint(legacyBaseUrl, legacyApiKey, legacyModel);
+            log.warn("Slot '{}' references unknown provider '{}', falling back", slotName, slot.provider());
+            return "main".equals(slotName)
+                ? new Endpoint(legacyBaseUrl, legacyApiKey, legacyModel)
+                : getEndpoint("main");
         }
 
-        return new Endpoint(provider.baseUrl(), provider.apiKey(), slot != null ? slot.model() : "");
+        return new Endpoint(provider.baseUrl(), provider.apiKey(), slot.model());
     }
 
     public String resolveModel(String slotName) {
@@ -84,7 +113,10 @@ public class AiSlotRouter {
         }
 
         AiRuntimeConfig.SlotEntry slot = cfg.slots().get(slotName);
-        return slot != null && StringUtils.hasText(slot.model()) ? slot.model() : legacyModel;
+        if (slot == null) {
+            return "main".equals(slotName) ? legacyModel : resolveModel("main");
+        }
+        return StringUtils.hasText(slot.model()) ? slot.model() : legacyModel;
     }
 
     public boolean isMultiProviderMode() {

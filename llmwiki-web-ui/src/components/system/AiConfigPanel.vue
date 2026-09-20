@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToastStore } from '@/stores/toast'
-import { Loader2, Plus, Trash2, PlugZap } from 'lucide-vue-next'
+import { ChevronRight, Loader2, Plus, Trash2, PlugZap } from 'lucide-vue-next'
 import {
   getAiRuntimeConfig,
   saveAiRuntimeConfig,
@@ -14,7 +14,9 @@ import {
 const { t } = useI18n()
 const toastStore = useToastStore()
 
-const SLOT_ORDER = ['main', 'multimodal', 'query-multimodal', 'deep-analysis', 'deep-multimodal', 'ocr', 'diagram']
+const BASIC_SLOTS = ['main', 'multimodal', 'ocr']
+const OVERRIDE_SLOTS = ['deep-analysis', 'diagram']
+const MULTIMODAL_TOGGLE_SLOTS = new Set(['main', 'deep-analysis'])
 const PROVIDER_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/
 const DEFAULT_PROVIDER_NAME = 'dashscope'
 const DEFAULT_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode'
@@ -32,6 +34,7 @@ interface SlotRow {
   slot: string
   provider: string
   model: string
+  multimodal: boolean
 }
 
 interface TestState {
@@ -44,7 +47,9 @@ interface TestState {
 const loading = ref(true)
 const saving = ref(false)
 const providers = ref<ProviderRow[]>([])
-const slots = ref<SlotRow[]>([])
+const basicSlots = ref<SlotRow[]>([])
+const overrideSlots = ref<SlotRow[]>([])
+const showOverrides = ref(false)
 const providerTests = ref<TestState[]>([])
 const slotTests = ref<Record<string, TestState>>({})
 
@@ -56,12 +61,30 @@ function slotLabel(slot: string): string {
   switch (slot) {
     case 'main': return t('system.slotMain')
     case 'multimodal': return t('system.slotMultimodal')
-    case 'query-multimodal': return t('system.slotQueryMultimodal')
     case 'deep-analysis': return t('system.slotDeepAnalysis')
-    case 'deep-multimodal': return t('system.slotDeepMultimodal')
     case 'ocr': return t('system.slotOcr')
     case 'diagram': return t('system.slotDiagram')
     default: return slot
+  }
+}
+
+function slotHint(slot: string): string {
+  switch (slot) {
+    case 'main': return t('system.slotMainHint')
+    case 'multimodal': return t('system.slotMultimodalHint')
+    case 'deep-analysis': return t('system.slotDeepAnalysisHint')
+    case 'ocr': return t('system.slotOcrHint')
+    case 'diagram': return t('system.slotDiagramHint')
+    default: return ''
+  }
+}
+
+function modelPlaceholder(slot: string): string {
+  switch (slot) {
+    case 'main': return t('system.slotModelPlaceholderMain')
+    case 'multimodal': return t('system.slotModelPlaceholderMultimodal')
+    case 'ocr': return t('system.slotModelPlaceholderOcr')
+    default: return t('system.modelName')
   }
 }
 
@@ -78,10 +101,17 @@ async function load() {
       apiKeyMasked: p.apiKeyMasked,
     }))
     const bySlot = new Map(view.slots.map(s => [s.slot, s]))
-    slots.value = SLOT_ORDER.map(slot => {
+    const toRow = (slot: string): SlotRow => {
       const existing = bySlot.get(slot)
-      return { slot, provider: existing?.provider ?? '', model: existing?.model ?? '' }
-    })
+      return {
+        slot,
+        provider: existing?.provider ?? '',
+        model: existing?.model ?? '',
+        multimodal: existing?.multimodal ?? false,
+      }
+    }
+    basicSlots.value = BASIC_SLOTS.map(toRow)
+    overrideSlots.value = OVERRIDE_SLOTS.map(toRow)
     if (providers.value.length === 0) {
       providers.value.push({
         name: DEFAULT_PROVIDER_NAME,
@@ -91,7 +121,7 @@ async function load() {
         apiKeyConfigured: false,
         apiKeyMasked: '',
       })
-      slots.value.forEach(s => { s.provider = DEFAULT_PROVIDER_NAME })
+      basicSlots.value.forEach(s => { s.provider = DEFAULT_PROVIDER_NAME })
     }
     providerTests.value = providers.value.map(() => newTestState())
     slotTests.value = {}
@@ -112,7 +142,8 @@ function removeProvider(index: number) {
   providers.value.splice(index, 1)
   providerTests.value.splice(index, 1)
   if (removed) {
-    slots.value.forEach(s => { if (s.provider === removed.name) s.provider = '' })
+    basicSlots.value.forEach(s => { if (s.provider === removed.name) s.provider = '' })
+    overrideSlots.value.forEach(s => { if (s.provider === removed.name) s.provider = '' })
   }
 }
 
@@ -169,7 +200,7 @@ async function save() {
     }
   }
   const enabledNames = new Set(providers.value.filter(p => p.enabled).map(p => p.name))
-  const mainSlot = slots.value.find(s => s.slot === 'main')
+  const mainSlot = basicSlots.value.find(s => s.slot === 'main')
   if (!mainSlot || !enabledNames.has(mainSlot.provider)) {
     toastStore.warning(t('system.mainSlotRequired'))
     return
@@ -182,9 +213,9 @@ async function save() {
       apiKey: p.apiKey,
       enabled: p.enabled,
     }))
-    const payloadSlots: AiSlotInput[] = slots.value
+    const payloadSlots: AiSlotInput[] = [...basicSlots.value, ...overrideSlots.value]
       .filter(s => s.provider)
-      .map(s => ({ slot: s.slot, provider: s.provider, model: s.model }))
+      .map(s => ({ slot: s.slot, provider: s.provider, model: s.model, multimodal: s.multimodal }))
     await saveAiRuntimeConfig({ providers: payloadProviders, slots: payloadSlots })
     toastStore.success(t('system.aiConfigSaved'))
     await load()
@@ -256,16 +287,17 @@ onMounted(load)
       </section>
 
       <section class="ai-config__section">
-        <h3 class="ai-config__section-title">{{ t('system.slot') }}</h3>
+        <h3 class="ai-config__section-title">{{ t('system.basicSlots') }}</h3>
         <div class="ai-config__table-scroll">
           <div class="ai-config__table">
             <div class="ai-config__slot-row ai-config__slot-row--head">
               <span>{{ t('system.slot') }}</span>
               <span>{{ t('system.providerConfig') }}</span>
               <span>{{ t('system.modelName') }}</span>
+              <span>{{ t('system.slotMultimodalToggle') }}</span>
               <span></span>
             </div>
-            <div v-for="s in slots" :key="s.slot" class="ai-config__slot-row">
+            <div v-for="s in basicSlots" :key="s.slot" class="ai-config__slot-row">
               <span class="ai-config__slot-name">{{ slotLabel(s.slot) }}</span>
               <select v-model="s.provider" class="ai-config__input">
                 <option value="" disabled>{{ t('system.providerName') }}</option>
@@ -273,7 +305,16 @@ onMounted(load)
                   {{ p.name }}
                 </option>
               </select>
-              <input v-model="s.model" class="ai-config__input" :placeholder="t('system.modelName')" />
+              <input v-model="s.model" class="ai-config__input" :placeholder="modelPlaceholder(s.slot)" />
+              <span class="ai-config__switch">
+                <input
+                  v-if="MULTIMODAL_TOGGLE_SLOTS.has(s.slot)"
+                  v-model="s.multimodal"
+                  type="checkbox"
+                  class="ai-config__checkbox"
+                  :title="t('system.slotMultimodalToggle')"
+                />
+              </span>
               <span class="ai-config__actions">
                 <button
                   class="ai-config__btn-secondary"
@@ -285,6 +326,7 @@ onMounted(load)
                   {{ t('system.testConnection') }}
                 </button>
               </span>
+              <span class="ai-config__slot-hint">{{ slotHint(s.slot) }}</span>
               <span
                 v-if="slotTests[s.slot] && slotTests[s.slot].ok !== null"
                 class="ai-config__test-result"
@@ -299,6 +341,74 @@ onMounted(load)
               </span>
             </div>
           </div>
+        </div>
+
+        <div class="ai-config__override">
+          <button class="ai-config__override-toggle" @click="showOverrides = !showOverrides">
+            <ChevronRight
+              :size="14"
+              class="ai-config__override-chevron"
+              :class="{ 'ai-config__override-chevron--open': showOverrides }"
+            />
+            {{ t('system.overrideSlots') }}
+          </button>
+          <template v-if="showOverrides">
+            <p class="ai-config__override-hint">{{ t('system.overrideSlotsHint') }}</p>
+            <div class="ai-config__table-scroll">
+              <div class="ai-config__table">
+                <div class="ai-config__slot-row ai-config__slot-row--head">
+                  <span>{{ t('system.slot') }}</span>
+                  <span>{{ t('system.providerConfig') }}</span>
+                  <span>{{ t('system.modelName') }}</span>
+                  <span>{{ t('system.slotMultimodalToggle') }}</span>
+                  <span></span>
+                </div>
+                <div v-for="s in overrideSlots" :key="s.slot" class="ai-config__slot-row">
+                  <span class="ai-config__slot-name">{{ slotLabel(s.slot) }}</span>
+                  <select v-model="s.provider" class="ai-config__input">
+                    <option value="">{{ t('system.slotFollowMain') }}</option>
+                    <option v-for="p in providers" :key="p.name" :value="p.name" :disabled="!p.enabled">
+                      {{ p.name }}
+                    </option>
+                  </select>
+                  <input v-model="s.model" class="ai-config__input" :placeholder="modelPlaceholder(s.slot)" />
+                  <span class="ai-config__switch">
+                    <input
+                      v-if="MULTIMODAL_TOGGLE_SLOTS.has(s.slot)"
+                      v-model="s.multimodal"
+                      type="checkbox"
+                      class="ai-config__checkbox"
+                      :title="t('system.slotMultimodalToggle')"
+                    />
+                  </span>
+                  <span class="ai-config__actions">
+                    <button
+                      class="ai-config__btn-secondary"
+                      :disabled="!s.provider || slotTests[s.slot]?.testing"
+                      @click="testSlot(s)"
+                    >
+                      <Loader2 v-if="slotTests[s.slot]?.testing" :size="14" class="ai-config__spin" />
+                      <PlugZap v-else :size="14" />
+                      {{ t('system.testConnection') }}
+                    </button>
+                  </span>
+                  <span class="ai-config__slot-hint">{{ slotHint(s.slot) }}</span>
+                  <span
+                    v-if="slotTests[s.slot] && slotTests[s.slot].ok !== null"
+                    class="ai-config__test-result"
+                    :class="slotTests[s.slot].ok ? 'ai-config__test-result--ok' : 'ai-config__test-result--fail'"
+                  >
+                    <template v-if="slotTests[s.slot].ok">
+                      {{ t('system.connectionOk') }} · {{ t('system.testLatency', [slotTests[s.slot].latencyMs]) }}
+                    </template>
+                    <template v-else>
+                      {{ t('system.connectionFailed') }}: {{ slotTests[s.slot].message }}
+                    </template>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </template>
         </div>
       </section>
 
@@ -355,7 +465,7 @@ onMounted(load)
 
 .ai-config__slot-row {
   display: grid;
-  grid-template-columns: 150px 220px minmax(200px, 1fr) auto;
+  grid-template-columns: 150px 220px minmax(200px, 1fr) 90px auto;
   gap: var(--space-3);
   align-items: center;
   padding: var(--space-3) var(--space-4);
@@ -381,6 +491,50 @@ onMounted(load)
 
 .ai-config__slot-name {
   font-weight: var(--weight-medium);
+}
+
+.ai-config__slot-hint {
+  grid-column: 1 / -1;
+  font-size: var(--font-caption);
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+
+.ai-config__override {
+  margin-top: var(--space-2);
+}
+
+.ai-config__override-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) 0;
+  margin-bottom: var(--space-2);
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: var(--font-body-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.ai-config__override-toggle:hover {
+  color: var(--text-primary);
+}
+
+.ai-config__override-chevron {
+  transition: transform var(--transition-fast);
+}
+
+.ai-config__override-chevron--open {
+  transform: rotate(90deg);
+}
+
+.ai-config__override-hint {
+  margin: 0 0 var(--space-2) 0;
+  font-size: var(--font-caption);
+  color: var(--text-tertiary);
 }
 
 .ai-config__input {

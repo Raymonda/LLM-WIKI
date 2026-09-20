@@ -58,6 +58,7 @@ public class AiProviderProperties {
     public static class SlotConfig {
         private String provider;
         private String model;
+        private boolean multimodal;
 
         public String getProvider() {
             return provider;
@@ -73,6 +74,14 @@ public class AiProviderProperties {
 
         public void setModel(String model) {
             this.model = model;
+        }
+
+        public boolean isMultimodal() {
+            return multimodal;
+        }
+
+        public void setMultimodal(boolean multimodal) {
+            this.multimodal = multimodal;
         }
     }
 }

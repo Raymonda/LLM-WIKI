@@ -132,9 +132,9 @@ public class LlmClient {
                 this.apiKeyValid = false;
                 log.warn("Runtime AI config present but 'main' slot unavailable");
             }
-            this.queryMultimodalChatModel = slotRouter.getModel("query-multimodal");
+            this.queryMultimodalChatModel = slotRouter.getQueryMultimodalModel();
             this.deepAnalysisChatModel = slotRouter.getModel("deep-analysis");
-            this.deepMultimodalChatModel = slotRouter.getModel("deep-multimodal");
+            this.deepMultimodalChatModel = slotRouter.getDeepMultimodalModel();
         } else {
             this.apiKeyValid = StringUtils.hasText(apiKey) && !PLACEHOLDER_KEY.equals(apiKey);
             initLegacy();

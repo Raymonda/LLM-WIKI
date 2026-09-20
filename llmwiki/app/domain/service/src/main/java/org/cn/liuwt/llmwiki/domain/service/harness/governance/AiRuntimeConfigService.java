@@ -39,7 +39,7 @@ public class AiRuntimeConfigService {
     public static final long GLOBAL_SCOPE_ID = 0L;
 
     private static final Set<String> KNOWN_SLOTS = Set.of(
-        "main", "multimodal", "query-multimodal", "deep-analysis", "deep-multimodal", "ocr", "diagram");
+        "main", "multimodal", "ocr", "deep-analysis", "diagram");
     private static final Pattern PROVIDER_NAME = Pattern.compile("[a-z0-9][a-z0-9-]{0,31}");
 
     private final SystemConfigService systemConfigService;
@@ -64,7 +64,7 @@ public class AiRuntimeConfigService {
                 configured ? mask(p.apiKey()) : ""));
         });
         List<AiSlotView> slots = new ArrayList<>();
-        cfg.slots().forEach((slot, s) -> slots.add(new AiSlotView(slot, s.provider(), s.model())));
+        cfg.slots().forEach((slot, s) -> slots.add(new AiSlotView(slot, s.provider(), s.model(), s.multimodal())));
         return new AiRuntimeConfigView(providers, slots);
     }
 
@@ -86,7 +86,7 @@ public class AiRuntimeConfigService {
         }
         Map<String, AiRuntimeConfig.SlotEntry> slots = new LinkedHashMap<>();
         for (AiSlotInput in : req.slots()) {
-            slots.put(in.slot(), new AiRuntimeConfig.SlotEntry(in.provider(), in.model()));
+            slots.put(in.slot(), new AiRuntimeConfig.SlotEntry(in.provider(), in.model(), Boolean.TRUE.equals(in.multimodal())));
         }
         AiRuntimeConfig config = new AiRuntimeConfig(providers, slots);
 
@@ -111,7 +111,7 @@ public class AiRuntimeConfigService {
                 providers.put(name, new AiRuntimeConfig.ProviderEntry(p.getBaseUrl(), p.getApiKey(), true)));
             Map<String, AiRuntimeConfig.SlotEntry> slots = new LinkedHashMap<>();
             yamlProps.getSlots().forEach((slot, s) ->
-                slots.put(slot, new AiRuntimeConfig.SlotEntry(s.getProvider(), s.getModel())));
+                slots.put(slot, new AiRuntimeConfig.SlotEntry(s.getProvider(), s.getModel(), s.isMultimodal())));
             return new AiRuntimeConfig(providers, slots);
         }
         return AiRuntimeConfig.empty();
@@ -143,8 +143,13 @@ public class AiRuntimeConfigService {
             }
             Map<String, AiRuntimeConfig.SlotEntry> slots = new LinkedHashMap<>();
             for (JsonNode s : root.path("slots")) {
-                slots.put(s.path("slot").asText(), new AiRuntimeConfig.SlotEntry(
-                    s.path("provider").asText(""), s.path("model").asText("")));
+                String slotName = s.path("slot").asText();
+                if (!KNOWN_SLOTS.contains(slotName)) {
+                    continue;
+                }
+                slots.put(slotName, new AiRuntimeConfig.SlotEntry(
+                    s.path("provider").asText(""), s.path("model").asText(""),
+                    s.path("multimodal").asBoolean(false)));
             }
             return new AiRuntimeConfig(providers, slots);
         } catch (Exception e) {
@@ -169,6 +174,7 @@ public class AiRuntimeConfigService {
             node.put("slot", slot);
             node.put("provider", s.provider());
             node.put("model", s.model());
+            node.put("multimodal", s.multimodal());
         });
         return root.toString();
     }

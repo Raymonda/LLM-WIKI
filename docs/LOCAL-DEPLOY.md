@@ -163,7 +163,7 @@ llmwiki:
         model: qwen-vl-ocr
 ```
 
-Available slots: `main`, `multimodal`, `query-multimodal`, `deep-analysis`, `deep-multimodal`, `ocr`, `diagram`.
+Available slots (5 total): `main` (fast model, the default entry for all LLM calls; add `multimodal: true` to reuse it for query image understanding), `multimodal` (image understanding), `ocr` (scanned-document OCR), plus optional scenario overrides `deep-analysis` and `diagram` (fall back to `main` when omitted).
 
 ---
 
