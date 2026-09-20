@@ -14,15 +14,17 @@ public final class StartupConfigValidator {
     private StartupConfigValidator() {
     }
 
-    public static List<String> validate(String jwtSecret, String singleProviderApiKey, AiProviderProperties aiProperties) {
+    public static List<String> validate(String jwtSecret, String singleProviderApiKey, AiProviderProperties aiProperties, boolean dbConfigured) {
         List<String> violations = new ArrayList<>();
         if (isMissingOrDefault(jwtSecret, DEFAULT_JWT_SECRET)) {
             violations.add("JWT_SECRET 未配置或仍为默认值，必须通过 JWT_SECRET 环境变量覆盖（生产环境启动将被阻断）");
         }
-        if (aiProperties != null && aiProperties.isMultiProviderEnabled()) {
-            validateMultiProvider(aiProperties, violations);
-        } else if (isMissingOrDefault(singleProviderApiKey, PLACEHOLDER_API_KEY)) {
-            violations.add("AI Provider API Key 未配置（单 Provider 模式需设置 AI_DASHSCOPE_API_KEY 或任意 OpenAI 兼容 Key）");
+        if (!dbConfigured) {
+            if (aiProperties != null && aiProperties.isMultiProviderEnabled()) {
+                validateMultiProvider(aiProperties, violations);
+            } else if (isMissingOrDefault(singleProviderApiKey, PLACEHOLDER_API_KEY)) {
+                violations.add("AI Provider API Key 未配置（单 Provider 模式需设置 AI_DASHSCOPE_API_KEY 或任意 OpenAI 兼容 Key，或在系统配置中完成模型配置）");
+            }
         }
         return violations;
     }

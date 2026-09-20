@@ -1,5 +1,6 @@
 package org.cn.liuwt.llmwiki.bootstrap;
 
+import org.cn.liuwt.llmwiki.domain.service.harness.governance.AiRuntimeConfigService;
 import org.cn.liuwt.llmwiki.integration.ai.AiProviderProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,18 +22,28 @@ public class ConfigValidationBootstrap implements ApplicationRunner {
 
     private final Environment environment;
     private final AiProviderProperties aiProviderProperties;
+    private final AiRuntimeConfigService aiRuntimeConfigService;
 
-    public ConfigValidationBootstrap(Environment environment, AiProviderProperties aiProviderProperties) {
+    public ConfigValidationBootstrap(Environment environment, AiProviderProperties aiProviderProperties,
+                                     AiRuntimeConfigService aiRuntimeConfigService) {
         this.environment = environment;
         this.aiProviderProperties = aiProviderProperties;
+        this.aiRuntimeConfigService = aiRuntimeConfigService;
     }
 
     @Override
     public void run(ApplicationArguments args) {
+        boolean dbConfigured;
+        try {
+            dbConfigured = aiRuntimeConfigService.isConfiguredInDb();
+        } catch (Exception e) {
+            LOGGER.warn("Failed to check DB AI runtime config, treating as not configured", e);
+            dbConfigured = false;
+        }
         List<String> violations = StartupConfigValidator.validate(
                 environment.getProperty("llmwiki.jwt.secret"),
                 environment.getProperty("spring.ai.openai.api-key"),
-                aiProviderProperties);
+                aiProviderProperties, dbConfigured);
         if (violations.isEmpty()) {
             LOGGER.info("Startup config validation passed");
             return;
