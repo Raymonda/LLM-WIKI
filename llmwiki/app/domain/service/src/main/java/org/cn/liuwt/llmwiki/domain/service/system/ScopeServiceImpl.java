@@ -288,6 +288,9 @@ public class ScopeServiceImpl implements ScopeService {
         model.setOwnerId(scopeDO.getOwnerId());
         model.setMonthlyBudget(scopeDO.getMonthlyBudget());
         model.setDefaultApproval(scopeDO.getDefaultApproval());
+        model.setIngestMode(scopeDO.getIngestMode());
+        model.setAutoSuspended(scopeDO.getAutoSuspended());
+        model.setAutoSuspendedReason(scopeDO.getAutoSuspendedReason());
         model.setMaxFileSize(scopeDO.getMaxFileSize());
         model.setMaxConcurrent(scopeDO.getMaxConcurrent());
         model.setVisibility(scopeDO.getVisibility());
@@ -306,6 +309,9 @@ public class ScopeServiceImpl implements ScopeService {
         scopeDO.setOwnerId(model.getOwnerId());
         scopeDO.setMonthlyBudget(model.getMonthlyBudget());
         scopeDO.setDefaultApproval(model.getDefaultApproval());
+        scopeDO.setIngestMode(model.getIngestMode());
+        scopeDO.setAutoSuspended(model.getAutoSuspended());
+        scopeDO.setAutoSuspendedReason(model.getAutoSuspendedReason());
         scopeDO.setMaxFileSize(model.getMaxFileSize());
         scopeDO.setMaxConcurrent(model.getMaxConcurrent());
         scopeDO.setUpstreamScopeIds(model.getUpstreamScopeIds());

@@ -15,6 +15,9 @@ public class ScopeInfo {
     private String ownerName;
     private Integer monthlyBudget;
     private String defaultApproval;
+    private String ingestMode;
+    private Boolean autoSuspended;
+    private String autoSuspendedReason;
     private Integer maxFileSize;
     private Integer maxConcurrent;
     private String upstreamScopeIds;

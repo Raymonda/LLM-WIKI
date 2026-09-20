@@ -85,6 +85,7 @@ public class ScopeController {
         model.setDescription(request.getDescription());
         model.setMonthlyBudget(request.getMonthlyBudget());
         model.setDefaultApproval(request.getDefaultApproval());
+        model.setIngestMode(request.getIngestMode());
         model.setMaxFileSize(request.getMaxFileSize());
         model.setMaxConcurrent(request.getMaxConcurrent());
         scopeService.updateScope(model);
@@ -227,6 +228,9 @@ public class ScopeController {
         info.setOwnerId(model.getOwnerId());
         info.setMonthlyBudget(model.getMonthlyBudget());
         info.setDefaultApproval(model.getDefaultApproval());
+        info.setIngestMode(model.getIngestMode());
+        info.setAutoSuspended(model.getAutoSuspended());
+        info.setAutoSuspendedReason(model.getAutoSuspendedReason());
         info.setMaxFileSize(model.getMaxFileSize());
         info.setMaxConcurrent(model.getMaxConcurrent());
         info.setUpstreamScopeIds(model.getUpstreamScopeIds());
