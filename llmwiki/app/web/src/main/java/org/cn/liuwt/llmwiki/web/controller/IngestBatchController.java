@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/ingest/batch")
@@ -96,6 +97,13 @@ public class IngestBatchController {
             return Result.failed(ErrorCode.INGEST_BATCH_INVALID_STATUS);
         }
         return Result.success();
+    }
+
+    @PostMapping("/{id}/cancel-items")
+    public Result<Map<String, Integer>> cancelItems(@PathVariable Long id,
+                                                    @RequestBody(required = false) IngestBatchConfirmRequest request) {
+        assertBatchReadable(ingestBatchService.getBatch(id));
+        return Result.success(ingestBatchService.cancelItems(id, request != null ? request.getExecutionIds() : null));
     }
 
     private void assertBatchReadable(IngestBatchDO batch) {

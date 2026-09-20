@@ -1,6 +1,7 @@
 package org.cn.liuwt.llmwiki.domain.service.harness.eventlog;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionEventDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionEventMapper;
@@ -12,8 +13,11 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -68,6 +72,45 @@ public class ExecutionEventLogService {
                 .gt(ExecutionEventDO::getSeq, afterSeq)
                 .orderByAsc(ExecutionEventDO::getSeq)
                 .last("LIMIT " + Math.max(1, properties.getReplayLimit())));
+    }
+
+    public Map<Long, Map<String, Object>> loadLatestTurnEndPayloads(Collection<Long> executionIds) {
+        if (executionIds == null || executionIds.isEmpty()) {
+            return Map.of();
+        }
+        List<String> idStrings = executionIds.stream()
+                .filter(Objects::nonNull)
+                .map(String::valueOf)
+                .toList();
+        if (idStrings.isEmpty()) {
+            return Map.of();
+        }
+        List<ExecutionEventDO> events = eventMapper.selectList(new LambdaQueryWrapper<ExecutionEventDO>()
+                .eq(ExecutionEventDO::getEventType, ExecutionEventTypes.TURN_END)
+                .in(ExecutionEventDO::getExecutionId, idStrings)
+                .orderByAsc(ExecutionEventDO::getSeq));
+        Map<Long, Map<String, Object>> result = new LinkedHashMap<>();
+        for (ExecutionEventDO event : events) {
+            Long executionId;
+            try {
+                executionId = Long.valueOf(event.getExecutionId());
+            } catch (NumberFormatException e) {
+                continue;
+            }
+            String payloadJson = event.getPayloadJson();
+            if (payloadJson == null || payloadJson.isBlank()) {
+                continue;
+            }
+            try {
+                Map<String, Object> payload = objectMapper.readValue(payloadJson,
+                        new TypeReference<Map<String, Object>>() {});
+                result.computeIfAbsent(executionId, k -> new LinkedHashMap<>()).putAll(payload);
+            } catch (Exception e) {
+                log.warn("Turn-end payload parse failed, skipped: executionId={}, seq={}, error={}",
+                        event.getExecutionId(), event.getSeq(), e.getMessage());
+            }
+        }
+        return result;
     }
 
     private long nextSeq(String executionId) {

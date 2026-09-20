@@ -17,4 +17,11 @@ public class IngestBatchDetailInfo {
     private long total;
     private int page;
     private int size;
+    private String mode;
+    private Long etaSeconds;
+    private Long totalTokensSum;
+    private long autoCompleted;
+    private long manualPending;
+    private long failedCount;
+    private long cancelledCount;
 }

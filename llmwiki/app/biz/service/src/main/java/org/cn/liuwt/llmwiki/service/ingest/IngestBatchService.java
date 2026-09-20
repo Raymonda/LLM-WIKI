@@ -3,6 +3,8 @@ package org.cn.liuwt.llmwiki.service.ingest;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionStepDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.IngestBatchDO;
@@ -16,6 +18,8 @@ import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel.ExecutionStepModel;
 import org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel;
+import org.cn.liuwt.llmwiki.domain.service.harness.baseline.ExecutionBaselineService;
+import org.cn.liuwt.llmwiki.domain.service.harness.eventlog.ExecutionEventLogService;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
 import org.cn.liuwt.llmwiki.domain.service.wiki.SourceService;
@@ -56,6 +60,9 @@ public class IngestBatchService {
     private static final int INBOX_RETENTION_DAYS = 7;
     private static final int INBOX_OPEN_LIMIT = 100;
     private static final int INBOX_CLOSED_LIMIT = 20;
+    private static final Set<String> CANCELLABLE_ITEM_STATUSES =
+        Set.of("awaiting_confirmation", "awaiting_review");
+    private static final ObjectMapper STEP_OUTPUT_MAPPER = new ObjectMapper();
 
     @Autowired private ExecutionMapper executionMapper;
     @Autowired private ExecutionStepMapper executionStepMapper;
@@ -67,9 +74,14 @@ public class IngestBatchService {
     @Autowired private ExecutionNodeRegistry registry;
     @Autowired private MqHealthService mqHealthService;
     @Autowired private SourceService sourceService;
+    @Autowired private ExecutionEventLogService executionEventLogService;
+    @Autowired private ExecutionBaselineService executionBaselineService;
 
     @Value("${llmwiki.ingest.batch.max-size:200}")
     private int maxBatchSize;
+
+    @Value("${llmwiki.ingest.batch.analyze-concurrency:2}")
+    private int analyzeConcurrency;
 
     @Transactional
     public IngestBatchCreateInfo createBatch(Long scopeId, Long userId, List<Long> sourceIds,
@@ -276,8 +288,38 @@ public class IngestBatchService {
         List<Long> sourceIds = items.stream().map(ExecutionDO::getSourceId).filter(Objects::nonNull).distinct().toList();
         Map<Long, SourceDO> sourceMap = sourceIds.isEmpty() ? Map.of()
             : sourceMapper.selectBatchIds(sourceIds).stream().collect(Collectors.toMap(SourceDO::getId, s -> s));
-        Map<Long, String> analyzeOutputs = loadAnalyzeOutputs(executionIds);
-        Map<Long, Boolean> phase1Flags = loadPhase1Completed(executionIds);
+        List<ExecutionStepDO> steps = loadSteps(executionIds);
+        Map<Long, String> analyzeOutputs = extractAnalyzeOutputs(steps);
+        Map<Long, Boolean> phase1Flags = computePhase1Flags(executionIds, steps);
+        Map<Long, int[]> qualityCounts = extractQualityCounts(steps);
+        Map<Long, Map<String, Object>> turnEndPayloads =
+            executionEventLogService.loadLatestTurnEndPayloads(executionIds);
+
+        long autoCompleted = 0;
+        long manualPending = 0;
+        long failedCount = 0;
+        long cancelledCount = 0;
+        long remaining = 0;
+        long totalTokensSum = 0;
+        for (ExecutionDO item : items) {
+            String status = item.getStatus();
+            Map<String, Object> payload = turnEndPayloads.get(item.getId());
+            if (payload != null && payload.get("totalTokens") instanceof Number number) {
+                totalTokensSum += number.longValue();
+            }
+            switch (status == null ? "" : status) {
+                case "completed" -> {
+                    if (isAutoApproved(payload)) {
+                        autoCompleted++;
+                    }
+                }
+                case "awaiting_confirmation", "awaiting_review" -> manualPending++;
+                case "failed", "budget_exhausted" -> failedCount++;
+                case "cancelled" -> cancelledCount++;
+                case "pending", "running", "confirmed" -> remaining++;
+                default -> { }
+            }
+        }
 
         int safeSize = size > 0 ? size : 50;
         int safePage = page > 0 ? page : 1;
@@ -287,7 +329,7 @@ public class IngestBatchService {
         List<IngestBatchItemInfo> pageItems = new ArrayList<>();
         for (ExecutionDO item : items.subList(from, to)) {
             pageItems.add(toItemInfo(item, sourceMap.get(item.getSourceId()), analyzeOutputs.get(item.getId()),
-                phase1Flags.get(item.getId())));
+                phase1Flags.get(item.getId()), turnEndPayloads.get(item.getId()), qualityCounts.get(item.getId())));
         }
 
         IngestBatchDetailInfo detail = new IngestBatchDetailInfo();
@@ -301,6 +343,13 @@ public class IngestBatchService {
         detail.setTotal(total);
         detail.setPage(safePage);
         detail.setSize(safeSize);
+        detail.setMode(batch.getMode());
+        detail.setAutoCompleted(autoCompleted);
+        detail.setManualPending(manualPending);
+        detail.setFailedCount(failedCount);
+        detail.setCancelledCount(cancelledCount);
+        detail.setTotalTokensSum(totalTokensSum);
+        detail.setEtaSeconds(computeEtaSeconds(batch.getScopeId(), remaining));
         return detail;
     }
 
@@ -308,14 +357,17 @@ public class IngestBatchService {
         return batchMapper.selectById(batchId);
     }
 
-    private Map<Long, String> loadAnalyzeOutputs(List<Long> executionIds) {
-        Map<Long, String> outputs = new HashMap<>();
+    private List<ExecutionStepDO> loadSteps(List<Long> executionIds) {
         if (executionIds.isEmpty()) {
-            return outputs;
+            return List.of();
         }
-        List<ExecutionStepDO> steps = executionStepMapper.selectList(new LambdaQueryWrapper<ExecutionStepDO>()
+        return executionStepMapper.selectList(new LambdaQueryWrapper<ExecutionStepDO>()
             .in(ExecutionStepDO::getExecutionId, executionIds)
             .orderByAsc(ExecutionStepDO::getStepOrder));
+    }
+
+    private Map<Long, String> extractAnalyzeOutputs(List<ExecutionStepDO> steps) {
+        Map<Long, String> outputs = new HashMap<>();
         for (ExecutionStepDO step : steps) {
             if (IngestStep.ANALYZE.name().equals(IngestStep.normalizeStepName(step.getStepName()))
                 && step.getOutputData() != null) {
@@ -325,14 +377,8 @@ public class IngestBatchService {
         return outputs;
     }
 
-    private Map<Long, Boolean> loadPhase1Completed(List<Long> executionIds) {
+    private Map<Long, Boolean> computePhase1Flags(List<Long> executionIds, List<ExecutionStepDO> steps) {
         Map<Long, Boolean> flags = new HashMap<>();
-        if (executionIds.isEmpty()) {
-            return flags;
-        }
-        List<ExecutionStepDO> steps = executionStepMapper.selectList(new LambdaQueryWrapper<ExecutionStepDO>()
-            .in(ExecutionStepDO::getExecutionId, executionIds)
-            .orderByAsc(ExecutionStepDO::getStepOrder));
         Map<Long, List<ExecutionStepModel>> stepsByExecution = steps.stream()
             .collect(Collectors.groupingBy(ExecutionStepDO::getExecutionId,
                 Collectors.mapping(this::toStepModel, Collectors.toList())));
@@ -340,6 +386,93 @@ public class IngestBatchService {
             flags.put(executionId, IngestStep.isPhase1Completed(stepsByExecution.getOrDefault(executionId, List.of())));
         }
         return flags;
+    }
+
+    private Map<Long, int[]> extractQualityCounts(List<ExecutionStepDO> steps) {
+        Map<Long, int[]> counts = new HashMap<>();
+        for (ExecutionStepDO step : steps) {
+            if (!IngestStep.COMPLETE.name().equals(IngestStep.normalizeStepName(step.getStepName()))
+                || step.getOutputData() == null) {
+                continue;
+            }
+            try {
+                JsonNode output = STEP_OUTPUT_MAPPER.readTree(step.getOutputData());
+                JsonNode critical = output.get("qualityCritical");
+                JsonNode warnings = output.get("qualityWarnings");
+                if (critical == null && warnings == null) {
+                    continue;
+                }
+                counts.put(step.getExecutionId(), new int[]{
+                    critical != null && critical.isInt() ? critical.intValue() : 0,
+                    warnings != null && warnings.isInt() ? warnings.intValue() : 0});
+            } catch (Exception e) {
+                log.warn("Failed to parse COMPLETE step output for executionId={}: {}",
+                    step.getExecutionId(), e.getMessage());
+            }
+        }
+        return counts;
+    }
+
+    private boolean isAutoApproved(Map<String, Object> turnEndPayload) {
+        if (turnEndPayload == null) {
+            return false;
+        }
+        Object autoDecision = turnEndPayload.get("autoDecision");
+        return autoDecision instanceof Map<?, ?> map && Boolean.TRUE.equals(map.get("autoApprove"));
+    }
+
+    private Long computeEtaSeconds(Long scopeId, long remaining) {
+        if (remaining <= 0) {
+            return 0L;
+        }
+        Map<String, Long> profile = executionBaselineService.getProfile(scopeId, "unknown");
+        if (profile == null || profile.isEmpty()) {
+            return null;
+        }
+        long sumMs = profile.values().stream().filter(Objects::nonNull).mapToLong(Long::longValue).sum();
+        if (sumMs <= 0) {
+            return null;
+        }
+        return remaining * sumMs / Math.max(1, analyzeConcurrency) / 1000;
+    }
+
+    private String truncate(String text, int maxLength) {
+        if (text == null || text.length() <= maxLength) {
+            return text;
+        }
+        return text.substring(0, maxLength);
+    }
+
+    public Map<String, Integer> cancelItems(Long batchId, List<Long> executionIds) {
+        if (getBatch(batchId) == null) {
+            throw new BusinessException(ErrorCode.INGEST_BATCH_NOT_FOUND);
+        }
+        if (executionIds == null || executionIds.isEmpty()) {
+            return Map.of("cancelled", 0, "skipped", 0);
+        }
+        List<ExecutionDO> items = executionMapper.selectList(new LambdaQueryWrapper<ExecutionDO>()
+            .in(ExecutionDO::getId, executionIds)
+            .eq(ExecutionDO::getBatchId, batchId));
+        int cancelled = 0;
+        int skipped = executionIds.size() - items.size();
+        for (ExecutionDO item : items) {
+            if (!CANCELLABLE_ITEM_STATUSES.contains(item.getStatus())) {
+                skipped++;
+                continue;
+            }
+            try {
+                if (executionTracker.cancelExecution(item.getId(), "batch_item_rejected")) {
+                    cancelled++;
+                } else {
+                    skipped++;
+                }
+            } catch (Exception e) {
+                log.warn("Failed to cancel batch item executionId={}: {}", item.getId(), e.getMessage());
+                skipped++;
+            }
+        }
+        log.info("Batch {} cancel-items: cancelled={}, skipped={}", batchId, cancelled, skipped);
+        return Map.of("cancelled", cancelled, "skipped", skipped);
     }
 
     private ExecutionStepModel toStepModel(ExecutionStepDO step) {
@@ -394,7 +527,9 @@ public class IngestBatchService {
         return countsByBatch;
     }
 
-    private IngestBatchItemInfo toItemInfo(ExecutionDO execution, SourceDO source, String analyzeOutput, Boolean phase1Completed) {
+    private IngestBatchItemInfo toItemInfo(ExecutionDO execution, SourceDO source, String analyzeOutput,
+                                           Boolean phase1Completed, Map<String, Object> turnEndPayload,
+                                           int[] qualityCounts) {
         IngestBatchItemInfo info = new IngestBatchItemInfo();
         info.setExecutionId(execution.getId());
         info.setSourceId(execution.getSourceId());
@@ -405,11 +540,21 @@ public class IngestBatchService {
         info.setStatus(execution.getStatus());
         info.setTotalTokens(execution.getTotalTokens());
         info.setErrorMessage(execution.getErrorMessage());
+        info.setErrorSummary(truncate(execution.getErrorMessage(), 200));
         info.setAnalyzeOutput(analyzeOutput);
         info.setPhase1Completed(phase1Completed);
         info.setGuidance(execution.getGuidance());
         info.setStartedAt(execution.getStartedAt());
         info.setCompletedAt(execution.getCompletedAt());
+        if (turnEndPayload != null && turnEndPayload.get("autoDecision") instanceof Map<?, ?> autoDecision) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> typed = (Map<String, Object>) autoDecision;
+            info.setAutoDecision(typed);
+        }
+        if (qualityCounts != null) {
+            info.setQualityCritical(qualityCounts[0]);
+            info.setQualityWarnings(qualityCounts[1]);
+        }
         return info;
     }
 }

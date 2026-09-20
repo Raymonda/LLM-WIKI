@@ -114,4 +114,48 @@ class ExecutionEventLogServiceTest {
 
         assertEquals(events, service.replayAfter("exec-1", 10L));
     }
+
+    @Test
+    void loadLatestTurnEndPayloads_mergesPayloadsInSeqOrder() {
+        ExecutionEventDO first = new ExecutionEventDO();
+        first.setExecutionId("501");
+        first.setSeq(1);
+        first.setEventType(ExecutionEventTypes.TURN_END);
+        first.setPayloadJson("{\"status\":\"confirmed\",\"totalTokens\":100,\"autoDecision\":{\"autoApprove\":true}}");
+        ExecutionEventDO second = new ExecutionEventDO();
+        second.setExecutionId("501");
+        second.setSeq(2);
+        second.setEventType(ExecutionEventTypes.TURN_END);
+        second.setPayloadJson("{\"status\":\"completed\",\"totalTokens\":120}");
+        when(eventMapper.selectList(any())).thenReturn(List.of(first, second));
+
+        Map<Long, Map<String, Object>> result = service.loadLatestTurnEndPayloads(List.of(501L));
+
+        Map<String, Object> merged = result.get(501L);
+        assertEquals("completed", merged.get("status"));
+        assertEquals(120, ((Number) merged.get("totalTokens")).intValue());
+        Object autoDecision = merged.get("autoDecision");
+        assertInstanceOf(Map.class, autoDecision);
+        assertEquals(Boolean.TRUE, ((Map<?, ?>) autoDecision).get("autoApprove"));
+    }
+
+    @Test
+    void loadLatestTurnEndPayloads_skipsNonNumericExecutionId() {
+        ExecutionEventDO bad = new ExecutionEventDO();
+        bad.setExecutionId("abc");
+        bad.setSeq(1);
+        bad.setEventType(ExecutionEventTypes.TURN_END);
+        bad.setPayloadJson("{\"status\":\"completed\"}");
+        when(eventMapper.selectList(any())).thenReturn(List.of(bad));
+
+        Map<Long, Map<String, Object>> result = service.loadLatestTurnEndPayloads(List.of(1L));
+
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void loadLatestTurnEndPayloads_emptyInput_noDbAccess() {
+        assertTrue(service.loadLatestTurnEndPayloads(List.of()).isEmpty());
+        Mockito.verifyNoInteractions(eventMapper);
+    }
 }

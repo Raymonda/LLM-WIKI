@@ -3,6 +3,7 @@ package org.cn.liuwt.llmwiki.facade.model;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 
 @Data
 public class IngestBatchItemInfo {
@@ -18,4 +19,8 @@ public class IngestBatchItemInfo {
     private LocalDateTime startedAt;
     private LocalDateTime completedAt;
     private Boolean phase1Completed;
+    private Map<String, Object> autoDecision;
+    private Integer qualityCritical;
+    private Integer qualityWarnings;
+    private String errorSummary;
 }
