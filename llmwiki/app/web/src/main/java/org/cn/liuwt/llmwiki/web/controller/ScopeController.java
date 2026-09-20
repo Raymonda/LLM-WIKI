@@ -85,7 +85,9 @@ public class ScopeController {
         model.setDescription(request.getDescription());
         model.setMonthlyBudget(request.getMonthlyBudget());
         model.setDefaultApproval(request.getDefaultApproval());
-        model.setIngestMode(request.getIngestMode());
+        if (request.getIngestMode() != null) {
+            model.setIngestMode("auto".equals(request.getIngestMode()) ? "auto" : "review");
+        }
         model.setMaxFileSize(request.getMaxFileSize());
         model.setMaxConcurrent(request.getMaxConcurrent());
         scopeService.updateScope(model);
