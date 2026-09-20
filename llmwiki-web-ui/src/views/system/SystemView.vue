@@ -23,6 +23,7 @@ import {
 } from '@/api/user'
 import WikiPageRenderer from '@/components/wiki/WikiPageRenderer.vue'
 import McpAgentPanel from '@/components/system/McpAgentPanel.vue'
+import AiConfigPanel from '@/components/system/AiConfigPanel.vue'
 
 const { t } = useI18n()
 const activeTab = ref<'schema' | 'users' | 'lint' | 'general' | 'mcp'>('schema')
@@ -648,9 +649,10 @@ function onPageChange(newPage: number) {
       </div>
     </div>
 
-    <div v-if="activeTab === 'general'" class="system-view__panel">
+    <div v-if="activeTab === 'general'" class="system-view__panel system-view__panel--wide">
       <h2 class="system-view__panel-title">{{ t('system.generalPanelTitle') }}</h2>
       <p class="system-view__panel-hint">{{ t('system.generalPanelHint') }}</p>
+      <AiConfigPanel />
     </div>
 
     <div v-if="activeTab === 'mcp'" class="system-view__panel system-view__panel--wide">
