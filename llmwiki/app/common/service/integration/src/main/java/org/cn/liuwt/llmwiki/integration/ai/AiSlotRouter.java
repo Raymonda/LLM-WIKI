@@ -14,8 +14,8 @@ public class AiSlotRouter {
 
     private static final Logger log = LoggerFactory.getLogger(AiSlotRouter.class);
 
-    private final AiProviderProperties properties;
     private final AiProviderRegistry registry;
+    private final AiRuntimeConfigHolder holder;
 
     @Value("${spring.ai.openai.base-url:https://dashscope.aliyuncs.com/compatible-mode}")
     private String legacyBaseUrl;
@@ -26,34 +26,34 @@ public class AiSlotRouter {
     @Value("${spring.ai.openai.chat.options.model:}")
     private String legacyModel;
 
-    public AiSlotRouter(AiProviderProperties properties, AiProviderRegistry registry) {
-        this.properties = properties;
+    public AiSlotRouter(AiProviderRegistry registry, AiRuntimeConfigHolder holder) {
         this.registry = registry;
+        this.holder = holder;
     }
 
     public record Endpoint(String baseUrl, String apiKey, String model) {}
 
     public ChatModel getModel(String slotName) {
-        if (!properties.isMultiProviderEnabled()) {
+        AiRuntimeConfig cfg = holder.get();
+        if (cfg.isEmpty()) {
             return null;
         }
 
-        AiProviderProperties.SlotConfig slot = properties.getSlots().get(slotName);
-        if (slot == null) {
-            String defaultProvider = registry.getDefaultProviderName();
-            if (defaultProvider == null) return null;
-            return registry.getModel(defaultProvider);
+        AiRuntimeConfig.SlotEntry slot = cfg.slots().get(slotName);
+        String providerName = slot != null ? slot.provider() : registry.getDefaultProviderName();
+        if (providerName == null) {
+            return null;
         }
 
-        ChatModel baseModel = registry.getModel(slot.getProvider());
+        ChatModel baseModel = registry.getModel(providerName);
         if (baseModel == null) {
-            log.warn("Slot '{}' references provider '{}' which is not available", slotName, slot.getProvider());
+            log.warn("Slot '{}' references provider '{}' which is not available", slotName, providerName);
             return null;
         }
 
-        if (StringUtils.hasText(slot.getModel()) && baseModel instanceof OpenAiChatModel openAiModel) {
+        if (slot != null && StringUtils.hasText(slot.model()) && baseModel instanceof OpenAiChatModel openAiModel) {
             return openAiModel.mutate()
-                .defaultOptions(OpenAiChatOptions.builder().model(slot.getModel()).build())
+                .defaultOptions(OpenAiChatOptions.builder().model(slot.model()).build())
                 .build();
         }
 
@@ -61,42 +61,33 @@ public class AiSlotRouter {
     }
 
     public Endpoint getEndpoint(String slotName) {
-        if (!properties.isMultiProviderEnabled()) {
+        AiRuntimeConfig cfg = holder.get();
+        if (cfg.isEmpty()) {
             return new Endpoint(legacyBaseUrl, legacyApiKey, legacyModel);
         }
 
-        AiProviderProperties.SlotConfig slot = properties.getSlots().get(slotName);
-        if (slot == null) {
-            String defaultProvider = registry.getDefaultProviderName();
-            if (defaultProvider == null) {
-                return new Endpoint(legacyBaseUrl, legacyApiKey, legacyModel);
-            }
-            AiProviderProperties.ProviderConfig config = registry.getProviderConfig(defaultProvider);
-            return new Endpoint(config.getBaseUrl(), config.getApiKey(), "");
-        }
-
-        AiProviderProperties.ProviderConfig config = registry.getProviderConfig(slot.getProvider());
-        if (config == null) {
-            log.warn("Slot '{}' references unknown provider '{}', falling back to legacy", slotName, slot.getProvider());
+        AiRuntimeConfig.SlotEntry slot = cfg.slots().get(slotName);
+        String providerName = slot != null ? slot.provider() : registry.getDefaultProviderName();
+        AiRuntimeConfig.ProviderEntry provider = providerName != null ? registry.getProviderEntry(providerName) : null;
+        if (provider == null) {
+            log.warn("Slot '{}' references unknown provider, falling back to legacy", slotName);
             return new Endpoint(legacyBaseUrl, legacyApiKey, legacyModel);
         }
 
-        return new Endpoint(config.getBaseUrl(), config.getApiKey(), slot.getModel());
+        return new Endpoint(provider.baseUrl(), provider.apiKey(), slot != null ? slot.model() : "");
     }
 
     public String resolveModel(String slotName) {
-        if (!properties.isMultiProviderEnabled()) {
+        AiRuntimeConfig cfg = holder.get();
+        if (cfg.isEmpty()) {
             return legacyModel;
         }
 
-        AiProviderProperties.SlotConfig slot = properties.getSlots().get(slotName);
-        if (slot != null && StringUtils.hasText(slot.getModel())) {
-            return slot.getModel();
-        }
-        return legacyModel;
+        AiRuntimeConfig.SlotEntry slot = cfg.slots().get(slotName);
+        return slot != null && StringUtils.hasText(slot.model()) ? slot.model() : legacyModel;
     }
 
     public boolean isMultiProviderMode() {
-        return properties.isMultiProviderEnabled();
+        return !holder.get().isEmpty();
     }
 }
