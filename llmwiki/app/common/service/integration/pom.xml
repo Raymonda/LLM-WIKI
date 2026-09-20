@@ -15,6 +15,10 @@
 			<artifactId>llmwiki-common-util</artifactId>
 		</dependency>
 		<dependency>
+			<groupId>org.cn.liuwt.llmwiki</groupId>
+			<artifactId>llmwiki-facade</artifactId>
+		</dependency>
+		<dependency>
 			<groupId>org.springframework.ai</groupId>
 			<artifactId>spring-ai-starter-model-openai</artifactId>
 		</dependency>
