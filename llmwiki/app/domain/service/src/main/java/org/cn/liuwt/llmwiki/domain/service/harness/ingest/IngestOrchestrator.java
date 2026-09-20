@@ -1,7 +1,12 @@
 package org.cn.liuwt.llmwiki.domain.service.harness.ingest;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.IngestBatchDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.ScopeDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
+import org.cn.liuwt.llmwiki.common.dal.mapper.IngestBatchMapper;
+import org.cn.liuwt.llmwiki.common.dal.mapper.ScopeMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel.ExecutionStepModel;
@@ -24,6 +29,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -77,6 +84,21 @@ public class IngestOrchestrator {
 
     @Autowired
     private SchemaComplianceChecker schemaComplianceChecker;
+
+    @Autowired
+    private ScopeMapper scopeMapper;
+
+    @Autowired
+    private IngestBatchMapper ingestBatchMapper;
+
+    @Autowired
+    private AutoConfirmPolicy autoConfirmPolicy;
+
+    @Autowired
+    private ApplicationEventPublisher eventPublisher;
+
+    @Value("${llmwiki.ingest.auto-confirm.enabled:true}")
+    private boolean autoConfirmEnabled;
 
     public static boolean isBatchContext(ExecutionModel execution) {
         return execution != null && execution.getBatchId() != null;
@@ -222,10 +244,15 @@ public class IngestOrchestrator {
      * 分类/元数据/写作计划存在 HIGH/MEDIUM 违规 → 进入 awaiting_review 待评审，
      * 否则维持 awaiting_confirmation 常规确认。预检自身异常按 fail-open 处理（不因
      * 检查器故障阻断正常流程），但不吞掉违规结论。
+     * 批量导入模式（ingest mode = auto）下改由 AutoConfirmPolicy 判定：放行则置 confirmed
+     * 并发布 IngestAutoConfirmedEvent 驱动调度续跑；拦截则置 awaiting_review 走人工评审。
      */
     private ExecutionModel awaitReview(Long executionId, Long scopeId, String sourceName, int totalTokens,
                                        boolean suppressNotifications, IngestContext context) {
         boolean schemaReview = schemaPrecheckRequiresReview(scopeId, context);
+        if ("auto".equals(resolveIngestMode(executionId, scopeId))) {
+            return awaitAutoDecision(executionId, scopeId, sourceName, totalTokens, suppressNotifications, context, schemaReview);
+        }
         String reviewStatus = schemaReview ? "awaiting_review" : "awaiting_confirmation";
         executionTracker.updateExecutionStatus(executionId, reviewStatus);
         executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_END,
@@ -270,6 +297,125 @@ public class IngestOrchestrator {
             log.warn("Schema 预检执行失败，按无违规继续 scope={}: {}", scopeId, e.getMessage());
             return false;
         }
+    }
+
+    private String resolveIngestMode(Long executionId, Long scopeId) {
+        if (!autoConfirmEnabled) return "review";
+        ScopeDO scope = scopeMapper.selectById(scopeId);
+        if (scope != null && Boolean.TRUE.equals(scope.getAutoSuspended())) return "review";
+        ExecutionModel execution = executionTracker.getExecution(executionId);
+        if (execution != null && execution.getBatchId() != null) {
+            IngestBatchDO batch = ingestBatchMapper.selectById(execution.getBatchId());
+            if (batch != null && batch.getMode() != null) return batch.getMode();
+        }
+        if (scope != null && scope.getIngestMode() != null) return scope.getIngestMode();
+        return "review";
+    }
+
+    private ExecutionModel awaitAutoDecision(Long executionId, Long scopeId, String sourceName, int totalTokens,
+                                             boolean suppressNotifications, IngestContext context, boolean schemaReview) {
+        AutoConfirmPolicy.AutoDecision decision = autoConfirmPolicy.decide(buildAutoConfirmSignals(context, schemaReview));
+        java.util.Map<String, Object> autoDecision = java.util.Map.of(
+            "autoApprove", decision.autoApprove(),
+            "hardBlocked", decision.hardBlocked(),
+            "softScore", decision.softScore(),
+            "reasons", decision.reasons());
+        if (decision.autoApprove()) {
+            executionTracker.updateExecutionStatus(executionId, "confirmed");
+            executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_END,
+                java.util.Map.of("pipeline", "ingest", "status", "confirmed", "totalTokens", totalTokens,
+                    "autoDecision", autoDecision));
+            eventPublisher.publishEvent(new IngestAutoConfirmedEvent(this, scopeId, executionId));
+            log.info("Ingest auto-confirmed: executionId={}, scopeId={}", executionId, scopeId);
+            return executionTracker.getExecution(executionId);
+        }
+        executionTracker.updateExecutionStatus(executionId, "awaiting_review");
+        executionEventLog.append(String.valueOf(executionId), ExecutionEventTypes.TURN_END,
+            java.util.Map.of("pipeline", "ingest", "status", "awaiting_review", "totalTokens", totalTokens,
+                "autoDecision", autoDecision));
+        if (!suppressNotifications) {
+            ExecutionModel execution = executionTracker.getExecution(executionId);
+            Long submittedBy = execution != null ? execution.getSubmittedBy() : null;
+            notificationService.createPersonalNotification(submittedBy, "ingest_awaiting_review",
+                "需要评审 — " + sourceName,
+                "分析结果存在 Schema 合规违规，请审阅后确认是否继续写入知识库",
+                scopeId, null, executionId);
+        }
+        return executionTracker.getExecution(executionId);
+    }
+
+    private AutoConfirmPolicy.Signals buildAutoConfirmSignals(IngestContext context, boolean schemaReview) {
+        int conflictCount = context != null && context.getConflictAnnotations() != null
+            ? context.getConflictAnnotations().size() : 0;
+        double completeness = context != null ? context.getCompletenessScore() : 0.0;
+        double updateRatio = context != null ? extractUpdateRatio(context.getMetadataJson(), context.getWritingPlanJson()) : 0.0;
+        boolean hasGapHints = context != null && context.getSchemaGapHints() != null
+            && !context.getSchemaGapHints().isEmpty();
+        boolean parseDegraded = isParseDegraded(context != null ? context.getParseValidationReport() : null);
+        return new AutoConfirmPolicy.Signals(schemaReview, conflictCount, completeness, updateRatio, hasGapHints, parseDegraded);
+    }
+
+    private boolean isParseDegraded(String report) {
+        return report != null && report.toLowerCase(java.util.Locale.ROOT).matches(".*(degraded|fallback|降级).*");
+    }
+
+    private double extractUpdateRatio(String metadataJson, String writingPlanJson) {
+        int[] metadataCounts = countMetadataActions(metadataJson);
+        if (metadataCounts != null) {
+            int total = metadataCounts[0] + metadataCounts[1];
+            return total == 0 ? 0.0 : (double) metadataCounts[0] / total;
+        }
+        return extractWritingPlanUpdateRatio(writingPlanJson);
+    }
+
+    private int[] countMetadataActions(String metadataJson) {
+        if (metadataJson == null || metadataJson.isBlank()) return null;
+        try {
+            int start = metadataJson.indexOf("{");
+            int end = metadataJson.lastIndexOf("}") + 1;
+            if (start < 0 || end <= start) return null;
+            JsonNode root = MAPPER.readTree(metadataJson.substring(start, end));
+            if (root == null || !root.isObject()) return null;
+            int updates = 0;
+            int creates = 0;
+            JsonNode affected = root.get("affectedPages");
+            if (affected != null && affected.isArray()) {
+                for (JsonNode page : affected) {
+                    String action = page.has("action") ? page.get("action").asText() : "补充";
+                    if ("更新".equals(action) || "补充".equals(action)) updates++;
+                }
+            }
+            JsonNode entities = root.get("entities");
+            if (entities != null && entities.isArray()) {
+                for (JsonNode entity : entities) {
+                    String action = entity.has("action") ? entity.get("action").asText() : "";
+                    if ("新建".equals(action)) creates++;
+                    else if ("补充".equals(action) || "更新".equals(action)) updates++;
+                }
+            }
+            return (updates + creates) > 0 ? new int[]{updates, creates} : null;
+        } catch (Exception e) {
+            log.warn("countMetadataActions parse failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private double extractWritingPlanUpdateRatio(String writingPlanJson) {
+        if (writingPlanJson == null || writingPlanJson.isBlank()) return 0.0;
+        try {
+            JsonNode root = MAPPER.readTree(writingPlanJson);
+            if (root == null || !root.isObject()) return 0.0;
+            int updates = planMapSize(root.get("affectedPagePlans"));
+            int total = updates + planMapSize(root.get("entityPlans")) + planMapSize(root.get("chapterPlans"));
+            return total == 0 ? 0.0 : (double) updates / total;
+        } catch (Exception e) {
+            log.warn("extractUpdateRatio parse failed: {}", e.getMessage());
+            return 0.0;
+        }
+    }
+
+    private int planMapSize(JsonNode node) {
+        return node != null && node.isObject() ? node.size() : 0;
     }
 
     public ExecutionModel runIngestAnalysisWithExecution(Long executionId, Long scopeId, Long sourceId, String guidance) {

@@ -10,6 +10,7 @@ import org.cn.liuwt.llmwiki.common.dal.mapper.IngestBatchMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.NotificationMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ScopeMapper;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
+import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestAutoConfirmedEvent;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionStatusEvent;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
@@ -147,6 +148,15 @@ public class IngestBatchScheduler {
             }
         } catch (Exception e) {
             log.error("Ingest batch settle handling failed: executionId={}", event.getExecutionId(), e);
+        }
+    }
+
+    @EventListener
+    public void onAutoConfirmed(IngestAutoConfirmedEvent event) {
+        try {
+            kick(event.getScopeId());
+        } catch (Exception e) {
+            log.warn("Auto-confirmed kick failed: scopeId={}, executionId={}", event.getScopeId(), event.getExecutionId(), e);
         }
     }
 
