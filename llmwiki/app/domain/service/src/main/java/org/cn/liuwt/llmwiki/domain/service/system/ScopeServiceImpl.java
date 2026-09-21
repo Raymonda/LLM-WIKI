@@ -1,6 +1,7 @@
 package org.cn.liuwt.llmwiki.domain.service.system;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ScopeDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ScopeMemberDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ScopeJoinRequestDO;
@@ -92,6 +93,12 @@ public class ScopeServiceImpl implements ScopeService {
     public void updateScope(ScopeModel scopeModel) {
         ScopeDO scopeDO = toScopeDO(scopeModel);
         scopeMapper.updateById(scopeDO);
+        if (scopeModel.getIngestMode() != null) {
+            scopeMapper.update(null, new LambdaUpdateWrapper<ScopeDO>()
+                    .eq(ScopeDO::getId, scopeModel.getId())
+                    .set(ScopeDO::getAutoSuspended, false)
+                    .set(ScopeDO::getAutoSuspendedReason, null));
+        }
     }
 
     @Override

@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.IngestBatchDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.NotificationDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.ScopeDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageSourceDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.IngestBatchMapper;
@@ -391,6 +392,7 @@ public class IngestBatchScheduler {
             notifyOnce(batch, "ingest_batch_completed", "处理完成",
                 "本批 " + batch.getTotalCount() + " 份已结束：" + autoCompleted + " 自动完成，"
                     + (completed - autoCompleted) + " 确认完成，" + failed + " 失败，" + cancelled + " 取消");
+            maybeSuspendAutoMode(batch, items);
         }
     }
 
@@ -420,6 +422,33 @@ public class IngestBatchScheduler {
                 new IngestBatchSettledEvent(this, batch.getId(), batch.getScopeId(), pageIds));
         } catch (Exception e) {
             log.warn("Failed to publish batch settled event: batchId={}", batch.getId(), e);
+        }
+    }
+
+    private void maybeSuspendAutoMode(IngestBatchDO batch, List<ExecutionDO> items) {
+        try {
+            if (!"auto".equals(batch.getMode())) {
+                return;
+            }
+            int total = batch.getTotalCount() != null ? batch.getTotalCount() : items.size();
+            long failed = items.stream().filter(i ->
+                "failed".equals(i.getStatus()) || "budget_exhausted".equals(i.getStatus())).count();
+            if (total < 5 || failed < 3 || failed * 10 < total * 3L) {
+                return;
+            }
+            ScopeDO scope = scopeMapper.selectById(batch.getScopeId());
+            if (scope == null || Boolean.TRUE.equals(scope.getAutoSuspended())) {
+                return;
+            }
+            long pct = Math.round(failed * 100.0 / total);
+            String reason = "批次 #" + batch.getId() + " 失败率 " + pct + "%（" + failed + "/" + total + "），自动确认已熔断";
+            scope.setAutoSuspended(true);
+            scope.setAutoSuspendedReason(reason);
+            scopeMapper.updateById(scope);
+            notificationService.createPersonalNotification(scope.getOwnerId(), "auto_mode_suspended",
+                "自动确认已熔断", reason + "。如需恢复，请在项目设置中重新选择摄入模式。", batch.getScopeId(), null, null);
+        } catch (Exception e) {
+            log.warn("maybeSuspendAutoMode failed for batch {}: {}", batch.getId(), e.getMessage());
         }
     }
 
