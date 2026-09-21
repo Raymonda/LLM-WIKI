@@ -499,6 +499,7 @@ public class IngestBatchService {
             .distinct()
             .toList();
         if (sourceIds.isEmpty()) {
+            notifyBatchOutputsDeprecated(userId, batchId, scopeId, 0, 0);
             return Map.<String, Object>of("deprecatedPages", 0, "skippedPages", 0);
         }
         List<WikiPageSourceDO> links = wikiPageSourceMapper.selectList(
@@ -529,11 +530,19 @@ public class IngestBatchService {
             }
         }
         log.info("Batch {} deprecate-outputs: deprecated={}, skipped={}", batchId, deprecated, skipped);
-        notificationService.createPersonalNotification(userId, "batch_outputs_deprecated",
-            "批次输出已撤回",
-            "批次 #" + batchId + " 的产出页面已标记废弃 " + deprecated + " 篇，跳过 " + skipped + " 篇。仅标记废弃，原始文件仍保留。",
-            scopeId, null, null);
+        notifyBatchOutputsDeprecated(userId, batchId, scopeId, deprecated, skipped);
         return Map.<String, Object>of("deprecatedPages", deprecated, "skippedPages", skipped);
+    }
+
+    private void notifyBatchOutputsDeprecated(Long userId, Long batchId, Long scopeId, int deprecated, int skipped) {
+        try {
+            notificationService.createPersonalNotification(userId, "batch_outputs_deprecated",
+                "批次输出已撤回",
+                "批次 #" + batchId + " 的产出页面已标记废弃 " + deprecated + " 篇，跳过 " + skipped + " 篇。仅标记废弃，原始文件仍保留。",
+                scopeId, null, null);
+        } catch (Exception e) {
+            log.warn("Failed to send deprecate-outputs notification for batch {}: {}", batchId, e.getMessage());
+        }
     }
 
     private ExecutionStepModel toStepModel(ExecutionStepDO step) {

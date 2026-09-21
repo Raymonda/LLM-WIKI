@@ -559,7 +559,7 @@ public class WikiController {
         if (description == null || description.isBlank()) {
             return Result.failed(ErrorCode.INVALID_PARAM, "description");
         }
-        lintFindingService.createFinding(scopeId, null, "user_report", "medium",
+        lintFindingService.createUserReportFinding(scopeId, "medium",
             "用户报告: " + page.getTitle(), description.trim(), page.getPath(), page.getId(),
             Map.<String, Object>of("reportedBy", String.valueOf(userId)));
         wikiFileService.recalcPageHealthStatus(scopeId, id);

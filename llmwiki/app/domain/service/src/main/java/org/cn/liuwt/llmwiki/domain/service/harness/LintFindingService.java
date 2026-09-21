@@ -150,6 +150,33 @@ public class LintFindingService {
         return finding.getId();
     }
 
+    public Long createUserReportFinding(Long scopeId, String priority, String title, String detail,
+                                        String pagePath, Long assetId, Map<String, Object> extra) {
+        LintFindingDO finding = new LintFindingDO();
+        finding.setScopeId(scopeId);
+        finding.setFindingType("user_report");
+        finding.setPriority(priority);
+        finding.setTitle(title);
+        finding.setDetail(detail);
+        finding.setPagePath(pagePath);
+        finding.setAssetId(assetId);
+        finding.setStatus("open");
+        if (extra != null) {
+            try {
+                finding.setExtra(objectMapper.writeValueAsString(extra));
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to serialize extra for user report finding", e);
+            }
+            finding.setRiskScore(computeRiskScore(scopeId, "user_report", priority, extra, null));
+        } else {
+            finding.setRiskScore(computeRiskScore(scopeId, "user_report", priority, null, null));
+        }
+        finding.setHandlingMethod(inferHandlingMethod(scopeId, "user_report", priority, null));
+        lintFindingMapper.insert(finding);
+        log.debug("Created user_report finding title={}, id={}", title, finding.getId());
+        return finding.getId();
+    }
+
     private boolean isRevivalAllowed(LintFindingDO dismissed, Long assetId) {
         LocalDateTime dismissedAt = dismissed.getArchivedAt() != null ? dismissed.getArchivedAt()
             : (dismissed.getUpdatedAt() != null ? dismissed.getUpdatedAt() : dismissed.getCreatedAt());

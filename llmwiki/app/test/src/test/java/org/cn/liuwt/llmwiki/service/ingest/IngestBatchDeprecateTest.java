@@ -143,7 +143,7 @@ class IngestBatchDeprecateTest {
             Result<Void> result = wikiController.reportIssue(201L, Map.of("description", "第三步命令有误"));
 
             assertThat(result.isSuccess()).isTrue();
-            verify(lintFindingService).createFinding(eq(10L), isNull(), eq("user_report"), eq("medium"),
+            verify(lintFindingService).createUserReportFinding(eq(10L), eq("medium"),
                 contains("故障排查指南"), eq("第三步命令有误"), eq("pages/troubleshooting.md"), eq(201L),
                 argThat(extra -> extra != null && "7".equals(String.valueOf(extra.get("reportedBy")))));
             verify(wikiFileService).recalcPageHealthStatus(10L, 201L);
