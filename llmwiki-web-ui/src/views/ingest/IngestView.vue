@@ -3,7 +3,9 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter, useRoute } from 'vue-router'
 import { uploadSource, listSourcesPaged, deprecateSource, undeprecateSource, type SourceInfo, type DuplicateInfo } from '@/api/source'
+import { getScope } from '@/api/scope'
 import { useAuthStore } from '@/stores/auth'
+import { useToastStore } from '@/stores/toast'
 import {
   Upload, FileText, CheckCircle, ChevronRight,
   Loader2, AlertTriangle, Archive, ArchiveRestore, ArrowRight, Sparkles,
@@ -33,6 +35,7 @@ const authStore = useAuthStore()
 const route = useRoute()
 const store = useIngestProgressStore()
 const batchStore = useIngestBatchStore()
+const toastStore = useToastStore()
 
 const uploadError = ref('')
 const isUploading = ref(false)
@@ -49,6 +52,9 @@ const batchDuplicateNames = ref<string[]>([])
 const batchGuidance = ref('')
 const batchBusy = ref(false)
 const batchError = ref('')
+const batchModeChoice = ref<'scope' | 'review' | 'auto'>('scope')
+const batchForceReingest = ref(false)
+const scopeIngestMode = ref<'review' | 'auto'>('review')
 
 const currentStep = computed(() => store.currentStep)
 const uploadedFile = computed(() => store.uploadedFile)
@@ -552,6 +558,38 @@ async function handleBatchCancel() {
   await runBatchAction(() => batchStore.cancel(batchId))
 }
 
+async function handleBatchDeprecateOutputs() {
+  const batchId = batchStore.selectedBatchId
+  if (batchId == null) return
+  const confirmed = await showConfirm({
+    title: t('ingest.batchDeprecateOutputs'),
+    message: t('ingest.batchDeprecateOutputsMessage'),
+    confirmText: t('ingest.batchDeprecateOutputs'),
+    cancelText: t('ingest.cancel'),
+    type: 'danger',
+    confirmVariant: 'danger',
+  })
+  if (!confirmed) return
+  await runBatchAction(async () => {
+    const result = await batchStore.deprecateOutputs(batchId)
+    toastStore.success(t('ingest.batchDeprecateOutputsDone', [result.deprecatedPages, result.skippedPages]))
+  })
+}
+
+async function handleCancelItems(executionIds: number[]) {
+  const batchId = batchStore.selectedBatchId
+  if (batchId == null || executionIds.length === 0) return
+  const confirmed = await showConfirm({
+    title: t('ingest.inboxRejectSelected', [executionIds.length]),
+    message: t('ingest.inboxRejectSelectedMessage', [executionIds.length]),
+    confirmText: t('ingest.inboxRejectSelected', [executionIds.length]),
+    cancelText: t('ingest.cancel'),
+    type: 'warning',
+  })
+  if (!confirmed) return
+  await runBatchAction(() => batchStore.cancelItems(batchId, executionIds))
+}
+
 async function handleItemConfirm(executionId: number, guidance?: string) {
   await runBatchAction(() => batchStore.confirmOne(executionId, guidance))
 }
@@ -595,14 +633,24 @@ async function handleRetryAllFailed() {
 async function createBatchFromPending() {
   if (batchPendingSources.value.length === 0) return
   await runBatchAction(async () => {
+    const mode = batchModeChoice.value === 'scope' ? undefined : batchModeChoice.value
     const response = await batchStore.createBatchAndStart(
       authStore.scopeId,
       batchPendingSources.value.map(s => s.id),
       batchGuidance.value || undefined,
+      mode,
+      batchForceReingest.value || undefined,
     )
+    if (response.batchId == null) {
+      toastStore.warning(
+        t('ingest.batchAllSkipped', [response.skippedDuplicateCount]),
+        response.warnings.join(' ') || undefined,
+      )
+      return
+    }
     batchPendingSources.value = []
     batchGuidance.value = ''
-    await openBatch(response.batchId)
+    router.replace({ path: '/ingest', query: { batch: String(response.batchId) } })
   })
 }
 
@@ -623,6 +671,13 @@ watch(
 )
 
 onMounted(async () => {
+  if (authStore.scopeId != null) {
+    getScope(authStore.scopeId)
+      .then((scope) => {
+        scopeIngestMode.value = scope.ingestMode === 'auto' ? 'auto' : 'review'
+      })
+      .catch(() => {})
+  }
   await loadExistingSources()
   await batchStore.refreshInbox().catch((e) => console.error('Failed to refresh batch inbox:', e))
   const batchId = Number(route.query.batch)
@@ -722,11 +777,13 @@ onMounted(async () => {
 
       <BatchOverviewPanel
         :batch="selectedBatchInfo"
+        :detail="batchStore.currentBatch"
         :busy="batchBusy"
         @confirm-all="handleBatchConfirmAll"
         @pause="handleBatchPause"
         @resume="handleBatchResume"
         @cancel="handleBatchCancel"
+        @deprecate-outputs="handleBatchDeprecateOutputs"
       />
 
       <ReviewInbox
@@ -737,6 +794,7 @@ onMounted(async () => {
         @retry="handleItemRetry"
         @retry-all="handleRetryAllFailed"
         @view="handleInboxItemView"
+        @cancel-items="handleCancelItems"
       />
     </div>
 
@@ -807,6 +865,33 @@ onMounted(async () => {
               :placeholder="t('ingest.guidancePlaceholder')"
               rows="3"
             ></textarea>
+          </div>
+          <div class="ingest-view__batch-options">
+            <div class="ingest-view__batch-mode">
+              <span class="ingest-view__batch-mode-label">{{ t('ingest.batchModeLabel') }}</span>
+              <label class="ingest-view__batch-mode-option">
+                <input v-model="batchModeChoice" type="radio" value="scope" :disabled="batchBusy" />
+                <span>{{ t('ingest.batchModeFollowScope', [scopeIngestMode === 'auto' ? t('ingest.batchModeAuto') : t('ingest.batchModeReview')]) }}</span>
+              </label>
+              <label class="ingest-view__batch-mode-option">
+                <input v-model="batchModeChoice" type="radio" value="review" :disabled="batchBusy" />
+                <span>{{ t('ingest.batchModeReview') }}</span>
+              </label>
+              <label class="ingest-view__batch-mode-option">
+                <input v-model="batchModeChoice" type="radio" value="auto" :disabled="batchBusy" />
+                <span>{{ t('ingest.batchModeAuto') }}</span>
+              </label>
+            </div>
+            <label class="ingest-view__batch-force">
+              <input v-model="batchForceReingest" type="checkbox" :disabled="batchBusy" />
+              <span>{{ t('ingest.batchForceReingest') }}</span>
+            </label>
+            <p
+              v-if="batchModeChoice === 'auto' || (batchModeChoice === 'scope' && scopeIngestMode === 'auto')"
+              class="ingest-view__batch-auto-hint"
+            >
+              {{ t('ingest.batchAutoHint') }}
+            </p>
           </div>
           <div class="ingest-view__panel-actions">
             <button class="ingest-view__btn-primary" :disabled="batchBusy" @click="createBatchFromPending">
@@ -2577,5 +2662,53 @@ onMounted(async () => {
   font-size: var(--font-body-sm);
   font-weight: var(--weight-semibold);
   color: var(--text-primary);
+}
+
+.ingest-view__batch-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.ingest-view__batch-mode {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.ingest-view__batch-mode-label {
+  font-size: var(--font-caption);
+  color: var(--text-tertiary);
+}
+
+.ingest-view__batch-mode-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-body-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.ingest-view__batch-mode-option input,
+.ingest-view__batch-force input {
+  accent-color: var(--accent-primary);
+}
+
+.ingest-view__batch-force {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-body-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.ingest-view__batch-auto-hint {
+  margin: 0;
+  font-size: var(--font-caption);
+  color: var(--accent-primary);
 }
 </style>

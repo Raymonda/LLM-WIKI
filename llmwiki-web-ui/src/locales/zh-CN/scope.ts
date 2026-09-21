@@ -131,4 +131,12 @@ export default {
   requestApproved: '已通过申请',
   requestRejected: '已拒绝申请',
   operationFailed: '操作失败',
+  ingestModeLabel: '摄入确认模式',
+  ingestModeReview: '逐篇确认（REVIEW）',
+  ingestModeAuto: '自动确认低风险（AUTO）',
+  ingestModeHint: '自动模式下低风险资料将直接写入知识库，例外项进入审阅队列',
+  autoSuspendedTitle: '自动确认已熔断',
+  autoSuspendedNoReason: '因批次失败率过高已自动暂停，恢复前请排查失败原因',
+  autoSuspendedResume: '重新开启自动确认',
+  autoSuspendedResumed: '已恢复自动确认模式',
 }

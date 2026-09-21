@@ -17,6 +17,9 @@ export interface ScopeInfo {
   ownerName: string
   monthlyBudget: number
   defaultApproval: string
+  ingestMode?: string
+  autoSuspended?: boolean
+  autoSuspendedReason?: string | null
   maxFileSize: number
   maxConcurrent: number
   visibility: string

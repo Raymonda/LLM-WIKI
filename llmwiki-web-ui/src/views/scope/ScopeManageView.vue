@@ -14,7 +14,7 @@ import {
 import { searchUsers, type UserSearchInfo } from '@/api/user'
 import {
   Users, User, UserPlus, Trash2, Shield, Edit3, Plus, ChevronRight,
-  Crown, ShieldCheck, Pencil, Eye, Check, X
+  Crown, ShieldCheck, Pencil, Eye, Check, X, AlertTriangle
 } from 'lucide-vue-next'
 
 const { t } = useI18n()
@@ -228,6 +228,7 @@ function startEditScope(scope: ScopeInfo) {
     description: scope.description,
     monthlyBudget: scope.monthlyBudget,
     defaultApproval: scope.defaultApproval,
+    ingestMode: scope.ingestMode ?? 'review',
   }
 }
 
@@ -242,6 +243,21 @@ async function handleSaveEdit() {
     }
     editingScope.value = null
     toastStore.success(t('common.operationSuccess'))
+  } catch (e: any) {
+    toastStore.error(t('scope.operationFailed'), e?.message || t('common.operationFailed'))
+  } finally {
+    isLoading.value = false
+  }
+}
+
+async function handleResumeAutoIngest() {
+  if (!selectedScope.value) return
+  isLoading.value = true
+  try {
+    const updated = await updateScope(selectedScope.value.id, { ingestMode: 'auto' })
+    scopes.value = scopes.value.map(s => s.id === updated.id ? updated : s)
+    selectedScope.value = updated
+    toastStore.success(t('scope.autoSuspendedResumed'))
   } catch (e: any) {
     toastStore.error(t('scope.operationFailed'), e?.message || t('common.operationFailed'))
   } finally {
@@ -307,6 +323,22 @@ function goToScope(scopeId: number) {
           </div>
         </div>
 
+        <div v-if="selectedScope.autoSuspended" class="scope-manage__suspend-banner">
+          <AlertTriangle :size="16" />
+          <div class="scope-manage__suspend-info">
+            <strong>{{ t('scope.autoSuspendedTitle') }}</strong>
+            <span>{{ selectedScope.autoSuspendedReason || t('scope.autoSuspendedNoReason') }}</span>
+          </div>
+          <button
+            v-if="selectedScope.type !== 'team' || canManage"
+            class="scope-manage__suspend-resume"
+            :disabled="isLoading"
+            @click="handleResumeAutoIngest"
+          >
+            {{ t('scope.autoSuspendedResume') }}
+          </button>
+        </div>
+
         <div class="scope-manage__members-header">
           <h3>{{ t('scope.memberManage') }}</h3>
           <button v-if="canManage" @click="showAddMemberDialog = true">
@@ -359,6 +391,20 @@ function goToScope(scopeId: number) {
       <div v-else-if="selectedScope && selectedScope.type === 'personal'" class="scope-manage__detail">
         <div class="scope-manage__detail-header">
           <h2>{{ selectedScope.name }}</h2>
+        </div>
+        <div v-if="selectedScope.autoSuspended" class="scope-manage__suspend-banner">
+          <AlertTriangle :size="16" />
+          <div class="scope-manage__suspend-info">
+            <strong>{{ t('scope.autoSuspendedTitle') }}</strong>
+            <span>{{ selectedScope.autoSuspendedReason || t('scope.autoSuspendedNoReason') }}</span>
+          </div>
+          <button
+            class="scope-manage__suspend-resume"
+            :disabled="isLoading"
+            @click="handleResumeAutoIngest"
+          >
+            {{ t('scope.autoSuspendedResume') }}
+          </button>
         </div>
         <p class="scope-manage__personal-note">{{ t('scope.personalNote') }}</p>
         <div class="scope-manage__card-footer">
@@ -466,6 +512,14 @@ function goToScope(scopeId: number) {
               <option value="confirm">{{ t('scope.approvalConfirmFull') }}</option>
               <option value="review">{{ t('scope.approvalReviewFull') }}</option>
             </select>
+          </div>
+          <div class="scope-manage__field">
+            <label>{{ t('scope.ingestModeLabel') }}</label>
+            <select v-model="editForm.ingestMode">
+              <option value="review">{{ t('scope.ingestModeReview') }}</option>
+              <option value="auto">{{ t('scope.ingestModeAuto') }}</option>
+            </select>
+            <p class="scope-manage__field-hint">{{ t('scope.ingestModeHint') }}</p>
           </div>
           <div class="scope-manage__dialog-actions">
             <button @click="editingScope = null">{{ t('scope.cancel') }}</button>
@@ -855,5 +909,47 @@ function goToScope(scopeId: number) {
   font-size: var(--font-body-sm);
   color: var(--text-secondary);
   line-height: 1.5;
+}
+
+.scope-manage__suspend-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  border: 1px solid var(--warning-light);
+  border-radius: var(--radius-md);
+  background: var(--warning-light);
+  color: var(--warning-strong);
+}
+
+.scope-manage__suspend-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  font-size: var(--font-body-sm);
+}
+
+.scope-manage__suspend-resume {
+  flex-shrink: 0;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--warning-strong);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--warning-strong);
+  font-size: var(--font-body-sm);
+  cursor: pointer;
+}
+
+.scope-manage__suspend-resume:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.scope-manage__field-hint {
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-caption);
+  color: var(--text-tertiary);
 }
 </style>

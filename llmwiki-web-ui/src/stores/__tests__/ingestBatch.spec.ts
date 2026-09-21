@@ -10,6 +10,8 @@ vi.mock('@/api/ingest', () => ({
   pauseBatch: vi.fn(),
   resumeBatch: vi.fn(),
   cancelBatch: vi.fn(),
+  cancelBatchItems: vi.fn(),
+  deprecateBatchOutputs: vi.fn(),
   executeIngest: vi.fn(),
   reanalyzeIngest: vi.fn(),
   resumeIngest: vi.fn(),

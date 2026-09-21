@@ -9,6 +9,8 @@ import AnalysisSummaryPanel from './AnalysisSummaryPanel.vue'
 const props = defineProps<{
   item: IngestBatchItemInfo
   busy?: boolean
+  selectable?: boolean
+  selected?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -16,6 +18,7 @@ const emit = defineEmits<{
   (e: 'reanalyze', executionId: number, guidance?: string): void
   (e: 'retry', executionId: number): void
   (e: 'view', executionId: number): void
+  (e: 'toggle-select', executionId: number): void
 }>()
 
 const { t } = useI18n()
@@ -61,6 +64,49 @@ const visibleErrorMessage = computed(() => {
   return props.item.errorMessage
 })
 
+const visibleErrorSummary = computed(() => {
+  if (visibleErrorMessage.value) return ''
+  return props.item.errorSummary || ''
+})
+
+const RISK_REASON_LABEL_KEYS: Array<{ prefix: string; labelKey: string }> = [
+  { prefix: 'schema_precheck_violation', labelKey: 'ingest.riskSchemaViolation' },
+  { prefix: 'conflict_count', labelKey: 'ingest.riskConflictCount' },
+  { prefix: 'low_completeness', labelKey: 'ingest.riskLowCompleteness' },
+  { prefix: 'high_update_ratio', labelKey: 'ingest.riskHighUpdateRatio' },
+  { prefix: 'schema_gap_hints', labelKey: 'ingest.riskSchemaGap' },
+  { prefix: 'parse_degraded', labelKey: 'ingest.riskParseDegraded' },
+]
+
+const riskLabels = computed(() => {
+  const decision = props.item.autoDecision
+  if (!decision) return []
+  const reasons = decision.reasons
+  if (!Array.isArray(reasons)) return []
+  const labels: string[] = []
+  reasons.forEach((reason) => {
+    if (typeof reason !== 'string') return
+    const matched = RISK_REASON_LABEL_KEYS.find(
+      ({ prefix }) => reason === prefix || reason.startsWith(`${prefix}:`),
+    )
+    if (matched) {
+      const label = t(matched.labelKey)
+      if (!labels.includes(label)) labels.push(label)
+    }
+  })
+  return labels
+})
+
+const autoApproved = computed(() => props.item.autoDecision?.autoApprove === true)
+
+const qualityBadge = computed(() => {
+  const critical = props.item.qualityCritical ?? 0
+  const warnings = props.item.qualityWarnings ?? 0
+  if (critical > 0) return { label: t('ingest.qualityCriticalBadge', [critical]), tone: 'error' }
+  if (warnings > 0) return { label: t('ingest.qualityWarningsBadge', [warnings]), tone: 'warning' }
+  return null
+})
+
 const displayName = computed(
   () => props.item.sourceName || t('ingest.materialFallback', [props.item.executionId]),
 )
@@ -91,11 +137,30 @@ function submitView() {
 <template>
   <article class="inbox-item" :class="[`inbox-item--${statusMeta.tone}`]">
     <header class="inbox-item__header">
+      <input
+        v-if="selectable"
+        class="inbox-item__select"
+        type="checkbox"
+        :checked="selected"
+        :disabled="busy"
+        :aria-label="t('ingest.inboxSelectItem')"
+        @change="emit('toggle-select', item.executionId)"
+      />
       <FileText :size="16" class="inbox-item__icon" />
       <div class="inbox-item__title">
         <span class="inbox-item__name" :title="displayName">{{ displayName }}</span>
         <span v-if="item.sourceFormat" class="inbox-item__format">{{ item.sourceFormat }}</span>
       </div>
+      <span v-if="autoApproved" class="inbox-item__flag inbox-item__flag--auto">
+        {{ t('ingest.autoApprovedBadge') }}
+      </span>
+      <span
+        v-if="qualityBadge"
+        class="inbox-item__flag"
+        :class="`inbox-item__flag--${qualityBadge.tone}`"
+      >
+        {{ qualityBadge.label }}
+      </span>
       <span class="inbox-item__badge">{{ statusMeta.label }}</span>
       <span v-if="item.totalTokens" class="inbox-item__tokens">
         {{ t('ingest.itemTokens', [item.totalTokens]) }}
@@ -111,7 +176,12 @@ function submitView() {
       </button>
     </header>
 
+    <div v-if="riskLabels.length" class="inbox-item__risks">
+      <span v-for="label in riskLabels" :key="label" class="inbox-item__risk">{{ label }}</span>
+    </div>
+
     <p v-if="visibleErrorMessage" class="inbox-item__error">{{ visibleErrorMessage }}</p>
+    <p v-else-if="visibleErrorSummary" class="inbox-item__error-summary">{{ visibleErrorSummary }}</p>
 
     <div v-if="isAwaiting" class="inbox-item__actions">
       <button
@@ -357,5 +427,53 @@ function submitView() {
 .inbox-item__analysis {
   border-top: 1px solid var(--border-subtle);
   padding-top: var(--space-2);
+}
+
+.inbox-item__select {
+  flex-shrink: 0;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.inbox-item__flag {
+  font-size: var(--font-caption);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  flex-shrink: 0;
+}
+
+.inbox-item__flag--auto {
+  background: var(--success-light);
+  color: var(--success-strong);
+}
+
+.inbox-item__flag--error {
+  background: var(--error-light);
+  color: var(--error-strong);
+}
+
+.inbox-item__flag--warning {
+  background: var(--warning-light);
+  color: var(--warning-strong);
+}
+
+.inbox-item__risks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.inbox-item__risk {
+  font-size: var(--font-caption);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--warning-light);
+  color: var(--warning-strong);
+}
+
+.inbox-item__error-summary {
+  margin: 0;
+  font-size: var(--font-body-sm);
+  color: var(--text-tertiary);
 }
 </style>

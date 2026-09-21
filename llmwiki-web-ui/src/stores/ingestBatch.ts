@@ -8,13 +8,15 @@ import {
   pauseBatch,
   resumeBatch,
   cancelBatch,
+  cancelBatchItems,
+  deprecateBatchOutputs,
   executeIngest,
   reanalyzeIngest,
   resumeIngest,
   type IngestBatchInfo,
   type IngestBatchItemInfo,
   type IngestBatchDetailInfo,
-  type IngestBatchCreateResponse,
+  type IngestBatchCreateInfo,
 } from '@/api/ingest'
 import { useAuthStore } from '@/stores/auth'
 
@@ -116,10 +118,12 @@ export const useIngestBatchStore = defineStore('ingestBatch', () => {
     await refreshCurrentBatch()
   }
 
-  async function createBatchAndStart(scopeId: number, sourceIds: number[], guidance?: string): Promise<IngestBatchCreateResponse> {
-    const response = await createIngestBatch(scopeId, sourceIds, guidance)
+  async function createBatchAndStart(scopeId: number, sourceIds: number[], guidance?: string, mode?: string, forceReingest?: boolean): Promise<IngestBatchCreateInfo> {
+    const response = await createIngestBatch(scopeId, sourceIds, guidance, mode, forceReingest)
     await refreshInbox()
-    await selectBatch(response.batchId)
+    if (response.batchId != null) {
+      await selectBatch(response.batchId)
+    }
     return response
   }
 
@@ -157,6 +161,18 @@ export const useIngestBatchStore = defineStore('ingestBatch', () => {
   async function cancel(batchId: number) {
     await cancelBatch(batchId)
     await refreshAll()
+  }
+
+  async function cancelItems(batchId: number, executionIds?: number[]): Promise<{ cancelled: number; skipped: number }> {
+    const result = await cancelBatchItems(batchId, executionIds)
+    await refreshAll()
+    return result
+  }
+
+  async function deprecateOutputs(batchId: number): Promise<{ deprecatedPages: number; skippedPages: number }> {
+    const result = await deprecateBatchOutputs(batchId)
+    await refreshAll()
+    return result
   }
 
   function handleVisibilityChange() {
@@ -208,6 +224,8 @@ export const useIngestBatchStore = defineStore('ingestBatch', () => {
     pause,
     resume,
     cancel,
+    cancelItems,
+    deprecateOutputs,
     startPolling,
     stopPolling,
   }

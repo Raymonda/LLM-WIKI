@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Inbox, RotateCcw } from 'lucide-vue-next'
+import { Inbox, RotateCcw, XCircle } from 'lucide-vue-next'
 import type { IngestBatchItemInfo } from '@/api/ingest'
 import { groupInboxItems, type InboxGroupKey } from '@/stores/ingestBatch'
 import InboxItemCard from './InboxItemCard.vue'
@@ -17,6 +17,7 @@ const emit = defineEmits<{
   (e: 'retry', executionId: number): void
   (e: 'retry-all'): void
   (e: 'view', executionId: number): void
+  (e: 'cancel-items', executionIds: number[]): void
 }>()
 
 const { t } = useI18n()
@@ -40,6 +41,56 @@ const groups = computed(() =>
       retryableCount: group.items.filter((item) => item.status === 'failed').length,
     })),
 )
+
+const selectedIds = ref<Set<number>>(new Set())
+
+const selectedCount = computed(() => selectedIds.value.size)
+
+watch(
+  () => props.items,
+  (items) => {
+    const awaitingIds = new Set(
+      items
+        .filter((item) => item.status === 'awaiting_confirmation' || item.status === 'awaiting_review')
+        .map((item) => item.executionId),
+    )
+    const next = new Set<number>()
+    selectedIds.value.forEach((id) => {
+      if (awaitingIds.has(id)) next.add(id)
+    })
+    selectedIds.value = next
+  },
+)
+
+function isGroupAllSelected(groupItems: IngestBatchItemInfo[]): boolean {
+  return groupItems.length > 0 && groupItems.every((item) => selectedIds.value.has(item.executionId))
+}
+
+function toggleGroupSelection(groupItems: IngestBatchItemInfo[]) {
+  const next = new Set(selectedIds.value)
+  if (isGroupAllSelected(groupItems)) {
+    groupItems.forEach((item) => next.delete(item.executionId))
+  } else {
+    groupItems.forEach((item) => next.add(item.executionId))
+  }
+  selectedIds.value = next
+}
+
+function onToggleSelect(executionId: number) {
+  const next = new Set(selectedIds.value)
+  if (next.has(executionId)) {
+    next.delete(executionId)
+  } else {
+    next.add(executionId)
+  }
+  selectedIds.value = next
+}
+
+function rejectSelected() {
+  if (selectedIds.value.size === 0) return
+  emit('cancel-items', Array.from(selectedIds.value))
+  selectedIds.value = new Set()
+}
 
 function onConfirm(executionId: number, guidance?: string) {
   emit('confirm', executionId, guidance)
@@ -81,6 +132,25 @@ function onView(executionId: number) {
           <RotateCcw :size="12" />
           {{ t('ingest.inboxRetryAll') }}
         </button>
+        <label v-if="group.key === 'awaiting'" class="review-inbox__select-all">
+          <input
+            type="checkbox"
+            :checked="isGroupAllSelected(group.items)"
+            :disabled="busy"
+            @change="toggleGroupSelection(group.items)"
+          />
+          {{ t('ingest.inboxSelectAll') }}
+        </label>
+        <button
+          v-if="group.key === 'awaiting' && selectedCount > 0"
+          class="review-inbox__group-action review-inbox__group-action--danger"
+          type="button"
+          :disabled="busy"
+          @click="rejectSelected"
+        >
+          <XCircle :size="12" />
+          {{ t('ingest.inboxRejectSelected', [selectedCount]) }}
+        </button>
       </div>
       <div class="review-inbox__group-items">
         <InboxItemCard
@@ -88,10 +158,13 @@ function onView(executionId: number) {
           :key="item.executionId"
           :item="item"
           :busy="busy"
+          :selectable="group.key === 'awaiting'"
+          :selected="selectedIds.has(item.executionId)"
           @confirm="onConfirm"
           @reanalyze="onReanalyze"
           @retry="onRetry"
           @view="onView"
+          @toggle-select="onToggleSelect"
         />
       </div>
     </div>
@@ -176,6 +249,24 @@ function onView(executionId: number) {
 .review-inbox__group-action:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.review-inbox__group-action--danger {
+  color: var(--error-strong);
+}
+
+.review-inbox__select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-caption);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.review-inbox__select-all input {
+  cursor: pointer;
 }
 
 .review-inbox__group-items {

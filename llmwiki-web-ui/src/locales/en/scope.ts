@@ -131,4 +131,12 @@ export default {
   requestApproved: 'Request approved',
   requestRejected: 'Request rejected',
   operationFailed: 'Operation failed',
+  ingestModeLabel: 'Ingest confirm mode',
+  ingestModeReview: 'Review each item (REVIEW)',
+  ingestModeAuto: 'Auto-confirm low risk (AUTO)',
+  ingestModeHint: 'In auto mode, low-risk items are written directly; exceptions go to the review inbox',
+  autoSuspendedTitle: 'Auto-confirm suspended',
+  autoSuspendedNoReason: 'Suspended automatically due to high batch failure rate. Investigate before resuming.',
+  autoSuspendedResume: 'Resume auto-confirm',
+  autoSuspendedResumed: 'Auto-confirm mode resumed',
 }

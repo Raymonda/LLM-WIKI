@@ -327,6 +327,10 @@ export function mergePages(pageIds: number[], targetTitle?: string, instruction?
   return api.post('/wiki/merge', { pageIds, targetTitle, instruction })
 }
 
+export function reportPageIssue(pageId: number, description: string): Promise<void> {
+  return api.post(`/wiki/page/${pageId}/report-issue`, { description })
+}
+
 // ===== 编辑器 API (草稿 / 编辑会话 / AI 编辑 / 保存) =====
 
 export interface WikiPageDraftInfo {

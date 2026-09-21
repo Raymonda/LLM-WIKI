@@ -211,4 +211,9 @@ export default {
   mermaidSyntaxError: '语法错误',
   mermaidRenderFailed: '📊 图表渲染失败：',
   viewSource: '查看源码',
+  reportIssue: '报告问题',
+  reportIssueHint: '描述你发现的问题，将纳入该页面的健康检查记录',
+  reportIssuePlaceholder: '例如：某段内容与来源不符、数据过时……',
+  reportIssueSuccess: '已记录，将纳入健康检查',
+  reportIssueFailed: '提交失败',
 }

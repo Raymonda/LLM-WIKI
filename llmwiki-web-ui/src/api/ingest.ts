@@ -98,6 +98,10 @@ export interface IngestBatchItemInfo {
   startedAt: string | null
   completedAt: string | null
   phase1Completed: boolean | null
+  autoDecision?: Record<string, unknown> | null
+  qualityCritical?: number | null
+  qualityWarnings?: number | null
+  errorSummary?: string | null
 }
 
 export interface IngestBatchInfo {
@@ -127,16 +131,32 @@ export interface IngestBatchDetailInfo {
   total: number
   page: number
   size: number
+  mode?: string
+  etaSeconds?: number | null
+  totalTokensSum?: number | null
+  autoCompleted?: number
+  manualPending?: number
+  failedCount?: number
+  cancelledCount?: number
 }
 
-export interface IngestBatchCreateResponse {
-  batchId: number
-  executionIds: number[]
+export interface IngestBatchSkippedItem {
+  sourceId: number | null
+  sourceName: string | null
+  duplicateOfSourceId: number | null
+  reason: string | null
+}
+
+export interface IngestBatchCreateInfo {
+  batchId: number | null
+  acceptedCount: number
+  skippedDuplicateCount: number
+  skipped: IngestBatchSkippedItem[]
   warnings: string[]
 }
 
-export function createIngestBatch(scopeId: number, sourceIds: number[], guidance?: string): Promise<IngestBatchCreateResponse> {
-  return api.post('/ingest/batch', { scopeId, sourceIds, guidance })
+export function createIngestBatch(scopeId: number, sourceIds: number[], guidance?: string, mode?: string, forceReingest?: boolean): Promise<IngestBatchCreateInfo> {
+  return api.post('/ingest/batch', { scopeId, sourceIds, guidance, mode, forceReingest })
 }
 
 export function fetchBatchInbox(scopeId: number): Promise<IngestBatchInfo[]> {
@@ -161,4 +181,12 @@ export function resumeBatch(batchId: number): Promise<void> {
 
 export function cancelBatch(batchId: number): Promise<void> {
   return api.post(`/ingest/batch/${batchId}/cancel`)
+}
+
+export function cancelBatchItems(batchId: number, executionIds?: number[]): Promise<{ cancelled: number; skipped: number }> {
+  return api.post(`/ingest/batch/${batchId}/cancel-items`, { executionIds: executionIds ?? null })
+}
+
+export function deprecateBatchOutputs(batchId: number): Promise<{ deprecatedPages: number; skippedPages: number }> {
+  return api.post(`/ingest/batch/${batchId}/deprecate-outputs`)
 }

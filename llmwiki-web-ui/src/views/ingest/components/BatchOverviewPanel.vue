@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { CheckCheck, Layers, Pause, Play, XCircle } from 'lucide-vue-next'
-import type { IngestBatchInfo } from '@/api/ingest'
+import { Archive, CheckCheck, Layers, Pause, Play, XCircle } from 'lucide-vue-next'
+import type { IngestBatchDetailInfo, IngestBatchInfo } from '@/api/ingest'
 
 const props = defineProps<{
   batch: IngestBatchInfo | null
+  detail?: IngestBatchDetailInfo | null
   busy?: boolean
 }>()
 
@@ -14,6 +15,7 @@ const emit = defineEmits<{
   (e: 'pause'): void
   (e: 'resume'): void
   (e: 'cancel'): void
+  (e: 'deprecate-outputs'): void
 }>()
 
 const { t } = useI18n()
@@ -55,6 +57,32 @@ const canConfirmAll = computed(() => (props.batch?.awaitingCount ?? 0) > 0)
 const canPause = computed(() => props.batch?.status === 'active')
 const canResume = computed(() => props.batch?.status === 'paused')
 const canCancel = computed(() => props.batch?.status === 'active' || props.batch?.status === 'paused')
+const canDeprecate = computed(() => (props.batch?.completedCount ?? 0) > 0)
+
+const modeLabel = computed(() => {
+  const mode = props.detail?.mode
+  if (mode === 'auto') return t('ingest.batchModeAuto')
+  if (mode === 'review') return t('ingest.batchModeReview')
+  return null
+})
+
+const etaLabel = computed(() => {
+  const seconds = props.detail?.etaSeconds
+  if (seconds == null || seconds <= 0) return null
+  return t('ingest.batchEta', [Math.max(1, Math.ceil(seconds / 60))])
+})
+
+const tokensLabel = computed(() => {
+  const sum = props.detail?.totalTokensSum
+  if (sum == null || sum <= 0) return null
+  return t('ingest.batchTokensSum', [sum.toLocaleString()])
+})
+
+const autoManualLabel = computed(() => {
+  const detail = props.detail
+  if (!detail || detail.mode !== 'auto') return null
+  return t('ingest.batchAutoManual', [detail.autoCompleted ?? 0, detail.manualPending ?? 0])
+})
 
 function requestConfirmAll() {
   emit('confirm-all')
@@ -71,6 +99,10 @@ function requestResume() {
 function requestCancel() {
   emit('cancel')
 }
+
+function requestDeprecateOutputs() {
+  emit('deprecate-outputs')
+}
 </script>
 
 <template>
@@ -80,6 +112,9 @@ function requestCancel() {
       <h2 class="batch-overview__title">{{ t('ingest.batchOverviewTitle') }}</h2>
       <span class="batch-overview__status" :class="`batch-overview__status--${batch.status}`">
         {{ statusLabel }}
+      </span>
+      <span v-if="modeLabel" class="batch-overview__mode" :class="`batch-overview__mode--${detail?.mode}`">
+        {{ modeLabel }}
       </span>
       <span class="batch-overview__progress-text">
         {{ t('ingest.batchProgress', [batch.completedCount, batch.totalCount]) }}
@@ -111,6 +146,12 @@ function requestCancel() {
       <span class="batch-overview__guidance-label">{{ t('ingest.batchGuidanceLabel') }}</span>
       {{ batch.guidance }}
     </p>
+
+    <div v-if="etaLabel || tokensLabel || autoManualLabel" class="batch-overview__meta">
+      <span v-if="etaLabel">{{ etaLabel }}</span>
+      <span v-if="tokensLabel">{{ tokensLabel }}</span>
+      <span v-if="autoManualLabel">{{ autoManualLabel }}</span>
+    </div>
 
     <div class="batch-overview__actions">
       <button
@@ -151,6 +192,16 @@ function requestCancel() {
       >
         <XCircle :size="14" />
         {{ t('ingest.batchCancelBatch') }}
+      </button>
+      <button
+        v-if="canDeprecate"
+        class="batch-overview__btn batch-overview__btn--danger"
+        type="button"
+        :disabled="busy"
+        @click="requestDeprecateOutputs"
+      >
+        <Archive :size="14" />
+        {{ t('ingest.batchDeprecateOutputs') }}
       </button>
     </div>
   </section>
@@ -207,6 +258,28 @@ function requestCancel() {
 .batch-overview__status--cancelled {
   background: var(--error-light);
   color: var(--error-strong);
+}
+
+.batch-overview__mode {
+  font-size: var(--font-caption);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.batch-overview__mode--auto {
+  background: var(--success-light);
+  color: var(--success-strong);
+}
+
+.batch-overview__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  font-size: var(--font-caption);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 
 .batch-overview__progress-text {

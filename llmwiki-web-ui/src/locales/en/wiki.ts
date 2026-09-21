@@ -211,4 +211,9 @@ export default {
   mermaidSyntaxError: 'Syntax error',
   mermaidRenderFailed: '📊 Diagram render failed: ',
   viewSource: 'View source',
+  reportIssue: 'Report issue',
+  reportIssueHint: 'Describe the issue you found; it will be recorded in this page\'s health checks',
+  reportIssuePlaceholder: 'e.g. a paragraph does not match its source, data is outdated…',
+  reportIssueSuccess: 'Recorded. It will be included in health checks',
+  reportIssueFailed: 'Submit failed',
 }

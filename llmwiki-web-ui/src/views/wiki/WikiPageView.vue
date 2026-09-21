@@ -5,9 +5,9 @@ import { useRoute, useRouter } from 'vue-router'
 import HealthIndicator from '@/components/wiki/HealthIndicator.vue'
 import WikiPageRenderer from '@/components/wiki/WikiPageRenderer.vue'
 import LocalGraph from '@/components/wiki/LocalGraph.vue'
-import { getPage, getPageByPath, getHealth, updateVisibility, deprecatePage, undeprecatePage, softDeletePage, getDeleteImpact, searchPages, mergePages, type WikiPageInfo, type HealthInfo, type DeleteImpactInfo, type SearchResultInfo } from '@/api/wiki'
+import { getPage, getPageByPath, getHealth, updateVisibility, deprecatePage, undeprecatePage, softDeletePage, getDeleteImpact, searchPages, mergePages, reportPageIssue, type WikiPageInfo, type HealthInfo, type DeleteImpactInfo, type SearchResultInfo } from '@/api/wiki'
 import { getSourceContent, getSourcePreviewUrl, getSourceDownloadUrl, type SourceContentInfo } from '@/api/source'
-import { MessageCircle, AlertTriangle, Eye, EyeOff, Award, FileWarning, ArrowUp, Clock, ArrowRight, Stethoscope, Loader2, AlertCircle, MoreVertical, Tag, Trash2, Clock as ClockIcon, Ban, Merge as MergeIcon, Search, X, AlertOctagon } from 'lucide-vue-next'
+import { MessageCircle, AlertTriangle, Eye, EyeOff, Award, FileWarning, ArrowUp, Clock, ArrowRight, Stethoscope, Loader2, AlertCircle, MoreVertical, Tag, Trash2, Clock as ClockIcon, Ban, Merge as MergeIcon, Search, X, AlertOctagon, Flag } from 'lucide-vue-next'
 import { useTaskProgressStore } from '@/stores/taskProgress'
 import { useToastStore } from '@/stores/toast'
 import { useAuthStore } from '@/stores/auth'
@@ -193,6 +193,9 @@ const showActionsMenu = ref(false)
 const showDeprecateDialog = ref(false)
 const deprecateReason = ref('')
 const deprecateSubmitting = ref(false)
+const showReportDialog = ref(false)
+const reportDescription = ref('')
+const reportSubmitting = ref(false)
 const showDeleteConfirm = ref(false)
 const deleteImpact = ref<DeleteImpactInfo | null>(null)
 const deleteLoading = ref(false)
@@ -338,6 +341,26 @@ async function handleUndeprecate() {
     await loadPage()
   } catch (e) {
     console.error('Undeprecate failed:', e)
+  }
+}
+
+function openReportDialog() {
+  showActionsMenu.value = false
+  reportDescription.value = ''
+  showReportDialog.value = true
+}
+
+async function submitReportIssue() {
+  if (!page.value || !reportDescription.value.trim()) return
+  reportSubmitting.value = true
+  try {
+    await reportPageIssue(page.value.id, reportDescription.value.trim())
+    showReportDialog.value = false
+    toastStore.success(t('wiki.reportIssueSuccess'))
+  } catch (e: any) {
+    toastStore.error(t('wiki.reportIssueFailed'), e?.message || '')
+  } finally {
+    reportSubmitting.value = false
   }
 }
 
@@ -556,6 +579,10 @@ function closePreview() {
                   <MergeIcon :size="14" />
                   {{ t('wiki.mergeToOther') }}
                 </button>
+                <button class="wiki-page__dropdown-item" @click="openReportDialog">
+                  <Flag :size="14" />
+                  {{ t('wiki.reportIssue') }}
+                </button>
                 <button class="wiki-page__dropdown-item wiki-page__dropdown-item--danger" @click="openDeleteConfirm">
                   <Trash2 :size="14" />
                   {{ t('wiki.deletePage') }}
@@ -664,6 +691,24 @@ function closePreview() {
           <button class="wiki-page__modify-cancel" @click="showDeprecateDialog = false" :disabled="deprecateSubmitting">{{ t('wiki.cancel') }}</button>
           <button class="wiki-page__modify-submit" :disabled="deprecateSubmitting || !deprecateReason.trim()" @click="submitDeprecate">
             {{ deprecateSubmitting ? t('wiki.submitting') : t('wiki.confirmMark') }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="showReportDialog" class="wiki-page__modify-dialog">
+        <h3 class="wiki-page__modify-title">{{ t('wiki.reportIssue') }}</h3>
+        <p class="wiki-page__modify-hint">{{ t('wiki.reportIssueHint') }}</p>
+        <textarea
+          v-model="reportDescription"
+          class="wiki-page__modify-input"
+          :placeholder="t('wiki.reportIssuePlaceholder')"
+          rows="3"
+          :disabled="reportSubmitting"
+        ></textarea>
+        <div class="wiki-page__modify-actions">
+          <button class="wiki-page__modify-cancel" @click="showReportDialog = false" :disabled="reportSubmitting">{{ t('wiki.cancel') }}</button>
+          <button class="wiki-page__modify-submit" :disabled="reportSubmitting || !reportDescription.trim()" @click="submitReportIssue">
+            {{ reportSubmitting ? t('wiki.submitting') : t('wiki.reportIssue') }}
           </button>
         </div>
       </div>
