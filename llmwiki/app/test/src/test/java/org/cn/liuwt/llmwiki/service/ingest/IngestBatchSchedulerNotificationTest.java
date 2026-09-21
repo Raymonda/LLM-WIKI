@@ -6,9 +6,13 @@ import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.IngestBatchDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.NotificationDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageSourceDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.IngestBatchMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.NotificationMapper;
+import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageSourceMapper;
+import org.cn.liuwt.llmwiki.domain.service.harness.eventlog.ExecutionEventLogService;
+import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestBatchSettledEvent;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
 import org.cn.liuwt.llmwiki.domain.service.system.NotificationService;
 import org.cn.liuwt.llmwiki.service.harness.mq.IngestDispatcher;
@@ -19,16 +23,20 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -41,6 +49,9 @@ class IngestBatchSchedulerNotificationTest {
     @Mock private IngestDispatcher dispatcher;
     @Mock private IngestService ingestService;
     @Mock private ExecutionTracker executionTracker;
+    @Mock private ApplicationEventPublisher applicationEventPublisher;
+    @Mock private WikiPageSourceMapper wikiPageSourceMapper;
+    @Mock private ExecutionEventLogService executionEventLogService;
     @InjectMocks private IngestBatchScheduler scheduler;
 
     @BeforeAll
@@ -49,6 +60,7 @@ class IngestBatchSchedulerNotificationTest {
         TableInfoHelper.initTableInfo(assistant, ExecutionDO.class);
         TableInfoHelper.initTableInfo(assistant, NotificationDO.class);
         TableInfoHelper.initTableInfo(assistant, IngestBatchDO.class);
+        TableInfoHelper.initTableInfo(assistant, WikiPageSourceDO.class);
     }
 
     @Test
@@ -222,6 +234,79 @@ class IngestBatchSchedulerNotificationTest {
         scheduler.handleBatchSettlement(cancelled);
 
         verify(notificationService).createNotification(eq(7L), eq("ingest_batch_analyzed"), any(), eq("本批 1 份待审阅、1 份失败、1 份取消"), eq(10L), isNull(), isNull(), eq(9L));
+    }
+
+    @Test
+    void shouldPublishBatchSettledEventWithPageIdsWhenAllTerminal() {
+        IngestBatchDO batch = newBatch(3);
+        when(batchMapper.selectById(9L)).thenReturn(batch);
+        ExecutionDO completed1 = item(1L, "completed", 9L);
+        completed1.setSourceId(101L);
+        ExecutionDO completed2 = item(2L, "completed", 9L);
+        completed2.setSourceId(102L);
+        ExecutionDO failed = item(3L, "failed", 9L);
+        when(executionMapper.selectList(any())).thenReturn(List.of(completed1, completed2, failed));
+        when(notificationMapper.selectCount(any())).thenReturn(0L);
+        WikiPageSourceDO link1 = new WikiPageSourceDO();
+        link1.setPageId(201L);
+        WikiPageSourceDO link2 = new WikiPageSourceDO();
+        link2.setPageId(202L);
+        when(wikiPageSourceMapper.selectList(any())).thenReturn(List.of(link1, link2));
+
+        scheduler.handleBatchSettlement(failed);
+
+        ArgumentCaptor<IngestBatchSettledEvent> eventCaptor = ArgumentCaptor.forClass(IngestBatchSettledEvent.class);
+        verify(applicationEventPublisher).publishEvent(eventCaptor.capture());
+        IngestBatchSettledEvent event = eventCaptor.getValue();
+        assertThat(event.getBatchId()).isEqualTo(9L);
+        assertThat(event.getScopeId()).isEqualTo(10L);
+        assertThat(event.getPageIds()).containsExactlyInAnyOrder(201L, 202L);
+    }
+
+    @Test
+    void shouldNotPublishBatchSettledEventWhenNoCompletedItems() {
+        IngestBatchDO batch = newBatch(1);
+        when(batchMapper.selectById(9L)).thenReturn(batch);
+        ExecutionDO failed = item(1L, "failed", 9L);
+        when(executionMapper.selectList(any())).thenReturn(List.of(failed));
+        when(notificationMapper.selectCount(any())).thenReturn(0L);
+
+        scheduler.handleBatchSettlement(failed);
+
+        verifyNoInteractions(applicationEventPublisher);
+    }
+
+    @Test
+    void shouldNotifyReviewPendingWhenSettledWithAwaitingItems() {
+        IngestBatchDO batch = newBatch(2);
+        when(batchMapper.selectById(9L)).thenReturn(batch);
+        ExecutionDO awaiting = item(1L, "awaiting_review", 9L);
+        ExecutionDO completed = item(2L, "completed", 9L);
+        when(executionMapper.selectList(any())).thenReturn(List.of(awaiting, completed));
+        when(notificationMapper.selectCount(any())).thenReturn(0L);
+
+        scheduler.handleBatchSettlement(completed);
+
+        verify(notificationService).createNotification(eq(7L), eq("ingest_batch_review_pending"), eq("批次待审阅"),
+            contains("1 篇已完成分析待你审阅"), eq(10L), isNull(), isNull(), eq(9L));
+    }
+
+    @Test
+    void shouldBreakDownAutoCompletedInCompletedNotification() {
+        IngestBatchDO batch = newBatch(2);
+        when(batchMapper.selectById(9L)).thenReturn(batch);
+        ExecutionDO auto = item(1L, "completed", 9L);
+        ExecutionDO manual = item(2L, "completed", 9L);
+        when(executionMapper.selectList(any())).thenReturn(List.of(auto, manual));
+        when(notificationMapper.selectCount(any())).thenReturn(0L);
+        when(executionEventLogService.loadLatestTurnEndPayloads(anyCollection())).thenReturn(Map.of(
+            1L, Map.of("autoDecision", Map.of("autoApprove", true)),
+            2L, Map.of()));
+
+        scheduler.handleBatchSettlement(manual);
+
+        verify(notificationService).createNotification(eq(7L), eq("ingest_batch_completed"), any(),
+            eq("本批 2 份已结束：1 自动完成，1 确认完成，0 失败，0 取消"), eq(10L), isNull(), isNull(), eq(9L));
     }
 
     private IngestBatchDO newBatch(int totalCount) {

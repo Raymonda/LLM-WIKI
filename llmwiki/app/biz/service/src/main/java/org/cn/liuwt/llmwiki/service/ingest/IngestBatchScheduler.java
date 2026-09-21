@@ -5,12 +5,16 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.IngestBatchDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.NotificationDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageSourceDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.IngestBatchMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.NotificationMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ScopeMapper;
+import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageSourceMapper;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
+import org.cn.liuwt.llmwiki.domain.service.harness.eventlog.ExecutionEventLogService;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestAutoConfirmedEvent;
+import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestBatchSettledEvent;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionStatusEvent;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
@@ -22,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -30,6 +35,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
@@ -72,6 +79,15 @@ public class IngestBatchScheduler {
 
     @Autowired
     private TransactionTemplate transactionTemplate;
+
+    @Autowired
+    private WikiPageSourceMapper wikiPageSourceMapper;
+
+    @Autowired
+    private ExecutionEventLogService executionEventLogService;
+
+    @Autowired
+    private ApplicationEventPublisher applicationEventPublisher;
 
     @Value("${llmwiki.ingest.batch.analyze-concurrency:2}")
     private int analyzeConcurrency = 2;
@@ -353,14 +369,78 @@ public class IngestBatchScheduler {
                 notifyOnce(batch, "ingest_batch_analyzed", "分析完成", detail);
             }
         }
+        boolean noActive = items.stream().noneMatch(i ->
+            "pending".equals(i.getStatus()) || "running".equals(i.getStatus()) || "confirmed".equals(i.getStatus()));
+        if (noActive && awaiting > 0 && !"completed".equals(batch.getStatus())) {
+            notifyOnce(batch, "ingest_batch_review_pending", "批次待审阅",
+                awaiting + " 篇已完成分析待你审阅，" + completed + " 篇已自动完成");
+        }
         boolean allTerminal = items.stream().allMatch(i -> TERMINAL_EXECUTION_STATUSES.contains(i.getStatus()));
         if (allTerminal && !"completed".equals(batch.getStatus()) && !"cancelled".equals(batch.getStatus())) {
             batch.setStatus("completed");
             batch.setCompletedAt(LocalDateTime.now());
             batchMapper.updateById(batch);
+            publishBatchSettled(batch, items);
+            long autoCompleted;
+            try {
+                autoCompleted = countAutoCompleted(items);
+            } catch (Exception e) {
+                log.warn("Auto-completed stats failed, fallback to 0: batchId={}", batch.getId(), e);
+                autoCompleted = 0;
+            }
             notifyOnce(batch, "ingest_batch_completed", "处理完成",
-                "本批 " + batch.getTotalCount() + " 份已全部结束（" + completed + " 成功 / " + failed + " 失败 / " + cancelled + " 取消）");
+                "本批 " + batch.getTotalCount() + " 份已结束：" + autoCompleted + " 自动完成，"
+                    + (completed - autoCompleted) + " 确认完成，" + failed + " 失败，" + cancelled + " 取消");
         }
+    }
+
+    private void publishBatchSettled(IngestBatchDO batch, List<ExecutionDO> items) {
+        try {
+            List<Long> sourceIds = items.stream()
+                .filter(i -> "completed".equals(i.getStatus()))
+                .map(ExecutionDO::getSourceId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+            if (sourceIds.isEmpty()) {
+                return;
+            }
+            List<Long> pageIds = wikiPageSourceMapper.selectList(new LambdaQueryWrapper<WikiPageSourceDO>()
+                    .eq(WikiPageSourceDO::getScopeId, batch.getScopeId())
+                    .in(WikiPageSourceDO::getSourceId, sourceIds))
+                .stream()
+                .map(WikiPageSourceDO::getPageId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+            if (pageIds.isEmpty()) {
+                return;
+            }
+            applicationEventPublisher.publishEvent(
+                new IngestBatchSettledEvent(this, batch.getId(), batch.getScopeId(), pageIds));
+        } catch (Exception e) {
+            log.warn("Failed to publish batch settled event: batchId={}", batch.getId(), e);
+        }
+    }
+
+    private long countAutoCompleted(List<ExecutionDO> items) {
+        List<Long> completedIds = items.stream()
+            .filter(i -> "completed".equals(i.getStatus()))
+            .map(ExecutionDO::getId)
+            .toList();
+        if (completedIds.isEmpty()) {
+            return 0;
+        }
+        Map<Long, Map<String, Object>> payloads = executionEventLogService.loadLatestTurnEndPayloads(completedIds);
+        return completedIds.stream().filter(id -> isAutoApproved(payloads.get(id))).count();
+    }
+
+    private static boolean isAutoApproved(Map<String, Object> turnEndPayload) {
+        if (turnEndPayload == null) {
+            return false;
+        }
+        Object autoDecision = turnEndPayload.get("autoDecision");
+        return autoDecision instanceof Map<?, ?> map && Boolean.TRUE.equals(map.get("autoApprove"));
     }
 
     private List<ExecutionDO> listBatchItems(Long batchId, Long scopeId) {

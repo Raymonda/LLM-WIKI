@@ -13,7 +13,10 @@ import org.springframework.stereotype.Component;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Component
 public class CompilationQualityScanner {
@@ -52,15 +55,11 @@ public class CompilationQualityScanner {
                              List<CitationRate> lowCitationPages) {}
 
     public ScanReport scan(Long scopeId) {
-        List<WikiPageDO> pages = wikiPageMapper.selectList(
-            new LambdaQueryWrapper<WikiPageDO>()
-                .eq(WikiPageDO::getScopeId, scopeId)
-                .isNotNull(WikiPageDO::getFilePath)
-                .notIn(WikiPageDO::getVisibility, List.of("private"))
-        ).stream()
-            .filter(p -> p.getLifecycleStatus() == null || "ACTIVE".equals(p.getLifecycleStatus()))
-            .limit(SCAN_MAX_PAGES)
-            .toList();
+        return scan(scopeId, null);
+    }
+
+    public ScanReport scan(Long scopeId, Collection<Long> pageIds) {
+        List<WikiPageDO> pages = loadPages(scopeId, pageIds);
 
         List<PageDefects> defective = new ArrayList<>();
         List<SourceCoverage> lowCoverage = new ArrayList<>();
@@ -103,16 +102,44 @@ public class CompilationQualityScanner {
             }
         }
 
-        List<DuplicatePair> duplicates = contentDuplicateDetector.detectAll(scopeId).stream()
-            .map(pair -> new DuplicatePair(pair.pageA().getId(), pair.pageA().getFilePath(),
-                pair.pageB().getId(), pair.pageB().getFilePath(), pair.similarity()))
-            .toList();
+        List<DuplicatePair> duplicates;
+        if (pageIds == null) {
+            duplicates = contentDuplicateDetector.detectAll(scopeId).stream()
+                .map(pair -> new DuplicatePair(pair.pageA().getId(), pair.pageA().getFilePath(),
+                    pair.pageB().getId(), pair.pageB().getFilePath(), pair.similarity()))
+                .toList();
+        } else if (pages.isEmpty()) {
+            duplicates = List.of();
+        } else {
+            Set<Long> focusPageIds = pages.stream().map(WikiPageDO::getId).collect(Collectors.toSet());
+            duplicates = contentDuplicateDetector.detectForPages(scopeId, focusPageIds).stream()
+                .map(pair -> new DuplicatePair(pair.pageA().getId(), pair.pageA().getFilePath(),
+                    pair.pageB().getId(), pair.pageB().getFilePath(), pair.similarity()))
+                .toList();
+        }
 
         ScanReport report = new ScanReport(scopeId, LocalDateTime.now(), pages.size(),
             defective, lowCoverage, duplicates, lowCitation);
         log.info("CompilationQualityScanner: scopeId={} pages={} defective={} lowCoverage={} duplicates={} lowCitation={}",
             scopeId, pages.size(), defective.size(), lowCoverage.size(), duplicates.size(), lowCitation.size());
         return report;
+    }
+
+    private List<WikiPageDO> loadPages(Long scopeId, Collection<Long> pageIds) {
+        LambdaQueryWrapper<WikiPageDO> wrapper = new LambdaQueryWrapper<WikiPageDO>()
+            .eq(WikiPageDO::getScopeId, scopeId)
+            .isNotNull(WikiPageDO::getFilePath)
+            .notIn(WikiPageDO::getVisibility, List.of("private"));
+        if (pageIds != null) {
+            if (pageIds.isEmpty()) {
+                return List.of();
+            }
+            wrapper.in(WikiPageDO::getId, pageIds);
+        }
+        return wikiPageMapper.selectList(wrapper).stream()
+            .filter(p -> p.getLifecycleStatus() == null || "ACTIVE".equals(p.getLifecycleStatus()))
+            .limit(SCAN_MAX_PAGES)
+            .toList();
     }
 
     private String readContent(String scopeIdStr, WikiPageDO page) {
