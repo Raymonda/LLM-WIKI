@@ -543,6 +543,38 @@ public class IngestPrompts {
             """ + newSourceMaterial;
     }
 
+    public String batchMergeEntityClaims() {
+        return PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT + "\n\n" + """
+            你是实体页的增量编译器。用户消息给出一个 JSON 数组，每个元素描述一个待更新的实体页：
+            - pageIndex: 页面序号（从 0 开始）
+            - title: 页面标题（实体名）
+            - existingEntries: 【现有条目清单】（编号 [n]）
+            - material: 【新来源材料】
+
+            请逐页判断新来源材料中有哪些事实应进入该实体页，并为每一页输出候选条目。
+
+            """ + PromptTemplate.JSON_OUTPUT_CONSTRAINT + """
+            输出严格 JSON 数组，必须覆盖输入中的每个 pageIndex，每个元素包含：
+            - pageIndex: 与输入对应的页面序号
+            - candidates: 该页的候选条目数组；每条包含：
+              * section: 目标章节名（引用现有条目时给出其所属章节；relation 为 new 时给出应归入或新建的章节）
+              * claim: 陈述内容（忠实于来源原文，保持原始表述粒度，不推断、不合并、不裁决）
+              * source: 来源名称（用于「（来源：<来源名称>）」标注，必填）
+              * quote: 来源原文引用（可选，规则条款/定义/量化指标建议提供）
+              * relation: 关系类型，取值必须是以下之一：
+                - new：新来源陈述了现有条目未覆盖的事实
+                - duplicate_of:<n>：与该页第 n 条现有条目实质相同（将为其追加来源标注）
+                - conflict_with:<n>：与该页第 n 条现有条目冲突（两条将并列保留，不做裁决）
+            - 若某页无任何新事实可补充，该页 candidates 输出空数组 []
+
+            要求：
+            - 只提取新来源材料中明确陈述的、与该页实体直接相关的事实；与页面实体无关的事实不得写入该页
+            - 来源未陈述的内容不得输出；不确定的内容不输出
+            - relation 为 duplicate_of/conflict_with 时，<n> 必须是该页【现有条目清单】中真实存在的编号
+            - 严禁改写既有陈述、严禁选择"更可信"版本；冲突一律用 conflict_with 标注
+            """;
+    }
+
     public String referenceSummary() {
         return "你是一个知识编译助手。根据提供的章节原文，生成结构化参考摘要。\n"
             + "输出格式（严格遵循）：\n"

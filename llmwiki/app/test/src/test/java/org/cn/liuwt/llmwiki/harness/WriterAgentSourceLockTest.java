@@ -53,10 +53,10 @@ class WriterAgentSourceLockTest {
             java.lang.reflect.Method m = WriterAgent.class.getDeclaredMethod("updateRelatedPage",
                 Long.class, Long.class, String.class, String.class, String.class,
                 String.class, String.class, String.class, String.class,
-                Map.class, List.class, IngestContext.class);
+                Map.class, List.class, IngestContext.class, WriterAgent.PrefetchedClaims.class);
             m.setAccessible(true);
             return (WikiPageDO) m.invoke(agent, 1L, 2L, "1", affectedPath, "更新",
-                "新来源内容", "分析结果", "{}", null, new HashMap<String, String>(), List.of(), null);
+                "新来源内容", "分析结果", "{}", null, new HashMap<String, String>(), List.of(), null, null);
         } catch (Exception e) {
             throw new IllegalStateException("updateRelatedPage failed", e);
         }

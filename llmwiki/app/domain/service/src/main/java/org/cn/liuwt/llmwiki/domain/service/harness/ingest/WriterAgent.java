@@ -134,6 +134,9 @@ public class WriterAgent {
     @Value("${llmwiki.ingest.index-sync.mode:incremental}")
     private String indexSyncMode = "incremental";
 
+    @Value("${llmwiki.ingest.index-batch-size:5}")
+    private int indexBatchSize = 5;
+
     private final ThreadPoolExecutor writerExecutor = new ThreadPoolExecutor(
         6, 16, 60L, TimeUnit.SECONDS,
         new LinkedBlockingQueue<>(200),
@@ -324,7 +327,7 @@ public class WriterAgent {
             }
             List<Map<String, String>> affectedPages = mergeAffectedPagesWithSourceRelations(
                 parseAffectedPages(metadataJson), sourceRelatedPaths);
-            List<CompletableFuture<Map.Entry<String, WikiPageDO>>> relatedFutures = new ArrayList<>();
+            List<RelatedPrefetchRequest> relatedRequests = new ArrayList<>();
             for (Map<String, String> affected : affectedPages) {
                 String affectedPath = affected.get("path");
                 String action = affected.get("action");
@@ -334,14 +337,21 @@ public class WriterAgent {
                     continue;
                 }
                 if (!"更新".equals(action) && !"补充".equals(action)) continue;
-                String relatedPlan = buildRelatedSubPlan(subPlans, affectedPath, writingPlanJson);
                 String relatedSource = filterSourceContentForRelated(sourceContent, affectedPath, maxRelatedChars);
+                relatedRequests.add(new RelatedPrefetchRequest(affectedPath, action, relatedSource));
+            }
+            Map<String, PrefetchedClaims> prefetchedClaims = batchPrefetchRelatedClaims(scopeId, scopeIdStr, relatedRequests, analysisResult, metadataJson, context);
+            List<CompletableFuture<Map.Entry<String, WikiPageDO>>> relatedFutures = new ArrayList<>();
+            for (RelatedPrefetchRequest req : relatedRequests) {
+                String affectedPath = req.affectedPath();
+                String relatedPlan = buildRelatedSubPlan(subPlans, affectedPath, writingPlanJson);
+                PrefetchedClaims prefetched = prefetchedClaims.get(affectedPath);
                 relatedFutures.add(CompletableFuture.supplyAsync(
                     () -> {
                         if (parentCtx != null) TokenUsageContext.set(parentCtx.scopeId(), parentCtx.operationType());
                         try {
                             return new AbstractMap.SimpleEntry<>(affectedPath,
-                                updateRelatedPage(scopeId, sourceId, scopeIdStr, affectedPath, action, relatedSource, analysisResult, metadataJson, relatedPlan, contentCollector, conflictAnnotations, context));
+                                updateRelatedPage(scopeId, sourceId, scopeIdStr, affectedPath, req.action(), req.relatedSource(), analysisResult, metadataJson, relatedPlan, contentCollector, conflictAnnotations, context, prefetched));
                         } finally {
                             TokenUsageContext.clear();
                         }
@@ -366,18 +376,20 @@ public class WriterAgent {
                     batchTimeoutSeconds, allFutures.size());
             }
 
+            WikiPageDO summaryPage = harvestFuture(summaryFuture, batchCompleted);
+            if (summaryPage != null) {
+                context.setSummaryPage(summaryPage);
+                tokensUsed += estimateTokens(summaryPage.getSummary());
+                indexSummaryPageImmediately(scopeId, summaryPage, context);
+            }
+
             for (CompletableFuture<Map.Entry<String, WikiPageDO>> f : entityFutures) {
                 Map.Entry<String, WikiPageDO> entry = harvestFuture(f, batchCompleted);
                 if (entry != null && entry.getValue() != null) {
                     context.getEntityPages().put(entry.getKey(), entry.getValue());
                     tokensUsed += estimateTokens(entry.getValue().getSummary());
+                    queueProgressiveIndex(scopeId, entry.getValue(), context);
                 }
-            }
-
-            WikiPageDO summaryPage = harvestFuture(summaryFuture, batchCompleted);
-            if (summaryPage != null) {
-                context.setSummaryPage(summaryPage);
-                tokensUsed += estimateTokens(summaryPage.getSummary());
             }
 
             for (CompletableFuture<Map.Entry<String, WikiPageDO>> f : relatedFutures) {
@@ -385,6 +397,7 @@ public class WriterAgent {
                 if (entry != null && entry.getValue() != null) {
                     context.getUpdatedPages().put(entry.getKey(), entry.getValue());
                     tokensUsed += estimateTokens(entry.getValue().getSummary());
+                    queueProgressiveIndex(scopeId, entry.getValue(), context);
                 }
             }
 
@@ -524,6 +537,7 @@ public class WriterAgent {
             if (entityPage != null) {
                 context.getEntityPages().put(entityName, entityPage);
                 tokensUsed += estimateTokens(entityPage.getSummary());
+                queueProgressiveIndex(scopeId, entityPage, context);
             }
         }
 
@@ -537,6 +551,7 @@ public class WriterAgent {
         WikiPageDO summaryPage = writeSummaryPage(scopeId, sourceId, scopeIdStr, summarySource, summaryAnalysisWithEntities, metadataJson, null, serialCollector, schemaPageTemplate, conflictAnnotations, summaryPagePath, context);
         context.setSummaryPage(summaryPage);
         tokensUsed += estimateTokens(summaryPage != null ? summaryPage.getSummary() : "");
+        indexSummaryPageImmediately(scopeId, summaryPage, context);
 
         Set<String> entityPagePaths = new HashSet<>();
         for (Map<String, String> entity : classified.coreAndImportant()) {
@@ -551,8 +566,8 @@ public class WriterAgent {
             parseAffectedPages(metadataJson),
             findSourceRelatedPagePaths(scopeId, sourceId)
         );
+        List<RelatedPrefetchRequest> relatedRequests = new ArrayList<>();
         for (Map<String, String> affected : affectedPages) {
-            checkInterrupted();
             String affectedPath = affected.get("path");
             String action = affected.get("action");
             if (affectedPath == null || affectedPath.isBlank()) continue;
@@ -562,10 +577,16 @@ public class WriterAgent {
             }
             if (!"更新".equals(action) && !"补充".equals(action)) continue;
             String relatedSource = filterSourceContentForRelated(sourceContent, affectedPath, maxRelatedChars);
-            WikiPageDO updatedPage = updateRelatedPage(scopeId, sourceId, scopeIdStr, affectedPath, action, relatedSource, analysisResult, metadataJson, null, serialCollector, conflictAnnotations, context);
+            relatedRequests.add(new RelatedPrefetchRequest(affectedPath, action, relatedSource));
+        }
+        Map<String, PrefetchedClaims> prefetchedClaims = batchPrefetchRelatedClaims(scopeId, scopeIdStr, relatedRequests, analysisResult, metadataJson, context);
+        for (RelatedPrefetchRequest req : relatedRequests) {
+            checkInterrupted();
+            WikiPageDO updatedPage = updateRelatedPage(scopeId, sourceId, scopeIdStr, req.affectedPath(), req.action(), req.relatedSource(), analysisResult, metadataJson, null, serialCollector, conflictAnnotations, context, prefetchedClaims.get(req.affectedPath()));
             if (updatedPage != null) {
-                context.getUpdatedPages().put(affectedPath, updatedPage);
+                context.getUpdatedPages().put(req.affectedPath(), updatedPage);
                 tokensUsed += estimateTokens(updatedPage.getSummary());
+                queueProgressiveIndex(scopeId, updatedPage, context);
             }
         }
 
@@ -752,7 +773,7 @@ public class WriterAgent {
             }
             List<Map<String, String>> affectedPages = mergeAffectedPagesWithSourceRelations(
                 parseAffectedPages(metadataJson), sourceRelatedPaths);
-            List<CompletableFuture<Map.Entry<String, WikiPageDO>>> relatedFutures = new ArrayList<>();
+            List<RelatedPrefetchRequest> relatedRequests = new ArrayList<>();
             for (Map<String, String> affected : affectedPages) {
                 String affectedPath = affected.get("path");
                 String action = affected.get("action");
@@ -762,14 +783,21 @@ public class WriterAgent {
                     continue;
                 }
                 if (!"更新".equals(action) && !"补充".equals(action)) continue;
-                String relatedPlan = buildRelatedSubPlan(subPlans, affectedPath, writingPlanJson);
                 String relatedSource = filterSourceContentForRelated(sourceContent, affectedPath, maxRelatedChars);
+                relatedRequests.add(new RelatedPrefetchRequest(affectedPath, action, relatedSource));
+            }
+            Map<String, PrefetchedClaims> prefetchedClaims = batchPrefetchRelatedClaims(scopeId, scopeIdStr, relatedRequests, analysisResult, metadataJson, context);
+            List<CompletableFuture<Map.Entry<String, WikiPageDO>>> relatedFutures = new ArrayList<>();
+            for (RelatedPrefetchRequest req : relatedRequests) {
+                String affectedPath = req.affectedPath();
+                String relatedPlan = buildRelatedSubPlan(subPlans, affectedPath, writingPlanJson);
+                PrefetchedClaims prefetched = prefetchedClaims.get(affectedPath);
                 relatedFutures.add(CompletableFuture.supplyAsync(
                     () -> {
                         if (parentCtx != null) TokenUsageContext.set(parentCtx.scopeId(), parentCtx.operationType());
                         try {
                             return new AbstractMap.SimpleEntry<>(affectedPath,
-                                updateRelatedPage(scopeId, sourceId, scopeIdStr, affectedPath, action, relatedSource, analysisResult, metadataJson, relatedPlan, contentCollector, conflictAnnotations, context));
+                                updateRelatedPage(scopeId, sourceId, scopeIdStr, affectedPath, req.action(), req.relatedSource(), analysisResult, metadataJson, relatedPlan, contentCollector, conflictAnnotations, context, prefetched));
                         } finally {
                             TokenUsageContext.clear();
                         }
@@ -808,6 +836,7 @@ public class WriterAgent {
                 if (entry != null && entry.getValue() != null) {
                     context.getEntityPages().put(entry.getKey(), entry.getValue());
                     tokensUsed += estimateTokens(entry.getValue().getSummary());
+                    queueProgressiveIndex(scopeId, entry.getValue(), context);
                 }
             }
 
@@ -815,6 +844,7 @@ public class WriterAgent {
             if (summaryPage != null) {
                 context.setSummaryPage(summaryPage);
                 tokensUsed += estimateTokens(summaryPage.getSummary());
+                indexSummaryPageImmediately(scopeId, summaryPage, context);
             }
 
             for (CompletableFuture<Map.Entry<String, WikiPageDO>> f : relatedFutures) {
@@ -822,6 +852,7 @@ public class WriterAgent {
                 if (entry != null && entry.getValue() != null) {
                     context.getUpdatedPages().put(entry.getKey(), entry.getValue());
                     tokensUsed += estimateTokens(entry.getValue().getSummary());
+                    queueProgressiveIndex(scopeId, entry.getValue(), context);
                 }
             }
 
@@ -1181,6 +1212,45 @@ public class WriterAgent {
         bulkSyncToIndex(context.getScopeId(), context);
     }
 
+    public void queueProgressiveIndex(Long scopeId, WikiPageDO page, IngestContext context) {
+        if (page == null || page.getId() == null || context == null) return;
+        List<WikiPageDO> batchToFlush = null;
+        synchronized (context.getPendingIndexPages()) {
+            context.getPendingIndexPages().add(page);
+            if (context.getPendingIndexPages().size() >= indexBatchSize) {
+                batchToFlush = new ArrayList<>(context.getPendingIndexPages());
+                context.getPendingIndexPages().clear();
+            }
+        }
+        flushPendingIndexBatch(scopeId, batchToFlush, context);
+    }
+
+    public void indexSummaryPageImmediately(Long scopeId, WikiPageDO summaryPage, IngestContext context) {
+        if (summaryPage == null || summaryPage.getId() == null || context == null) return;
+        List<WikiPageDO> batchToFlush;
+        synchronized (context.getPendingIndexPages()) {
+            context.getPendingIndexPages().add(summaryPage);
+            batchToFlush = new ArrayList<>(context.getPendingIndexPages());
+            context.getPendingIndexPages().clear();
+        }
+        flushPendingIndexBatch(scopeId, batchToFlush, context);
+    }
+
+    private void flushPendingIndexBatch(Long scopeId, List<WikiPageDO> batch, IngestContext context) {
+        if (batch == null || batch.isEmpty()) return;
+        try {
+            searchService.bulkIndexPages(scopeId, batch);
+            for (WikiPageDO p : batch) {
+                if (p != null && p.getId() != null) {
+                    context.getIndexedPageIds().add(p.getId());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Progressive index flush failed for {} page(s), scopeId={}: {} — deferred to final reconciliation",
+                batch.size(), scopeId, e.getMessage());
+        }
+    }
+
     public void reSyncSpecificPages(IngestContext context, java.util.Set<String> filePaths) {
         if (filePaths == null || filePaths.isEmpty()) return;
         Long scopeId = context.getScopeId();
@@ -1210,12 +1280,20 @@ public class WriterAgent {
     }
 
     private void bulkSyncToIndex(Long scopeId, IngestContext context) {
+        List<WikiPageDO> pending;
+        synchronized (context.getPendingIndexPages()) {
+            pending = new ArrayList<>(context.getPendingIndexPages());
+            context.getPendingIndexPages().clear();
+        }
+        flushPendingIndexBatch(scopeId, pending, context);
+
         List<WikiPageDO> allPages = new ArrayList<>();
         if (context.getSummaryPage() != null) allPages.add(context.getSummaryPage());
         allPages.addAll(context.getEntityPages().values());
         allPages.addAll(context.getUpdatedPages().values());
         allPages.addAll(context.getChapterPages().values());
         allPages = new ArrayList<>(allPages.stream().filter(p -> p != null && p.getId() != null).toList());
+        allPages.removeIf(p -> context.getIndexedPageIds().contains(p.getId()));
 
         if ("full".equalsIgnoreCase(indexSyncMode)) {
             try {
@@ -1237,6 +1315,9 @@ public class WriterAgent {
         if (!allPages.isEmpty()) {
             try {
                 searchService.bulkIndexPages(scopeId, allPages);
+                for (WikiPageDO p : allPages) {
+                    context.getIndexedPageIds().add(p.getId());
+                }
             } catch (Exception e) {
                 log.error("bulkSyncToIndex failed, falling back to per-page sync: {}", e.getMessage());
                 for (WikiPageDO p : allPages) {
@@ -1803,7 +1884,7 @@ public class WriterAgent {
                 }
                 return applyIncrementalEntityUpdate(scopeId, sourceId, scopeIdStr, existing, entityPagePath,
                     sourceContent, filteredAnalysis, metadataJson, conflictAnnotations,
-                    contentCollector, context);
+                    contentCollector, context, null);
             } else {
                 String createPagePath = entityPagePath;
                 try {
@@ -1844,7 +1925,7 @@ public class WriterAgent {
             log.info("writeEntityPage: concurrent create detected for '{}' (id={}, path='{}'), switching to incremental merge",
                 entityName, raced.getId(), raced.getFilePath());
             return applyIncrementalEntityUpdate(scopeId, sourceId, scopeIdStr, raced, raced.getFilePath(),
-                sourceContent, filteredAnalysis, metadataJson, conflictAnnotations, contentCollector, context);
+                sourceContent, filteredAnalysis, metadataJson, conflictAnnotations, contentCollector, context, null);
         }
 
         if (!acquireBarrier(LlmConcurrencyBarrier.Bucket.ENTITY, "writeEntityPage(create):" + entityName)) {
@@ -1902,7 +1983,7 @@ public class WriterAgent {
             log.info("writeEntityPage: title race for '{}' resolved to winner id={} path='{}', switching to incremental merge",
                 entityName, winner.getId(), winner.getFilePath());
             return applyIncrementalEntityUpdate(scopeId, sourceId, scopeIdStr, winner, winner.getFilePath(),
-                sourceContent, filteredAnalysis, metadataJson, conflictAnnotations, contentCollector, context);
+                sourceContent, filteredAnalysis, metadataJson, conflictAnnotations, contentCollector, context, null);
         }
         persistSourceRelation(scopeId, entityPageDO.getId(), sourceId);
         persistTagsAndKeywords(scopeId, entityPageDO.getId(), metadataJson);
@@ -1910,7 +1991,7 @@ public class WriterAgent {
         return entityPageDO;
     }
 
-    private WikiPageDO updateRelatedPage(Long scopeId, Long sourceId, String scopeIdStr, String affectedPath, String action, String sourceContent, String analysisResult, String metadataJson, String subPlanJson, Map<String, String> contentCollector, List<IngestContext.ConflictAnnotation> conflictAnnotations, IngestContext context) {
+    private WikiPageDO updateRelatedPage(Long scopeId, Long sourceId, String scopeIdStr, String affectedPath, String action, String sourceContent, String analysisResult, String metadataJson, String subPlanJson, Map<String, String> contentCollector, List<IngestContext.ConflictAnnotation> conflictAnnotations, IngestContext context, PrefetchedClaims prefetched) {
         try {
             WikiPageDO existing = wikiPageMapper.selectOne(
                 new LambdaQueryWrapper<WikiPageDO>()
@@ -1987,10 +2068,115 @@ public class WriterAgent {
 
             return applyIncrementalEntityUpdate(scopeId, sourceId, scopeIdStr, existing, affectedPath,
                 sourceContent, filteredAnalysis, metadataJson, conflictAnnotations,
-                contentCollector, context);
+                contentCollector, context, prefetched);
         } catch (Exception e) {
             log.error("updateRelatedPage failed for '{}': {}", affectedPath, e.getMessage());
             return null;
+        }
+    }
+
+    private String buildEntityMergeMaterial(String sourceContent, String filteredAnalysis, String metadataJson, IngestContext context) {
+        String sourceName = extractJsonField(metadataJson, "title");
+        if (sourceName == null || sourceName.isBlank()) {
+            sourceName = context != null && context.getSourceName() != null && !context.getSourceName().isBlank()
+                ? context.getSourceName() : "本次来源";
+        }
+        return PromptTemplate.buildSourceAndAnalysisUserMessage(sourceContent, filteredAnalysis)
+            + "\n\n【来源名称】" + sourceName;
+    }
+
+    Map<String, PrefetchedClaims> batchPrefetchRelatedClaims(Long scopeId, String scopeIdStr,
+            List<RelatedPrefetchRequest> requests, String analysisResult, String metadataJson, IngestContext context) {
+        if (requests == null || requests.size() < 2) {
+            return Map.of();
+        }
+        try {
+            List<String> paths = new ArrayList<>();
+            List<String> snapshots = new ArrayList<>();
+            List<Map<String, Object>> items = new ArrayList<>();
+            for (RelatedPrefetchRequest req : requests) {
+                try {
+                    WikiPageDO page = wikiPageMapper.selectOne(
+                        new LambdaQueryWrapper<WikiPageDO>()
+                            .eq(WikiPageDO::getScopeId, scopeId)
+                            .eq(WikiPageDO::getFilePath, req.affectedPath())
+                    );
+                    if (page == null || !"entity".equals(page.getPageType())
+                        || !PageLifecycle.ACTIVE.name().equals(page.getLifecycleStatus())) {
+                        continue;
+                    }
+                    byte[] bytes = storageProvider.read(scopeIdStr, "wiki/" + page.getFilePath());
+                    if (bytes == null) {
+                        continue;
+                    }
+                    String snapshot = new String(bytes, StandardCharsets.UTF_8);
+                    String entriesListing = EntityPageEntryParser.formatForPrompt(
+                        EntityPageEntryParser.parse(snapshot).entries());
+                    int maxAnalysisCharsRelated = context != null && context.getStrategy() != null
+                        ? context.getStrategy().getMaxAnalysisCharsRelated() : 6000;
+                    String filteredAnalysis = filterAnalysisForRelated(analysisResult, req.affectedPath(), snapshot, maxAnalysisCharsRelated, context);
+                    String material = buildEntityMergeMaterial(req.relatedSource(), filteredAnalysis, metadataJson, context);
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("pageIndex", items.size());
+                    item.put("title", page.getTitle());
+                    item.put("existingEntries", entriesListing);
+                    item.put("material", material);
+                    items.add(item);
+                    paths.add(req.affectedPath());
+                    snapshots.add(snapshot);
+                } catch (Exception e) {
+                    log.warn("batchPrefetchRelatedClaims: skipped page '{}': {}", req.affectedPath(), e.getMessage());
+                }
+            }
+            if (items.size() < 2) {
+                return Map.of();
+            }
+            String userJson = objectMapper.writeValueAsString(items);
+            if (!llmBarrier.tryAcquire(LlmConcurrencyBarrier.Bucket.ENTITY, 60_000)) {
+                log.warn("batchPrefetchRelatedClaims: barrier timeout, related pages fall back to per-page LLM calls");
+                return Map.of();
+            }
+            String response;
+            try {
+                String prompt = schemaInjector.prependForWriter(scopeId, PromptRegistry.forIngest().batchMergeEntityClaims());
+                response = chatClient.chat(prompt, userJson);
+            } finally {
+                llmBarrier.release(LlmConcurrencyBarrier.Bucket.ENTITY);
+            }
+            int start = response != null ? response.indexOf('[') : -1;
+            int end = response != null ? response.lastIndexOf(']') : -1;
+            if (start < 0 || end <= start) {
+                log.warn("batchPrefetchRelatedClaims: response is not a JSON array, related pages fall back to per-page LLM calls");
+                return Map.of();
+            }
+            List<Map<String, Object>> parsed = objectMapper.readValue(response.substring(start, end + 1),
+                new com.fasterxml.jackson.core.type.TypeReference<>() {});
+            Map<Integer, String> candidatesByIndex = new HashMap<>();
+            for (Map<String, Object> entry : parsed) {
+                Object idx = entry.get("pageIndex");
+                if (!(idx instanceof Number)) {
+                    continue;
+                }
+                Object candidates = entry.get("candidates");
+                if (candidates == null || (candidates instanceof List<?> list && list.isEmpty())) {
+                    candidatesByIndex.put(((Number) idx).intValue(), "[]");
+                } else if (candidates instanceof List<?>) {
+                    candidatesByIndex.put(((Number) idx).intValue(), objectMapper.writeValueAsString(candidates));
+                }
+            }
+            Map<String, PrefetchedClaims> result = new HashMap<>();
+            for (int i = 0; i < paths.size(); i++) {
+                String candidatesJson = candidatesByIndex.get(i);
+                if (candidatesJson == null) {
+                    log.warn("batchPrefetchRelatedClaims: pageIndex {} missing in response, page '{}' falls back to per-page LLM call", i, paths.get(i));
+                    continue;
+                }
+                result.put(paths.get(i), new PrefetchedClaims(candidatesJson, snapshots.get(i)));
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn("batchPrefetchRelatedClaims failed, related pages fall back to per-page LLM calls: {}", e.getMessage());
+            return Map.of();
         }
     }
 
@@ -1998,13 +2184,13 @@ public class WriterAgent {
         WikiPageDO existing, String pagePath, String sourceContent,
         String filteredAnalysis, String metadataJson,
         List<IngestContext.ConflictAnnotation> conflictAnnotations,
-        Map<String, String> contentCollector, IngestContext context) {
+        Map<String, String> contentCollector, IngestContext context, PrefetchedClaims prefetched) {
         Long pageId = existing != null ? existing.getId() : null;
         String pageTitle = existing != null ? existing.getTitle() : pagePath;
         try {
             return pageWriteLockRegistry.withPageLock(scopeId, pagePath, pageLockTimeoutMs,
                 () -> applyIncrementalEntityUpdateLocked(scopeId, sourceId, scopeIdStr, existing, pagePath,
-                    sourceContent, filteredAnalysis, metadataJson, conflictAnnotations, contentCollector, context));
+                    sourceContent, filteredAnalysis, metadataJson, conflictAnnotations, contentCollector, context, prefetched));
         } catch (PageWriteLockRegistry.PageLockTimeoutException e) {
             log.warn("Entity incremental update skipped: page='{}' reason=page_lock_timeout", pageTitle);
             reportIncrementalDegradation(scopeId, pageId, pageTitle, "page_lock_timeout", context);
@@ -2021,7 +2207,7 @@ public class WriterAgent {
         WikiPageDO existing, String pagePath, String sourceContent,
         String filteredAnalysis, String metadataJson,
         List<IngestContext.ConflictAnnotation> conflictAnnotations,
-        Map<String, String> contentCollector, IngestContext context) {
+        Map<String, String> contentCollector, IngestContext context, PrefetchedClaims prefetched) {
         WikiPageDO fresh = existing != null && existing.getId() != null
             ? wikiPageMapper.selectById(existing.getId()) : null;
         if (fresh == null || !scopeId.equals(fresh.getScopeId())) {
@@ -2039,25 +2225,26 @@ public class WriterAgent {
 
             String entriesListing = EntityPageEntryParser.formatForPrompt(
                 EntityPageEntryParser.parse(lockedContent).entries());
-            String sourceName = extractJsonField(metadataJson, "title");
-            if (sourceName == null || sourceName.isBlank()) {
-                sourceName = context != null && context.getSourceName() != null && !context.getSourceName().isBlank()
-                    ? context.getSourceName() : "本次来源";
-            }
-            String material = PromptTemplate.buildSourceAndAnalysisUserMessage(sourceContent, filteredAnalysis)
-                + "\n\n【来源名称】" + sourceName;
+            String material = buildEntityMergeMaterial(sourceContent, filteredAnalysis, metadataJson, context);
 
-            if (!acquireBarrier(LlmConcurrencyBarrier.Bucket.ENTITY, "incrementalEntityUpdate:" + pageTitle)) {
-                reportIncrementalDegradation(scopeId, fresh.getId(), pageTitle, "barrier_timeout", context);
-                return null;
-            }
             String raw;
-            try {
-                String prompt = schemaInjector.prependForWriter(scopeId,
-                    PromptRegistry.forIngest().mergeEntityClaims(entriesListing, material));
-                raw = chatClient.chat(prompt);
-            } finally {
-                llmBarrier.release(LlmConcurrencyBarrier.Bucket.ENTITY);
+            if (prefetched != null && lockedContent.equals(prefetched.contentSnapshot())) {
+                raw = prefetched.rawJson();
+            } else {
+                if (prefetched != null) {
+                    log.info("Prefetched claims discarded for '{}': page content changed since prefetch", pageTitle);
+                }
+                if (!acquireBarrier(LlmConcurrencyBarrier.Bucket.ENTITY, "incrementalEntityUpdate:" + pageTitle)) {
+                    reportIncrementalDegradation(scopeId, fresh.getId(), pageTitle, "barrier_timeout", context);
+                    return null;
+                }
+                try {
+                    String prompt = schemaInjector.prependForWriter(scopeId,
+                        PromptRegistry.forIngest().mergeEntityClaims(entriesListing, material));
+                    raw = chatClient.chat(prompt);
+                } finally {
+                    llmBarrier.release(LlmConcurrencyBarrier.Bucket.ENTITY);
+                }
             }
 
             EntityCandidateParser.ParseOutcome outcome = EntityCandidateParser.parse(raw);
@@ -2546,6 +2733,10 @@ public class WriterAgent {
     }
 
     public record EntityContextualRef(String name, String type, String significance, int chunkCount, int mentionLines) {}
+
+    public record RelatedPrefetchRequest(String affectedPath, String action, String relatedSource) {}
+
+    public record PrefetchedClaims(String rawJson, String contentSnapshot) {}
 
     private double computeProgrammaticScore(String entityName, Map<String, String> entityMeta, IngestContext context, int maxMentionsAcrossAll) {
         Map<String, List<Integer>> chunkMap = context.getEntityChunkMap();

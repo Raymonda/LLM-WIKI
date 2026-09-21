@@ -120,11 +120,12 @@ class WriterAgentIncrementalUpdateTest {
         try {
             java.lang.reflect.Method m = WriterAgent.class.getDeclaredMethod("applyIncrementalEntityUpdate",
                 Long.class, Long.class, String.class, WikiPageDO.class, String.class, String.class,
-                String.class, String.class, List.class, Map.class, IngestContext.class);
+                String.class, String.class, List.class, Map.class, IngestContext.class,
+                WriterAgent.PrefetchedClaims.class);
             m.setAccessible(true);
             return (WikiPageDO) m.invoke(agent, 1L, 2L, "1", existing, existing.getFilePath(),
                 "某公司 2024 年公告：注册资本变更为 12 亿元。", "分析结果",
-                "{\"title\":\"2024 公告\"}", List.of(), new HashMap<String, String>(), context);
+                "{\"title\":\"2024 公告\"}", List.of(), new HashMap<String, String>(), context, null);
         } catch (Exception e) {
             throw new IllegalStateException("applyIncrementalEntityUpdate failed", e);
         }

@@ -112,4 +112,17 @@ class IngestPromptsFidelityTest {
         assertTrue(prompt.contains("- [0] 总部位于上海（来源：2023 年报）"), "must embed existing entries listing");
         assertTrue(prompt.contains("某公司 2024 年公告：注册资本变更为 12 亿元。"), "must embed new source material");
     }
+
+    @Test
+    void shouldDefineBatchEntityClaimMergePrompt() {
+        String prompt = prompts.batchMergeEntityClaims();
+
+        assertTrue(prompt.contains(PromptTemplate.FAITHFUL_COMPILATION_CONSTRAINT),
+            "batch merge prompt must embed the faithful compilation constraint");
+        assertTrue(prompt.contains("pageIndex"), "must define pageIndex routing");
+        assertTrue(prompt.contains("duplicate_of:<n>"), "must define duplicate relation format");
+        assertTrue(prompt.contains("conflict_with:<n>"), "must define conflict relation format");
+        assertTrue(prompt.contains("candidates"), "must define candidates array");
+        assertTrue(prompt.contains("严禁裁决"), "must forbid adjudication");
+    }
 }

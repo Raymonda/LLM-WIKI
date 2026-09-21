@@ -96,6 +96,8 @@ public class IngestContext {
     private transient CompletableFuture<Void> reconcilerFuture;
     private boolean writerPostChecksDone;
     private boolean bulkIndexed;
+    private final List<WikiPageDO> pendingIndexPages = new ArrayList<>();
+    private final Set<Long> indexedPageIds = ConcurrentHashMap.newKeySet();
 
     public IngestContext(Long scopeId, Long sourceId, Long executionId, String guidance) {
         this.scopeId = scopeId;
@@ -318,6 +320,8 @@ public class IngestContext {
     public void setWriterPostChecksDone(boolean writerPostChecksDone) { this.writerPostChecksDone = writerPostChecksDone; }
     public boolean isBulkIndexed() { return bulkIndexed; }
     public void setBulkIndexed(boolean bulkIndexed) { this.bulkIndexed = bulkIndexed; }
+    public List<WikiPageDO> getPendingIndexPages() { return pendingIndexPages; }
+    public Set<Long> getIndexedPageIds() { return indexedPageIds; }
     public void addSchemaPatchHint(String hint) { this.schemaPatchHints.add(hint); }
 
     public record ParallelAnalysisResult(int chunkIndex, String content, boolean hasError) {}
