@@ -89,7 +89,6 @@ function onToggleSelect(executionId: number) {
 function rejectSelected() {
   if (selectedIds.value.size === 0) return
   emit('cancel-items', Array.from(selectedIds.value))
-  selectedIds.value = new Set()
 }
 
 function onConfirm(executionId: number, guidance?: string) {

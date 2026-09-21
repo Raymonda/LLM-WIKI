@@ -236,7 +236,11 @@ async function handleSaveEdit() {
   if (!editingScope.value) return
   isLoading.value = true
   try {
-    const updated = await updateScope(editingScope.value.id, editForm.value)
+    const payload: Partial<ScopeInfo> = { ...editForm.value }
+    if (payload.ingestMode === (editingScope.value.ingestMode ?? 'review')) {
+      delete payload.ingestMode
+    }
+    const updated = await updateScope(editingScope.value.id, payload)
     scopes.value = scopes.value.map(s => s.id === updated.id ? updated : s)
     if (selectedScope.value?.id === updated.id) {
       selectedScope.value = updated

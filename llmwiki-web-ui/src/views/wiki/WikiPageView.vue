@@ -357,6 +357,7 @@ async function submitReportIssue() {
     await reportPageIssue(page.value.id, reportDescription.value.trim())
     showReportDialog.value = false
     toastStore.success(t('wiki.reportIssueSuccess'))
+    healthInfo.value = await getHealth(page.value.id).catch(() => healthInfo.value)
   } catch (e: any) {
     toastStore.error(t('wiki.reportIssueFailed'), e?.message || '')
   } finally {
