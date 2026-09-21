@@ -336,9 +336,12 @@ public class IngestOrchestrator {
         if (!suppressNotifications) {
             ExecutionModel execution = executionTracker.getExecution(executionId);
             Long submittedBy = execution != null ? execution.getSubmittedBy() : null;
+            String reviewNotice = decision.hardBlocked()
+                ? "分析结果存在 Schema 合规违规，请审阅后确认是否继续写入知识库"
+                : "自动放行评估未通过（风险评分 " + decision.softScore() + "），请评审后确认是否写入知识库";
             notificationService.createPersonalNotification(submittedBy, "ingest_awaiting_review",
                 "需要评审 — " + sourceName,
-                "分析结果存在 Schema 合规违规，请审阅后确认是否继续写入知识库",
+                reviewNotice,
                 scopeId, null, executionId);
         }
         return executionTracker.getExecution(executionId);

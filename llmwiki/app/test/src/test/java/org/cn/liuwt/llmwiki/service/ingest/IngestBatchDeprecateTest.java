@@ -12,6 +12,8 @@ import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.IngestBatchMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageSourceMapper;
+import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
+import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.common.util.result.Result;
 import org.cn.liuwt.llmwiki.domain.model.wiki.WikiPageModel;
 import org.cn.liuwt.llmwiki.domain.service.harness.LintFindingService;
@@ -32,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.contains;
@@ -68,9 +71,9 @@ class IngestBatchDeprecateTest {
         ExecutionDO item1 = item(1L, "completed", 101L);
         ExecutionDO item2 = item(2L, "failed", 102L);
         when(executionMapper.selectList(any())).thenReturn(List.of(item1, item2));
-        WikiPageSourceDO link1 = link(201L, 101L);
-        WikiPageSourceDO link2 = link(202L, 102L);
-        WikiPageSourceDO linkDup = link(201L, 102L);
+        WikiPageSourceDO link1 = link(201L, 101L, 1L);
+        WikiPageSourceDO link2 = link(202L, 102L, 2L);
+        WikiPageSourceDO linkDup = link(201L, 102L, 2L);
         when(wikiPageSourceMapper.selectList(any())).thenReturn(List.of(link1, link2, linkDup));
         when(wikiPageMapper.selectById(201L)).thenReturn(page(201L, 10L, "ACTIVE"));
         when(wikiPageMapper.selectById(202L)).thenReturn(page(202L, 10L, "ACTIVE"));
@@ -82,7 +85,7 @@ class IngestBatchDeprecateTest {
         verify(wikiFileService).deprecatePage(eq(202L), eq(10L), contains("9"));
         ArgumentCaptor<LambdaQueryWrapper<WikiPageSourceDO>> captor = captorForSourceQuery();
         verify(wikiPageSourceMapper).selectList(captor.capture());
-        assertThat(captor.getValue().getSqlSegment()).contains("scope_id");
+        assertThat(captor.getValue().getSqlSegment()).contains("scope_id").contains("execution_id");
         verify(notificationService).createPersonalNotification(eq(7L), eq("batch_outputs_deprecated"),
             any(), contains("已标记废弃"), eq(10L), isNull(), isNull());
     }
@@ -93,8 +96,8 @@ class IngestBatchDeprecateTest {
         when(batchMapper.selectById(9L)).thenReturn(batch);
         ExecutionDO item1 = item(1L, "completed", 101L);
         when(executionMapper.selectList(any())).thenReturn(List.of(item1));
-        WikiPageSourceDO link1 = link(201L, 101L);
-        WikiPageSourceDO link2 = link(202L, 101L);
+        WikiPageSourceDO link1 = link(201L, 101L, 1L);
+        WikiPageSourceDO link2 = link(202L, 101L, 1L);
         when(wikiPageSourceMapper.selectList(any())).thenReturn(List.of(link1, link2));
         when(wikiPageMapper.selectById(201L)).thenReturn(page(201L, 10L, "DEPRECATED"));
         when(wikiPageMapper.selectById(202L)).thenReturn(page(202L, 10L, "ACTIVE"));
@@ -112,13 +115,27 @@ class IngestBatchDeprecateTest {
         when(batchMapper.selectById(9L)).thenReturn(batch);
         ExecutionDO item1 = item(1L, "completed", 101L);
         when(executionMapper.selectList(any())).thenReturn(List.of(item1));
-        WikiPageSourceDO link1 = link(201L, 101L);
+        WikiPageSourceDO link1 = link(201L, 101L, 1L);
         when(wikiPageSourceMapper.selectList(any())).thenReturn(List.of(link1));
         when(wikiPageMapper.selectById(201L)).thenReturn(page(201L, 99L, "ACTIVE"));
 
         Map<String, Object> result = service.deprecateBatchOutputs(9L, 7L);
 
         assertThat(result).containsEntry("deprecatedPages", 0).containsEntry("skippedPages", 1);
+        verify(wikiFileService, never()).deprecatePage(any(), any(), any());
+    }
+
+    @Test
+    void shouldRejectDeprecateWhenBatchNotTerminal() {
+        IngestBatchDO batch = batch();
+        batch.setStatus("active");
+        when(batchMapper.selectById(9L)).thenReturn(batch);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+            () -> service.deprecateBatchOutputs(9L, 7L));
+
+        assertThat(ex.getCode()).isEqualTo(ErrorCode.INGEST_BATCH_INVALID_STATUS.getCode());
+        verify(wikiPageSourceMapper, never()).selectList(any());
         verify(wikiFileService, never()).deprecatePage(any(), any(), any());
     }
 
@@ -176,11 +193,12 @@ class IngestBatchDeprecateTest {
         return execution;
     }
 
-    private WikiPageSourceDO link(Long pageId, Long sourceId) {
+    private WikiPageSourceDO link(Long pageId, Long sourceId, Long executionId) {
         WikiPageSourceDO link = new WikiPageSourceDO();
         link.setScopeId(10L);
         link.setPageId(pageId);
         link.setSourceId(sourceId);
+        link.setExecutionId(executionId);
         return link;
     }
 

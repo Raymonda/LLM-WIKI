@@ -5,10 +5,12 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.IngestBatchDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.ScopeDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionStepMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.IngestBatchMapper;
+import org.cn.liuwt.llmwiki.common.dal.mapper.ScopeMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
 import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
@@ -41,6 +43,7 @@ class IngestBatchServiceDedupTest {
     @Mock private ExecutionMapper executionMapper;
     @Mock private ExecutionStepMapper executionStepMapper;
     @Mock private IngestBatchMapper batchMapper;
+    @Mock private ScopeMapper scopeMapper;
     @Mock private SourceMapper sourceMapper;
     @Mock private ExecutionTracker executionTracker;
     @Mock private IngestService ingestService;
@@ -188,6 +191,32 @@ class IngestBatchServiceDedupTest {
         when(sourceService.findDuplicateSource(any(), any())).thenReturn(null);
 
         ingestBatchService.createBatch(SCOPE_ID, USER_ID, List.of(10L), null, "turbo", null);
+
+        verify(batchMapper).insert(argThat((IngestBatchDO batch) -> batch != null && "review".equals(batch.getMode())));
+    }
+
+    @Test
+    void shouldInheritScopeAutoModeWhenRequestModeIsNull() {
+        SourceDO source = activeSource(10L, "doc.pdf", "hash_abc");
+        stubCreateBatchCommon(Map.of(10L, source));
+        when(sourceService.findDuplicateSource(any(), any())).thenReturn(null);
+        ScopeDO scope = new ScopeDO();
+        scope.setId(SCOPE_ID);
+        scope.setIngestMode("auto");
+        when(scopeMapper.selectById(SCOPE_ID)).thenReturn(scope);
+
+        ingestBatchService.createBatch(SCOPE_ID, USER_ID, List.of(10L), null, null, null);
+
+        verify(batchMapper).insert(argThat((IngestBatchDO batch) -> batch != null && "auto".equals(batch.getMode())));
+    }
+
+    @Test
+    void shouldPreferExplicitReviewOverScopeAutoMode() {
+        SourceDO source = activeSource(10L, "doc.pdf", "hash_abc");
+        stubCreateBatchCommon(Map.of(10L, source));
+        when(sourceService.findDuplicateSource(any(), any())).thenReturn(null);
+
+        ingestBatchService.createBatch(SCOPE_ID, USER_ID, List.of(10L), null, "review", null);
 
         verify(batchMapper).insert(argThat((IngestBatchDO batch) -> batch != null && "review".equals(batch.getMode())));
     }

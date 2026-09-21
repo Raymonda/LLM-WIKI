@@ -7,6 +7,7 @@ import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.IngestBatchMapper;
+import org.cn.liuwt.llmwiki.common.dal.mapper.ScopeMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
@@ -35,6 +36,7 @@ class IngestBatchServiceTest {
 
     @Mock private ExecutionMapper executionMapper;
     @Mock private IngestBatchMapper batchMapper;
+    @Mock private ScopeMapper scopeMapper;
     @Mock private SourceMapper sourceMapper;
     @Mock private ExecutionTracker executionTracker;
     @Mock private SourceService sourceService;

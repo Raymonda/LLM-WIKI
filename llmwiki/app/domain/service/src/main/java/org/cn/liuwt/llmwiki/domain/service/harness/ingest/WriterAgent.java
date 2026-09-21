@@ -1029,7 +1029,7 @@ public class WriterAgent {
                 pageDO.setSchemaVersion(schemaManager.getCurrentVersionId(scopeId, SchemaSkeletonValidator.WIKI_SCHEMA_KEY));
                 pageDO.setContentUpdatedAt(java.time.LocalDateTime.now());
                 wikiPageMapper.updateById(pageDO);
-                persistSourceRelation(scopeId, pageDO.getId(), sourceId);
+                persistSourceRelation(scopeId, pageDO.getId(), sourceId, context != null ? context.getExecutionId() : null);
                 persistTagsAndKeywords(scopeId, pageDO.getId(), metadataJson);
                 lintFindingService.resolvePageFindingsOnIngest(scopeId, pageDO.getId());
             } else {
@@ -1046,7 +1046,7 @@ public class WriterAgent {
                 pageDO.setSchemaVersion(schemaManager.getCurrentVersionId(scopeId, SchemaSkeletonValidator.WIKI_SCHEMA_KEY));
                 pageDO.setContentUpdatedAt(java.time.LocalDateTime.now());
                 wikiPageMapper.insert(pageDO);
-                persistSourceRelation(scopeId, pageDO.getId(), sourceId);
+                persistSourceRelation(scopeId, pageDO.getId(), sourceId, context != null ? context.getExecutionId() : null);
                 persistTagsAndKeywords(scopeId, pageDO.getId(), metadataJson);
                 lintFindingService.resolvePageFindingsOnIngest(scopeId, pageDO.getId());
             }
@@ -1436,6 +1436,7 @@ public class WriterAgent {
                 relation.setScopeId(scopeId);
                 relation.setPageId(pageId);
                 relation.setSourceId(sourceId);
+                relation.setExecutionId(context != null ? context.getExecutionId() : null);
                 wikiPageSourceMapper.insert(relation);
                 log.info("Compensating missing source relation: scopeId={}, pageId={}, sourceId={}", scopeId, pageId, sourceId);
             }
@@ -1797,7 +1798,7 @@ public class WriterAgent {
                 lintFindingService.resolvePageFindingsOnIngest(scopeId, pageDO.getId());
             }
 
-            persistSourceRelation(scopeId, pageDO.getId(), sourceId);
+            persistSourceRelation(scopeId, pageDO.getId(), sourceId, context != null ? context.getExecutionId() : null);
             persistTagsAndKeywords(scopeId, pageDO.getId(), metadataJson);
 
             return pageDO;
@@ -1985,7 +1986,7 @@ public class WriterAgent {
             return applyIncrementalEntityUpdate(scopeId, sourceId, scopeIdStr, winner, winner.getFilePath(),
                 sourceContent, filteredAnalysis, metadataJson, conflictAnnotations, contentCollector, context, null);
         }
-        persistSourceRelation(scopeId, entityPageDO.getId(), sourceId);
+        persistSourceRelation(scopeId, entityPageDO.getId(), sourceId, context != null ? context.getExecutionId() : null);
         persistTagsAndKeywords(scopeId, entityPageDO.getId(), metadataJson);
         lintFindingService.resolvePageFindingsOnIngest(scopeId, entityPageDO.getId());
         return entityPageDO;
@@ -2308,7 +2309,7 @@ public class WriterAgent {
             fresh.setSchemaVersion(schemaVersion);
             fresh.setContentUpdatedAt(contentUpdatedAt);
             fresh.setPageType("entity");
-            persistSourceRelation(scopeId, fresh.getId(), sourceId);
+            persistSourceRelation(scopeId, fresh.getId(), sourceId, context != null ? context.getExecutionId() : null);
             persistTagsAndKeywords(scopeId, fresh.getId(), metadataJson);
             lintFindingService.resolvePageFindingsOnIngest(scopeId, fresh.getId());
 
@@ -2390,7 +2391,7 @@ public class WriterAgent {
                 existing.setSourceCount(existing.getSourceCount() == null ? 1 : existing.getSourceCount() + 1);
                 existing.setSchemaVersion(schemaVersion);
                 existing.setContentUpdatedAt(contentUpdatedAt);
-                persistSourceRelation(scopeId, existing.getId(), sourceId);
+                persistSourceRelation(scopeId, existing.getId(), sourceId, null);
                 persistTagsAndKeywords(scopeId, existing.getId(), metadataJson);
                 lintFindingService.resolvePageFindingsOnIngest(scopeId, existing.getId());
 
@@ -2405,7 +2406,7 @@ public class WriterAgent {
         }
     }
 
-    private void persistSourceRelation(Long scopeId, Long pageId, Long sourceId) {
+    private void persistSourceRelation(Long scopeId, Long pageId, Long sourceId, Long executionId) {
         WikiPageSourceDO existing = wikiPageSourceMapper.selectOne(
             new LambdaQueryWrapper<WikiPageSourceDO>()
                 .eq(WikiPageSourceDO::getScopeId, scopeId)
@@ -2417,7 +2418,13 @@ public class WriterAgent {
             relation.setScopeId(scopeId);
             relation.setPageId(pageId);
             relation.setSourceId(sourceId);
+            relation.setExecutionId(executionId);
             wikiPageSourceMapper.insert(relation);
+        } else if (executionId != null && !executionId.equals(existing.getExecutionId())) {
+            WikiPageSourceDO patch = new WikiPageSourceDO();
+            patch.setId(existing.getId());
+            patch.setExecutionId(executionId);
+            wikiPageSourceMapper.updateById(patch);
         }
     }
 

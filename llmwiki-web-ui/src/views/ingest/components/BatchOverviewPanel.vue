@@ -57,7 +57,7 @@ const canConfirmAll = computed(() => (props.batch?.awaitingCount ?? 0) > 0)
 const canPause = computed(() => props.batch?.status === 'active')
 const canResume = computed(() => props.batch?.status === 'paused')
 const canCancel = computed(() => props.batch?.status === 'active' || props.batch?.status === 'paused')
-const canDeprecate = computed(() => (props.batch?.completedCount ?? 0) > 0)
+const canDeprecate = computed(() => (props.batch?.status === 'completed' || props.batch?.status === 'cancelled') && (props.batch?.completedCount ?? 0) > 0)
 
 const modeLabel = computed(() => {
   const mode = props.detail?.mode

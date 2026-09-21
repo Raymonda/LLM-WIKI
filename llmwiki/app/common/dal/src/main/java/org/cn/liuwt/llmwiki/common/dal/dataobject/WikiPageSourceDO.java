@@ -12,5 +12,6 @@ public class WikiPageSourceDO {
     private Long scopeId;
     private Long pageId;
     private Long sourceId;
+    private Long executionId;
     private LocalDateTime createdAt;
 }

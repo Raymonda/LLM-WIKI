@@ -8,12 +8,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionStepDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.IngestBatchDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.ScopeDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageSourceDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionStepMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.IngestBatchMapper;
+import org.cn.liuwt.llmwiki.common.dal.mapper.ScopeMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageSourceMapper;
@@ -74,6 +76,7 @@ public class IngestBatchService {
     @Autowired private ExecutionStepMapper executionStepMapper;
     @Autowired private IngestBatchMapper batchMapper;
     @Autowired private SourceMapper sourceMapper;
+    @Autowired private ScopeMapper scopeMapper;
     @Autowired private ExecutionTracker executionTracker;
     @Autowired private IngestService ingestService;
     @Autowired private IngestDispatcher ingestDispatcher;
@@ -153,7 +156,7 @@ public class IngestBatchService {
         batch.setScopeId(scopeId);
         batch.setUserId(userId);
         batch.setStatus("active");
-        batch.setMode("auto".equals(mode) ? "auto" : "review");
+        batch.setMode(resolveBatchMode(scopeId, mode));
         batch.setTotalCount(accepted.size());
         batch.setGuidance(guidance);
         batchMapper.insert(batch);
@@ -168,6 +171,20 @@ public class IngestBatchService {
         }
 
         return new IngestBatchCreateInfo(batch.getId(), accepted.size(), skipped.size(), skipped, warnings);
+    }
+
+    private String resolveBatchMode(Long scopeId, String requestedMode) {
+        if ("auto".equals(requestedMode) || "review".equals(requestedMode)) {
+            return requestedMode;
+        }
+        if (requestedMode != null) {
+            return "review";
+        }
+        ScopeDO scope = scopeMapper.selectById(scopeId);
+        if (scope != null && "auto".equals(scope.getIngestMode())) {
+            return "auto";
+        }
+        return "review";
     }
 
     public int confirmItems(Long batchId, List<Long> executionIds) {
@@ -490,22 +507,25 @@ public class IngestBatchService {
         if (batch == null) {
             throw new BusinessException(ErrorCode.INGEST_BATCH_NOT_FOUND);
         }
+        if (!"completed".equals(batch.getStatus()) && !"cancelled".equals(batch.getStatus())) {
+            throw new BusinessException(ErrorCode.INGEST_BATCH_INVALID_STATUS);
+        }
         Long scopeId = batch.getScopeId();
         List<ExecutionDO> items = executionMapper.selectList(new LambdaQueryWrapper<ExecutionDO>()
             .eq(ExecutionDO::getBatchId, batchId));
-        List<Long> sourceIds = items.stream()
-            .map(ExecutionDO::getSourceId)
+        List<Long> executionIds = items.stream()
+            .map(ExecutionDO::getId)
             .filter(Objects::nonNull)
             .distinct()
             .toList();
-        if (sourceIds.isEmpty()) {
+        if (executionIds.isEmpty()) {
             notifyBatchOutputsDeprecated(userId, batchId, scopeId, 0, 0);
             return Map.<String, Object>of("deprecatedPages", 0, "skippedPages", 0);
         }
         List<WikiPageSourceDO> links = wikiPageSourceMapper.selectList(
             new LambdaQueryWrapper<WikiPageSourceDO>()
                 .eq(WikiPageSourceDO::getScopeId, scopeId)
-                .in(WikiPageSourceDO::getSourceId, sourceIds));
+                .in(WikiPageSourceDO::getExecutionId, executionIds));
         List<Long> pageIds = links.stream()
             .map(WikiPageSourceDO::getPageId)
             .filter(Objects::nonNull)
