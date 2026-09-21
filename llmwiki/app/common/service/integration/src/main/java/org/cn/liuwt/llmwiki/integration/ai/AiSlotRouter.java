@@ -5,7 +5,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -16,15 +15,6 @@ public class AiSlotRouter {
 
     private final AiProviderRegistry registry;
     private final AiRuntimeConfigHolder holder;
-
-    @Value("${spring.ai.openai.base-url:https://dashscope.aliyuncs.com/compatible-mode}")
-    private String legacyBaseUrl;
-
-    @Value("${spring.ai.openai.api-key:}")
-    private String legacyApiKey;
-
-    @Value("${spring.ai.openai.chat.options.model:}")
-    private String legacyModel;
 
     public AiSlotRouter(AiProviderRegistry registry, AiRuntimeConfigHolder holder) {
         this.registry = registry;
@@ -54,7 +44,7 @@ public class AiSlotRouter {
             return "main".equals(slotName) ? null : getModel("main");
         }
 
-        String effectiveModel = StringUtils.hasText(slot.model()) ? slot.model() : legacyModel;
+        String effectiveModel = slot.model();
         if (StringUtils.hasText(effectiveModel) && baseModel instanceof OpenAiChatModel openAiModel) {
             return openAiModel.mutate()
                 .defaultOptions(OpenAiChatOptions.builder().model(effectiveModel).build())
@@ -62,7 +52,7 @@ public class AiSlotRouter {
         }
 
         if (!StringUtils.hasText(effectiveModel)) {
-            log.warn("Slot '{}' has no model configured and no legacy model fallback; calls will fail until configured", slotName);
+            log.warn("Slot '{}' has no model configured; calls will fail until configured", slotName);
         }
         return baseModel;
     }
@@ -94,21 +84,17 @@ public class AiSlotRouter {
     public Endpoint getEndpoint(String slotName) {
         AiRuntimeConfig cfg = holder.get();
         if (cfg.isEmpty()) {
-            return new Endpoint(legacyBaseUrl, legacyApiKey, legacyModel);
+            return null;
         }
 
         AiRuntimeConfig.SlotEntry slot = cfg.slots().get(slotName);
         if (slot == null) {
-            return "main".equals(slotName)
-                ? new Endpoint(legacyBaseUrl, legacyApiKey, legacyModel)
-                : getEndpoint("main");
+            return "main".equals(slotName) ? null : getEndpoint("main");
         }
         AiRuntimeConfig.ProviderEntry provider = registry.getProviderEntry(slot.provider());
         if (provider == null) {
             log.warn("Slot '{}' references unknown provider '{}', falling back", slotName, slot.provider());
-            return "main".equals(slotName)
-                ? new Endpoint(legacyBaseUrl, legacyApiKey, legacyModel)
-                : getEndpoint("main");
+            return "main".equals(slotName) ? null : getEndpoint("main");
         }
 
         return new Endpoint(provider.baseUrl(), provider.apiKey(), slot.model());
@@ -117,14 +103,14 @@ public class AiSlotRouter {
     public String resolveModel(String slotName) {
         AiRuntimeConfig cfg = holder.get();
         if (cfg.isEmpty()) {
-            return legacyModel;
+            return null;
         }
 
         AiRuntimeConfig.SlotEntry slot = cfg.slots().get(slotName);
         if (slot == null) {
-            return "main".equals(slotName) ? legacyModel : resolveModel("main");
+            return "main".equals(slotName) ? null : resolveModel("main");
         }
-        return StringUtils.hasText(slot.model()) ? slot.model() : legacyModel;
+        return StringUtils.hasText(slot.model()) ? slot.model() : null;
     }
 
     public boolean isMultiProviderMode() {
