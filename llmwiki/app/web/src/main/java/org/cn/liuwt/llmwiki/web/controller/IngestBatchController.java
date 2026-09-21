@@ -106,12 +106,28 @@ public class IngestBatchController {
         return Result.success(ingestBatchService.cancelItems(id, request != null ? request.getExecutionIds() : null));
     }
 
+    @PostMapping("/{id}/deprecate-outputs")
+    public Result<Map<String, Object>> deprecateOutputs(@PathVariable Long id) {
+        assertBatchWritable(ingestBatchService.getBatch(id));
+        return Result.success(ingestBatchService.deprecateBatchOutputs(id, jwtTokenProvider.getCurrentUserId()));
+    }
+
     private void assertBatchReadable(IngestBatchDO batch) {
         if (batch == null) {
             throw new BusinessException(ErrorCode.INGEST_BATCH_NOT_FOUND);
         }
         Long userId = jwtTokenProvider.getCurrentUserId();
         if (userId == null || !scopeService.canView(batch.getScopeId(), userId)) {
+            throw new BusinessException(ErrorCode.AUTH_ACCESS_DENIED);
+        }
+    }
+
+    private void assertBatchWritable(IngestBatchDO batch) {
+        if (batch == null) {
+            throw new BusinessException(ErrorCode.INGEST_BATCH_NOT_FOUND);
+        }
+        Long userId = jwtTokenProvider.getCurrentUserId();
+        if (userId == null || !scopeService.isOwnerOrAdmin(batch.getScopeId(), userId)) {
             throw new BusinessException(ErrorCode.AUTH_ACCESS_DENIED);
         }
     }

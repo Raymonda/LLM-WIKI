@@ -23,6 +23,7 @@ import org.cn.liuwt.llmwiki.facade.model.MergePagesRequest;
 import org.cn.liuwt.llmwiki.domain.model.wiki.WikiPageModel;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ScopeDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ScopeMapper;
+import org.cn.liuwt.llmwiki.domain.service.harness.LintFindingService;
 import org.cn.liuwt.llmwiki.domain.service.search.SearchService;
 import org.cn.liuwt.llmwiki.domain.service.system.ScopeService;
 import org.cn.liuwt.llmwiki.domain.service.system.SubscriptionService;
@@ -83,6 +84,9 @@ public class WikiController {
 
     @Autowired
     private BackgroundTaskService backgroundTaskService;
+
+    @Autowired
+    private LintFindingService lintFindingService;
 
     @GetMapping("/pages")
     public Result<List<WikiPageInfo>> listPages(@RequestParam(defaultValue = "1") int page,
@@ -540,6 +544,25 @@ public class WikiController {
     public Result<Void> undeprecatePage(@RequestParam Long pageId) {
         Long scopeId = jwtTokenProvider.getCurrentScopeId();
         wikiFileService.undeprecatePage(pageId, scopeId);
+        return Result.success();
+    }
+
+    @PostMapping("/page/{id}/report-issue")
+    public Result<Void> reportIssue(@PathVariable Long id, @RequestBody java.util.Map<String, String> body) {
+        Long scopeId = jwtTokenProvider.getCurrentScopeId();
+        Long userId = jwtTokenProvider.getCurrentUserId();
+        WikiPageModel page = wikiFileService.readPageById(id, scopeId);
+        if (page == null) {
+            return Result.failed(ErrorCode.WIKI_PAGE_NOT_FOUND);
+        }
+        String description = body != null ? body.get("description") : null;
+        if (description == null || description.isBlank()) {
+            return Result.failed(ErrorCode.INVALID_PARAM, "description");
+        }
+        lintFindingService.createFinding(scopeId, null, "user_report", "medium",
+            "用户报告: " + page.getTitle(), description.trim(), page.getPath(), page.getId(),
+            Map.<String, Object>of("reportedBy", String.valueOf(userId)));
+        wikiFileService.recalcPageHealthStatus(scopeId, id);
         return Result.success();
     }
 

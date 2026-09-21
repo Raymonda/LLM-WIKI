@@ -9,10 +9,14 @@ import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionStepDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.IngestBatchDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.WikiPageSourceDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionStepMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.IngestBatchMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
+import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageMapper;
+import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageSourceMapper;
 import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
 import org.cn.liuwt.llmwiki.common.util.exception.ErrorCode;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
@@ -22,7 +26,9 @@ import org.cn.liuwt.llmwiki.domain.service.harness.baseline.ExecutionBaselineSer
 import org.cn.liuwt.llmwiki.domain.service.harness.eventlog.ExecutionEventLogService;
 import org.cn.liuwt.llmwiki.domain.service.harness.ingest.IngestStep;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
+import org.cn.liuwt.llmwiki.domain.service.system.NotificationService;
 import org.cn.liuwt.llmwiki.domain.service.wiki.SourceService;
+import org.cn.liuwt.llmwiki.domain.service.wiki.WikiFileServiceImpl;
 import org.cn.liuwt.llmwiki.facade.model.IngestBatchCreateInfo;
 import org.cn.liuwt.llmwiki.facade.model.IngestBatchDetailInfo;
 import org.cn.liuwt.llmwiki.facade.model.IngestBatchInfo;
@@ -76,6 +82,10 @@ public class IngestBatchService {
     @Autowired private SourceService sourceService;
     @Autowired private ExecutionEventLogService executionEventLogService;
     @Autowired private ExecutionBaselineService executionBaselineService;
+    @Autowired private WikiPageSourceMapper wikiPageSourceMapper;
+    @Autowired private WikiPageMapper wikiPageMapper;
+    @Autowired private WikiFileServiceImpl wikiFileService;
+    @Autowired private NotificationService notificationService;
 
     @Value("${llmwiki.ingest.batch.max-size:200}")
     private int maxBatchSize;
@@ -473,6 +483,57 @@ public class IngestBatchService {
         }
         log.info("Batch {} cancel-items: cancelled={}, skipped={}", batchId, cancelled, skipped);
         return Map.of("cancelled", cancelled, "skipped", skipped);
+    }
+
+    public Map<String, Object> deprecateBatchOutputs(Long batchId, Long userId) {
+        IngestBatchDO batch = getBatch(batchId);
+        if (batch == null) {
+            throw new BusinessException(ErrorCode.INGEST_BATCH_NOT_FOUND);
+        }
+        Long scopeId = batch.getScopeId();
+        List<ExecutionDO> items = executionMapper.selectList(new LambdaQueryWrapper<ExecutionDO>()
+            .eq(ExecutionDO::getBatchId, batchId));
+        List<Long> sourceIds = items.stream()
+            .map(ExecutionDO::getSourceId)
+            .filter(Objects::nonNull)
+            .distinct()
+            .toList();
+        if (sourceIds.isEmpty()) {
+            return Map.<String, Object>of("deprecatedPages", 0, "skippedPages", 0);
+        }
+        List<WikiPageSourceDO> links = wikiPageSourceMapper.selectList(
+            new LambdaQueryWrapper<WikiPageSourceDO>()
+                .eq(WikiPageSourceDO::getScopeId, scopeId)
+                .in(WikiPageSourceDO::getSourceId, sourceIds));
+        List<Long> pageIds = links.stream()
+            .map(WikiPageSourceDO::getPageId)
+            .filter(Objects::nonNull)
+            .distinct()
+            .toList();
+        int deprecated = 0;
+        int skipped = 0;
+        for (Long pageId : pageIds) {
+            WikiPageDO page = wikiPageMapper.selectById(pageId);
+            if (page == null || !scopeId.equals(page.getScopeId())
+                || "DEPRECATED".equals(page.getLifecycleStatus())
+                || "DELETED".equals(page.getLifecycleStatus())) {
+                skipped++;
+                continue;
+            }
+            try {
+                wikiFileService.deprecatePage(pageId, scopeId, "批次 #" + batchId + " 输出撤回");
+                deprecated++;
+            } catch (Exception e) {
+                log.warn("Failed to deprecate page {} for batch {}: {}", pageId, batchId, e.getMessage());
+                skipped++;
+            }
+        }
+        log.info("Batch {} deprecate-outputs: deprecated={}, skipped={}", batchId, deprecated, skipped);
+        notificationService.createPersonalNotification(userId, "batch_outputs_deprecated",
+            "批次输出已撤回",
+            "批次 #" + batchId + " 的产出页面已标记废弃 " + deprecated + " 篇，跳过 " + skipped + " 篇。仅标记废弃，原始文件仍保留。",
+            scopeId, null, null);
+        return Map.<String, Object>of("deprecatedPages", deprecated, "skippedPages", skipped);
     }
 
     private ExecutionStepModel toStepModel(ExecutionStepDO step) {
