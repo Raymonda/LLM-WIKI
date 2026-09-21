@@ -62,8 +62,8 @@ public class AdminBootstrap implements ApplicationRunner {
             LOGGER.warn("");
             LOGGER.warn("!!!! AI PROVIDER NOT CONFIGURED !!!!");
             LOGGER.warn("  AI features (Schema bootstrap, Ingest, Query, Lint) will NOT work.");
-            LOGGER.warn("  To fix: set AI_DASHSCOPE_API_KEY (or any OpenAI-compatible key) in .env");
-            LOGGER.warn("  Then restart: docker-compose restart app");
+            LOGGER.warn("  To fix: configure AI providers in System Settings -> General.");
+            LOGGER.warn("  Changes take effect immediately; no restart needed.");
             LOGGER.warn("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
             LOGGER.warn("");
         }

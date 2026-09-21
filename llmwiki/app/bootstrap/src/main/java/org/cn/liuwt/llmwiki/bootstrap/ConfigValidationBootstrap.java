@@ -1,7 +1,6 @@
 package org.cn.liuwt.llmwiki.bootstrap;
 
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.AiRuntimeConfigService;
-import org.cn.liuwt.llmwiki.integration.ai.AiProviderProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -21,13 +20,10 @@ public class ConfigValidationBootstrap implements ApplicationRunner {
     private static final Logger LOGGER = LoggerFactory.getLogger(ConfigValidationBootstrap.class);
 
     private final Environment environment;
-    private final AiProviderProperties aiProviderProperties;
     private final AiRuntimeConfigService aiRuntimeConfigService;
 
-    public ConfigValidationBootstrap(Environment environment, AiProviderProperties aiProviderProperties,
-                                     AiRuntimeConfigService aiRuntimeConfigService) {
+    public ConfigValidationBootstrap(Environment environment, AiRuntimeConfigService aiRuntimeConfigService) {
         this.environment = environment;
-        this.aiProviderProperties = aiProviderProperties;
         this.aiRuntimeConfigService = aiRuntimeConfigService;
     }
 
@@ -40,10 +36,11 @@ public class ConfigValidationBootstrap implements ApplicationRunner {
             LOGGER.warn("Failed to check DB AI runtime config, treating as not configured", e);
             dbConfigured = false;
         }
+        if (!dbConfigured) {
+            LOGGER.warn("AI 模型未配置：请在 系统设置 → 通用设置 完成配置（应用正常启动，配置后即时生效）");
+        }
         List<String> violations = StartupConfigValidator.validate(
-                environment.getProperty("llmwiki.jwt.secret"),
-                environment.getProperty("spring.ai.openai.api-key"),
-                aiProviderProperties, dbConfigured);
+                environment.getProperty("llmwiki.jwt.secret"));
         if (violations.isEmpty()) {
             LOGGER.info("Startup config validation passed");
             return;

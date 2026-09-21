@@ -12,7 +12,6 @@ import org.cn.liuwt.llmwiki.facade.model.AiRuntimeConfigDtos.AiRuntimeConfigView
 import org.cn.liuwt.llmwiki.facade.model.AiRuntimeConfigDtos.AiSlotInput;
 import org.cn.liuwt.llmwiki.facade.model.AiRuntimeConfigDtos.AiSlotView;
 import org.cn.liuwt.llmwiki.integration.ai.AiConfigChangedEvent;
-import org.cn.liuwt.llmwiki.integration.ai.AiProviderProperties;
 import org.cn.liuwt.llmwiki.integration.ai.AiRuntimeConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
@@ -110,24 +109,9 @@ class AiRuntimeConfigServiceTest {
     }
 
     @Test
-    void shouldFallbackToYamlWhenDbEmptyWhenResolvingEffective() {
+    void shouldReturnEmptyWhenResolvingEffectiveWithEmptyDb() {
         Harness h = harness();
-        AiProviderProperties props = new AiProviderProperties();
-        AiProviderProperties.ProviderConfig dash = new AiProviderProperties.ProviderConfig();
-        dash.setBaseUrl("https://dashscope.aliyuncs.com/compatible-mode");
-        dash.setApiKey("sk-yaml");
-        props.getProviders().put("dash", dash);
-        AiProviderProperties.SlotConfig main = new AiProviderProperties.SlotConfig();
-        main.setProvider("dash");
-        main.setModel("qwen-max");
-        main.setMultimodal(true);
-        props.getSlots().put("main", main);
-
-        AiRuntimeConfig cfg = h.svc().resolveEffective(props);
-        assertFalse(cfg.isEmpty());
-        assertEquals("sk-yaml", cfg.providers().get("dash").apiKey());
-        assertEquals("qwen-max", cfg.slots().get("main").model());
-        assertTrue(cfg.slots().get("main").multimodal());
+        assertTrue(h.svc().resolveEffective().isEmpty());
     }
 
     @Test

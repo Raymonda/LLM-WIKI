@@ -14,7 +14,6 @@ import org.cn.liuwt.llmwiki.facade.model.AiRuntimeConfigDtos.AiRuntimeConfigView
 import org.cn.liuwt.llmwiki.facade.model.AiRuntimeConfigDtos.AiSlotInput;
 import org.cn.liuwt.llmwiki.facade.model.AiRuntimeConfigDtos.AiSlotView;
 import org.cn.liuwt.llmwiki.integration.ai.AiConfigChangedEvent;
-import org.cn.liuwt.llmwiki.integration.ai.AiProviderProperties;
 import org.cn.liuwt.llmwiki.integration.ai.AiRuntimeConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -100,21 +99,8 @@ public class AiRuntimeConfigService {
         return row != null && row.getConfigValue() != null && !row.getConfigValue().isBlank();
     }
 
-    public AiRuntimeConfig resolveEffective(AiProviderProperties yamlProps) {
-        AiRuntimeConfig db = readFromDb();
-        if (!db.isEmpty()) {
-            return db;
-        }
-        if (yamlProps != null && yamlProps.isMultiProviderEnabled()) {
-            Map<String, AiRuntimeConfig.ProviderEntry> providers = new LinkedHashMap<>();
-            yamlProps.getProviders().forEach((name, p) ->
-                providers.put(name, new AiRuntimeConfig.ProviderEntry(p.getBaseUrl(), p.getApiKey(), true)));
-            Map<String, AiRuntimeConfig.SlotEntry> slots = new LinkedHashMap<>();
-            yamlProps.getSlots().forEach((slot, s) ->
-                slots.put(slot, new AiRuntimeConfig.SlotEntry(s.getProvider(), s.getModel(), s.isMultimodal())));
-            return new AiRuntimeConfig(providers, slots);
-        }
-        return AiRuntimeConfig.empty();
+    public AiRuntimeConfig resolveEffective() {
+        return readFromDb();
     }
 
     public String resolveApiKey(String providerName, String inlineKey) {
