@@ -52,9 +52,6 @@ public class ParserAgent {
     @Autowired
     private AiSlotRouter slotRouter;
 
-    @Value("${spring.ai.openai.api-key:}")
-    private String dashscopeApiKey;
-
     @Value("${llmwiki.ai.multimodal:false}")
     private boolean multimodalMainEnabled;
 
@@ -95,8 +92,12 @@ public class ParserAgent {
             String ocrModel = ocrProperties.getModel();
             AiSlotRouter.Endpoint ocrEndpoint = slotRouter.getEndpoint("ocr");
             AiSlotRouter.Endpoint diagramEndpoint = slotRouter.getEndpoint("diagram");
-            String apiKey = ocrEndpoint.apiKey() != null && !ocrEndpoint.apiKey().isBlank()
-                ? ocrEndpoint.apiKey() : dashscopeApiKey;
+            String apiKey = ocrEndpoint != null && ocrEndpoint.apiKey() != null && !ocrEndpoint.apiKey().isBlank()
+                ? ocrEndpoint.apiKey() : null;
+            if (apiKey == null) {
+                log.warn("OCR endpoint apiKey not configured; OCR disabled for this run");
+                ocrEnable = false;
+            }
             boolean needsAssets = multimodalMain || diagramEnable
                 || "pdf".equalsIgnoreCase(format) || "docx".equalsIgnoreCase(format)
                 || "doc".equalsIgnoreCase(format) || "pptx".equalsIgnoreCase(format)
@@ -126,13 +127,21 @@ public class ParserAgent {
             } catch (IOException e) {
                 throw new RuntimeException("准备本地解析临时文件失败: " + e.getMessage(), e);
             }
-            String diagramApiKey = diagramEndpoint.apiKey() != null && !diagramEndpoint.apiKey().isBlank()
+            String diagramApiKey = diagramEndpoint != null && diagramEndpoint.apiKey() != null && !diagramEndpoint.apiKey().isBlank()
                 ? diagramEndpoint.apiKey() : apiKey;
+            if (diagramApiKey == null) {
+                log.warn("Diagram endpoint apiKey not configured; diagram disabled for this run");
+                diagramEnable = false;
+            }
 
             long timeout = diagramEnable ? Math.max(120, diagramProperties.getTimeoutMs() / 1000) : 120;
             PythonProcessRunner runner = new PythonProcessRunner(timeout);
-            runner.setOcrBaseUrl(ocrEndpoint.baseUrl());
-            runner.setDiagramBaseUrl(diagramEndpoint.baseUrl());
+            if (ocrEndpoint != null) {
+                runner.setOcrBaseUrl(ocrEndpoint.baseUrl());
+            }
+            if (diagramEndpoint != null) {
+                runner.setDiagramBaseUrl(diagramEndpoint.baseUrl());
+            }
 
             String jsonOutput;
             try {
