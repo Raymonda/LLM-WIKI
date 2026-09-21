@@ -50,10 +50,6 @@ public class LlmClient {
 
     private ChatClient chatClient;
 
-    private static final String PLACEHOLDER_KEY = "placeholder-not-configured";
-
-    private boolean apiKeyValid;
-
     @Value("${llmwiki.ai.retry.max-attempts:3}")
     private int maxRetryAttempts;
 
@@ -84,28 +80,6 @@ public class LlmClient {
     @Autowired(required = false)
     private ContextBudgetManager contextBudgetManager;
 
-    @Autowired(required = false)
-    public void setChatModel(ChatModel chatModel) {
-        if (chatModel != null) {
-            this.legacyChatModel = chatModel;
-        }
-    }
-
-    private String apiKey;
-
-    @Value("${spring.ai.openai.api-key:}")
-    public void setApiKey(String apiKey) {
-        this.apiKey = apiKey;
-        this.apiKeyValid = StringUtils.hasText(apiKey) && !PLACEHOLDER_KEY.equals(apiKey);
-    }
-
-    @Value("${spring.ai.openai.chat.options.model:}")
-    private String modelName;
-
-    @Value("${spring.ai.openai.base-url:https://dashscope.aliyuncs.com/compatible-mode}")
-    private String baseUrl;
-
-    private ChatModel legacyChatModel;
     private ChatModel queryMultimodalChatModel;
     private ChatModel deepAnalysisChatModel;
     private ChatModel deepMultimodalChatModel;
@@ -125,29 +99,21 @@ public class LlmClient {
             ChatModel mainModel = slotRouter.getModel("main");
             if (mainModel != null) {
                 this.chatClient = ChatClient.builder(mainModel).build();
-                this.apiKeyValid = true;
                 log.info("LlmClient applied runtime config, main slot active");
             } else {
                 this.chatClient = null;
-                this.apiKeyValid = false;
                 log.warn("Runtime AI config present but 'main' slot unavailable");
             }
             this.queryMultimodalChatModel = slotRouter.getQueryMultimodalModel();
             this.deepAnalysisChatModel = slotRouter.getModel("deep-analysis");
             this.deepMultimodalChatModel = slotRouter.getDeepMultimodalModel();
         } else {
-            this.apiKeyValid = StringUtils.hasText(apiKey) && !PLACEHOLDER_KEY.equals(apiKey);
-            initLegacy();
+            this.chatClient = null;
+            this.queryMultimodalChatModel = null;
+            this.deepAnalysisChatModel = null;
+            this.deepMultimodalChatModel = null;
+            log.info("No AI runtime config in DB; AI features disabled until configured");
         }
-    }
-
-    private void initLegacy() {
-        if (legacyChatModel != null) {
-            this.chatClient = ChatClient.builder(legacyChatModel).build();
-        }
-        this.queryMultimodalChatModel = null;
-        this.deepAnalysisChatModel = null;
-        this.deepMultimodalChatModel = null;
     }
 
     @PreDestroy
@@ -168,7 +134,7 @@ public class LlmClient {
     }
 
     public boolean isAvailable() {
-        return chatClient != null && apiKeyValid;
+        return chatClient != null;
     }
 
     public ChatModel getQueryMultimodalChatModel() {
@@ -206,7 +172,7 @@ public class LlmClient {
 
     public Flux<String> streamChat(String systemPrompt, String userMessage) {
         if (chatClient == null) {
-            throw new IllegalStateException("ChatClient not available");
+            throw new IllegalStateException("AI 模型未配置，请管理员在「系统设置 → 通用设置」中完成模型配置后重试。");
         }
         ensureModelConfigured("main");
         java.util.concurrent.atomic.AtomicInteger charCount = new java.util.concurrent.atomic.AtomicInteger(0);
@@ -227,7 +193,7 @@ public class LlmClient {
 
     public Flux<String> streamChat(String userMessage) {
         if (chatClient == null) {
-            throw new IllegalStateException("ChatClient not available");
+            throw new IllegalStateException("AI 模型未配置，请管理员在「系统设置 → 通用设置」中完成模型配置后重试。");
         }
         ensureModelConfigured("main");
         java.util.concurrent.atomic.AtomicInteger charCount = new java.util.concurrent.atomic.AtomicInteger(0);
@@ -273,7 +239,7 @@ public class LlmClient {
     private String chatWithRetry(String systemPrompt, String userMessage,
                                  long effectiveTimeoutMs, int effectiveMaxAttempts) {
         if (chatClient == null) {
-            throw new IllegalStateException("ChatClient not available");
+            throw new IllegalStateException("AI 模型未配置，请管理员在「系统设置 → 通用设置」中完成模型配置后重试。");
         }
         ensureModelConfigured("main");
 
@@ -404,7 +370,7 @@ public class LlmClient {
     }
 
     private void ensureModelConfigured(String slotName) {
-        ensureModelConfigured(slotRouter != null ? slotRouter.resolveModel(slotName) : modelName, slotName);
+        ensureModelConfigured(slotRouter != null ? slotRouter.resolveModel(slotName) : null, slotName);
     }
 
     private void ensureModelConfigured(String resolvedModel, String slotName) {
@@ -416,7 +382,7 @@ public class LlmClient {
 
     private String chatWithRetryMultimodal(String systemPrompt, String userText, List<MultimodalImageInput> images) {
         if (!isAvailable()) {
-            throw new IllegalStateException("ChatClient not available or API key invalid");
+            throw new IllegalStateException("AI 模型未配置，请管理员在「系统设置 → 通用设置」中完成模型配置后重试。");
         }
 
         ContextBudgetManager.ContextBudgetResult budgetResult = applyBudgetSafely(systemPrompt, userText);
@@ -424,9 +390,12 @@ public class LlmClient {
         String effectiveUserText = budgetResult != null ? budgetResult.userMessage() : userText;
 
         AiSlotRouter.Endpoint endpoint = slotRouter.getEndpoint("multimodal");
+        if (endpoint == null || !StringUtils.hasText(endpoint.apiKey())) {
+            throw new IllegalStateException("AI 模型未配置，请管理员在「系统设置 → 通用设置」中完成模型配置后重试。");
+        }
         String resolvedApiKey = endpoint.apiKey();
         String chatUrl = endpoint.baseUrl() + "/v1/chat/completions";
-        String resolvedModel = StringUtils.hasText(endpoint.model()) ? endpoint.model() : modelName;
+        String resolvedModel = endpoint.model();
         ensureModelConfigured(resolvedModel, "multimodal");
 
         Throwable lastException = null;

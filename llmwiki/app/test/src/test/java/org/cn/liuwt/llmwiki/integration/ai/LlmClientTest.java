@@ -25,7 +25,6 @@ class LlmClientTest {
     void shouldFailFastWithGuidanceWhenMultimodalModelNotConfigured() {
         LlmClient client = new LlmClient();
         inject(client, "chatClient", mock(ChatClient.class));
-        inject(client, "apiKeyValid", true);
         AiSlotRouter router = mock(AiSlotRouter.class);
         when(router.getEndpoint("multimodal"))
             .thenReturn(new AiSlotRouter.Endpoint("https://x", "sk-y", ""));
@@ -33,6 +32,17 @@ class LlmClientTest {
         IllegalStateException ex = assertThrows(IllegalStateException.class,
             () -> client.chatMultimodal("s", "u", List.of(new LlmClient.MultimodalImageInput("image/png", "AAAA"))));
         assertTrue(ex.getMessage().contains("multimodal"));
+    }
+
+    @Test
+    void shouldReportUnavailableWhenDbConfigEmpty() {
+        LlmClient client = new LlmClient();
+        AiRuntimeConfigHolder holder = mock(AiRuntimeConfigHolder.class);
+        when(holder.get()).thenReturn(AiRuntimeConfig.empty());
+        inject(client, "configHolder", holder);
+        inject(client, "slotRouter", mock(AiSlotRouter.class));
+        client.applyRuntimeConfig();
+        assertFalse(client.isAvailable());
     }
 
     private static void inject(Object target, String field, Object value) {
