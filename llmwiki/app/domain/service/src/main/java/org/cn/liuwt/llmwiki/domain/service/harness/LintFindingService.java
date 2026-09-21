@@ -75,6 +75,9 @@ public class LintFindingService {
             existingWrapper.eq(LintFindingDO::getAssetId, assetId);
         } else {
             existingWrapper.isNull(LintFindingDO::getAssetId);
+            if (pagePath != null && !pagePath.isBlank()) {
+                existingWrapper.eq(LintFindingDO::getPagePath, pagePath);
+            }
         }
         LintFindingDO existing = lintFindingMapper.selectOne(existingWrapper);
         if (existing != null) {
@@ -105,6 +108,9 @@ public class LintFindingService {
             dismissedWrapper.eq(LintFindingDO::getAssetId, assetId);
         } else {
             dismissedWrapper.isNull(LintFindingDO::getAssetId);
+            if (pagePath != null && !pagePath.isBlank()) {
+                dismissedWrapper.eq(LintFindingDO::getPagePath, pagePath);
+            }
         }
         dismissedWrapper.orderByDesc(LintFindingDO::getId).last("LIMIT 1");
         LintFindingDO dismissed = lintFindingMapper.selectOne(dismissedWrapper);

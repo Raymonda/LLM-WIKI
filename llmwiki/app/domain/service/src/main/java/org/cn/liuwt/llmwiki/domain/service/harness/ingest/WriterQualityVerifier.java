@@ -259,9 +259,12 @@ public class WriterQualityVerifier {
         }
     }
 
+    static String entityPagePath(String entityName) {
+        return "pages/" + entityName.replace("/", "-").replace("\\", "-") + ".md";
+    }
+
     private String readEntityPageContent(String scopeIdStr, String entityName) {
-        String pagePath = "pages/" + entityName.replace("/", "-").replace("\\", "-") + ".md";
-        return readPageContent(scopeIdStr, pagePath);
+        return readPageContent(scopeIdStr, entityPagePath(entityName));
     }
 
     private String readPageContent(String scopeIdStr, String filePath) {

@@ -7,6 +7,7 @@ import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.WikiPageMapper;
 import org.cn.liuwt.llmwiki.domain.model.harness.LintRulesConfig;
 import org.cn.liuwt.llmwiki.domain.model.harness.SchemaPatchModel;
+import org.cn.liuwt.llmwiki.domain.service.harness.LintFindingService;
 import org.cn.liuwt.llmwiki.domain.service.harness.conflict.ConflictRoutingService;
 import org.cn.liuwt.llmwiki.domain.service.harness.conflict.ContentDuplicateDetector;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.AsyncSchemaPatchService;
@@ -15,6 +16,7 @@ import org.cn.liuwt.llmwiki.domain.service.harness.governance.SchemaInjector;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.parser.SchemaSection6Parser;
 import org.cn.liuwt.llmwiki.domain.service.harness.LinkWritingService;
 import org.cn.liuwt.llmwiki.domain.service.search.SearchService;
+import org.cn.liuwt.llmwiki.domain.service.wiki.WikiFileServiceImpl;
 import org.cn.liuwt.llmwiki.integration.ai.LlmClient;
 import org.cn.liuwt.llmwiki.integration.storage.StorageProvider;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -26,8 +28,10 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -77,6 +81,12 @@ public class CompletionAgent {
 
     @Autowired
     private SearchService searchService;
+
+    @Autowired
+    private LintFindingService lintFindingService;
+
+    @Autowired
+    private WikiFileServiceImpl wikiFileService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -194,10 +204,60 @@ public class CompletionAgent {
             if (report.hasCriticalIssues()) {
                 log.warn("CompletionAgent: quality verification found {} critical issues. scopeId={}",
                     report.criticalCount(), context.getScopeId());
+                persistQualityFindings(context, report);
             }
         } catch (Exception e) {
             log.warn("CompletionAgent: quality verification failed (non-blocking): {}", e.getMessage());
         }
+    }
+
+    void persistQualityFindings(IngestContext context, WriterQualityVerifier.VerificationReport report) {
+        Long scopeId = context.getScopeId();
+        Long executionId = context.getExecutionId();
+        Set<Long> affectedPageIds = new HashSet<>();
+        for (WriterQualityVerifier.QualityIssue issue : report.getCriticalIssues()) {
+            try {
+                Long pageId = resolvePageId(scopeId, issue.pagePath());
+                Map<String, Object> extra = new HashMap<>();
+                if (issue.category() != null) {
+                    extra.put("category", issue.category());
+                }
+                if (issue.entityName() != null) {
+                    extra.put("entityName", issue.entityName());
+                }
+                String title = "写入质检 [" + (issue.category() != null ? issue.category() : "unknown") + "]"
+                    + (issue.entityName() != null ? issue.entityName() : "");
+                String pagePath = issue.pagePath() != null ? issue.pagePath()
+                    : (issue.entityName() != null ? WriterQualityVerifier.entityPagePath(issue.entityName()) : null);
+                lintFindingService.createFinding(scopeId, executionId, "ingest_quality", "high",
+                    title, issue.description(), pagePath, pageId, extra);
+                if (pageId != null) {
+                    affectedPageIds.add(pageId);
+                }
+            } catch (Exception e) {
+                log.warn("CompletionAgent: persist quality finding failed (non-blocking): {}", e.getMessage());
+            }
+        }
+        for (Long pageId : affectedPageIds) {
+            try {
+                wikiFileService.recalcPageHealthStatus(scopeId, pageId);
+            } catch (Exception e) {
+                log.warn("CompletionAgent: recalc page health failed (non-blocking): pageId={}, error={}",
+                    pageId, e.getMessage());
+            }
+        }
+    }
+
+    private Long resolvePageId(Long scopeId, String pagePath) {
+        if (pagePath == null || pagePath.isBlank()) {
+            return null;
+        }
+        WikiPageDO page = wikiPageMapper.selectOne(
+            new LambdaQueryWrapper<WikiPageDO>()
+                .eq(WikiPageDO::getScopeId, scopeId)
+                .eq(WikiPageDO::getFilePath, pagePath)
+        );
+        return page != null ? page.getId() : null;
     }
 
     private void reSyncIndex(IngestContext context) {
