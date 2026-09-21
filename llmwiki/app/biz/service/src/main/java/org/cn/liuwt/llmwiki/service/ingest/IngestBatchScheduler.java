@@ -437,18 +437,23 @@ public class IngestBatchScheduler {
                 return;
             }
             ScopeDO scope = scopeMapper.selectById(batch.getScopeId());
-            if (scope == null || Boolean.TRUE.equals(scope.getAutoSuspended())) {
+            if (scope == null) {
                 return;
             }
             long pct = Math.round(failed * 100.0 / total);
             String reason = "批次 #" + batch.getId() + " 失败率 " + pct + "%（" + failed + "/" + total + "），自动确认已熔断";
-            scope.setAutoSuspended(true);
-            scope.setAutoSuspendedReason(reason);
-            scopeMapper.updateById(scope);
+            int updated = scopeMapper.update(null, new LambdaUpdateWrapper<ScopeDO>()
+                    .eq(ScopeDO::getId, batch.getScopeId())
+                    .and(w -> w.eq(ScopeDO::getAutoSuspended, false).or().isNull(ScopeDO::getAutoSuspended))
+                    .set(ScopeDO::getAutoSuspended, true)
+                    .set(ScopeDO::getAutoSuspendedReason, reason));
+            if (updated == 0) {
+                return;
+            }
             notificationService.createPersonalNotification(scope.getOwnerId(), "auto_mode_suspended",
                 "自动确认已熔断", reason + "。如需恢复，请在项目设置中重新选择摄入模式。", batch.getScopeId(), null, null);
         } catch (Exception e) {
-            log.warn("maybeSuspendAutoMode failed for batch {}: {}", batch.getId(), e.getMessage());
+            log.warn("maybeSuspendAutoMode failed: batchId={}", batch.getId(), e);
         }
     }
 

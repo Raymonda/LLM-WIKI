@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -32,7 +33,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
@@ -61,19 +62,20 @@ class AutoSuspendCircuitBreakerTest {
     }
 
     @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
     void shouldSuspendWhenFailureRateExceeds() {
         stubSettlement(batch("auto", 10), items(6, 4));
         when(scopeMapper.selectById(10L)).thenReturn(scope(false));
+        when(scopeMapper.update(isNull(), ArgumentMatchers.<LambdaUpdateWrapper<ScopeDO>>any())).thenReturn(1);
 
         scheduler.handleBatchSettlement(trigger());
 
-        ArgumentCaptor<ScopeDO> captor = ArgumentCaptor.forClass(ScopeDO.class);
-        verify(scopeMapper).updateById(captor.capture());
-        assertThat(captor.getValue().getAutoSuspended()).isTrue();
-        assertThat(captor.getValue().getAutoSuspendedReason())
-            .contains("批次 #9").contains("40%（4/10）");
+        ArgumentCaptor<LambdaUpdateWrapper<ScopeDO>> captor =
+            ArgumentCaptor.forClass((Class) LambdaUpdateWrapper.class);
+        verify(scopeMapper).update(isNull(), captor.capture());
+        assertThat(captor.getValue().getSqlSet()).contains("auto_suspended");
         verify(notificationService).createPersonalNotification(eq(7L), eq("auto_mode_suspended"),
-            any(), contains("批次 #9"), eq(10L), isNull(), isNull());
+            any(), argThat(c -> c.contains("批次 #9") && c.contains("40%（4/10）")), eq(10L), isNull(), isNull());
     }
 
     @Test
@@ -82,7 +84,7 @@ class AutoSuspendCircuitBreakerTest {
 
         scheduler.handleBatchSettlement(trigger());
 
-        verify(scopeMapper, never()).updateById(any(ScopeDO.class));
+        verify(scopeMapper, never()).update(isNull(), ArgumentMatchers.<LambdaUpdateWrapper<ScopeDO>>any());
         verify(notificationService, never()).createPersonalNotification(any(), eq("auto_mode_suspended"),
             any(), any(), any(), any(), any());
     }
@@ -93,7 +95,7 @@ class AutoSuspendCircuitBreakerTest {
 
         scheduler.handleBatchSettlement(trigger());
 
-        verify(scopeMapper, never()).updateById(any(ScopeDO.class));
+        verify(scopeMapper, never()).update(isNull(), ArgumentMatchers.<LambdaUpdateWrapper<ScopeDO>>any());
         verify(notificationService, never()).createPersonalNotification(any(), eq("auto_mode_suspended"),
             any(), any(), any(), any(), any());
     }
@@ -104,7 +106,7 @@ class AutoSuspendCircuitBreakerTest {
 
         scheduler.handleBatchSettlement(trigger());
 
-        verify(scopeMapper, never()).updateById(any(ScopeDO.class));
+        verify(scopeMapper, never()).update(isNull(), ArgumentMatchers.<LambdaUpdateWrapper<ScopeDO>>any());
         verify(notificationService, never()).createPersonalNotification(any(), eq("auto_mode_suspended"),
             any(), any(), any(), any(), any());
     }
@@ -115,7 +117,7 @@ class AutoSuspendCircuitBreakerTest {
 
         scheduler.handleBatchSettlement(trigger());
 
-        verify(scopeMapper, never()).updateById(any(ScopeDO.class));
+        verify(scopeMapper, never()).update(isNull(), ArgumentMatchers.<LambdaUpdateWrapper<ScopeDO>>any());
         verify(notificationService, never()).createPersonalNotification(any(), eq("auto_mode_suspended"),
             any(), any(), any(), any(), any());
     }
@@ -127,7 +129,7 @@ class AutoSuspendCircuitBreakerTest {
 
         scheduler.handleBatchSettlement(trigger());
 
-        verify(scopeMapper, never()).updateById(any(ScopeDO.class));
+        verify(scopeMapper).update(isNull(), ArgumentMatchers.<LambdaUpdateWrapper<ScopeDO>>any());
         verify(notificationService, never()).createPersonalNotification(any(), eq("auto_mode_suspended"),
             any(), any(), any(), any(), any());
     }
