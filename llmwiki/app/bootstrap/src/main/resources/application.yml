@@ -24,8 +24,15 @@ spring:
     baseline-version: 1
 
   ai:
+    # 关闭全部 Spring AI OpenAI 自动配置：模型由 DB 配置手动构建，无 key 时不得 fail-fast
     model:
       chat: none
+      embedding: none
+      image: none
+      moderation: none
+      audio:
+        speech: none
+        transcription: none
     mcp:
       server:
         name: llmwiki
