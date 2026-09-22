@@ -22,6 +22,8 @@ import org.cn.liuwt.llmwiki.domain.service.harness.governance.RateLimitService;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.SchemaInjector;
 import org.cn.liuwt.llmwiki.domain.service.search.SearchService;
 import org.cn.liuwt.llmwiki.facade.model.SearchResultInfo;
+import org.cn.liuwt.llmwiki.integration.ai.AiConfigChangedEvent;
+import org.cn.liuwt.llmwiki.integration.ai.AiSlotRouter;
 import org.cn.liuwt.llmwiki.integration.ai.LlmClient;
 import org.cn.liuwt.llmwiki.integration.ai.TokenUsageContext;
 import jakarta.annotation.PostConstruct;
@@ -39,6 +41,7 @@ import org.springframework.util.MimeType;
 import org.springframework.util.MimeTypeUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.SignalType;
@@ -75,8 +78,8 @@ public class AgentRunner {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    @Autowired(required = false)
-    private ChatModel chatModel;
+    @Autowired
+    private AiSlotRouter slotRouter;
 
     @Autowired(required = false)
     private LlmClient LlmClient;
@@ -150,33 +153,55 @@ public class AgentRunner {
 
     @PostConstruct
     public void init() {
-        if (chatModel != null) {
-            this.queryReadOnlyClient = ChatClient.builder(chatModel)
+        rebuildClients();
+    }
+
+    @EventListener(AiConfigChangedEvent.class)
+    public void onAiConfigChanged(AiConfigChangedEvent event) {
+        rebuildClients();
+    }
+
+    private void rebuildClients() {
+        ChatModel mainModel = slotRouter.getModel("main");
+        if (mainModel == null) {
+            this.queryReadOnlyClient = null;
+            this.queryReadWriteClient = null;
+            this.noToolsClient = null;
+            this.deepQueryReadOnlyClient = null;
+            this.deepQueryReadWriteClient = null;
+            this.deepNoToolsClient = null;
+            log.warn("AI main model not available; query clients cleared until configured");
+            return;
+        }
+        this.queryReadOnlyClient = ChatClient.builder(mainModel)
+            .defaultTools(readFileTool, readRawSourceTool, getSourceInfoTool,
+                searchWikiTool, listPagesTool, getRelatedPagesTool, todoTool)
+            .build();
+        this.queryReadWriteClient = ChatClient.builder(mainModel)
+            .defaultTools(readFileTool, readRawSourceTool, getSourceInfoTool,
+                searchWikiTool, listPagesTool, getRelatedPagesTool, todoTool,
+                writeFileTool, updateLinksTool)
+            .build();
+        this.noToolsClient = ChatClient.builder(mainModel).build();
+        log.info("Query ChatClient initialized: readOnly(7 tools) + readWrite(9 tools) + noToolsClient");
+
+        ChatModel deepModel = slotRouter.getModel("deep-analysis");
+        if (deepModel != null && deepModel != mainModel) {
+            this.deepQueryReadOnlyClient = ChatClient.builder(deepModel)
                 .defaultTools(readFileTool, readRawSourceTool, getSourceInfoTool,
                     searchWikiTool, listPagesTool, getRelatedPagesTool, todoTool)
                 .build();
-            this.queryReadWriteClient = ChatClient.builder(chatModel)
+            this.deepQueryReadWriteClient = ChatClient.builder(deepModel)
                 .defaultTools(readFileTool, readRawSourceTool, getSourceInfoTool,
                     searchWikiTool, listPagesTool, getRelatedPagesTool, todoTool,
                     writeFileTool, updateLinksTool)
                 .build();
-            this.noToolsClient = ChatClient.builder(chatModel).build();
-            log.info("Query ChatClient initialized: readOnly(7 tools) + readWrite(9 tools) + noToolsClient");
-
-            ChatModel deepModel = LlmClient.getDeepAnalysisChatModel();
-            if (deepModel != null && deepModel != chatModel) {
-                this.deepQueryReadOnlyClient = ChatClient.builder(deepModel)
-                    .defaultTools(readFileTool, readRawSourceTool, getSourceInfoTool,
-                        searchWikiTool, listPagesTool, getRelatedPagesTool, todoTool)
-                    .build();
-                this.deepQueryReadWriteClient = ChatClient.builder(deepModel)
-                    .defaultTools(readFileTool, readRawSourceTool, getSourceInfoTool,
-                        searchWikiTool, listPagesTool, getRelatedPagesTool, todoTool,
-                        writeFileTool, updateLinksTool)
-                    .build();
-                this.deepNoToolsClient = ChatClient.builder(deepModel).build();
-                log.info("Deep analysis ChatClient initialized: readOnly(7 tools) + readWrite(9 tools) + noToolsClient");
-            }
+            this.deepNoToolsClient = ChatClient.builder(deepModel).build();
+            log.info("Deep analysis ChatClient initialized: readOnly(7 tools) + readWrite(9 tools) + noToolsClient");
+        } else {
+            this.deepQueryReadOnlyClient = null;
+            this.deepQueryReadWriteClient = null;
+            this.deepNoToolsClient = null;
         }
     }
 
@@ -194,8 +219,8 @@ public class AgentRunner {
 
         if (queryReadOnlyClient == null) {
             TokenUsageContext.clear();
-            log.error("ChatClient not available, falling back to simple query streaming");
-            return Flux.just(runSimpleQuery(scopeId, question));
+            log.warn("AI not configured, returning guidance message");
+            return Flux.just("AI 模型未配置，请管理员在「系统设置 → 通用设置」中完成模型配置后重试。");
         }
 
         ChatClient activeQueryClient = (deepMode && deepQueryReadOnlyClient != null) ? deepQueryReadOnlyClient : queryReadOnlyClient;
@@ -362,7 +387,8 @@ public class AgentRunner {
         }
         if (queryReadOnlyClient == null) {
             TokenUsageContext.clear();
-            return Flux.just(runSimpleQuery(primaryScopeId, question));
+            log.warn("AI not configured, returning guidance message");
+            return Flux.just("AI 模型未配置，请管理员在「系统设置 → 通用设置」中完成模型配置后重试。");
         }
         ChatClient activeQueryClient = (deepMode && deepQueryReadOnlyClient != null) ? deepQueryReadOnlyClient : queryReadOnlyClient;
         return Flux.defer(() -> {
@@ -521,7 +547,7 @@ public class AgentRunner {
             String answer = LlmClient.chat(systemPrompt, question);
             return answer;
         }
-        return "AI 服务未配置，无法回答问题。请设置 AI_DASHSCOPE_API_KEY 环境变量。";
+        return "AI 模型未配置，请管理员在「系统设置 → 通用设置」中完成模型配置后重试。";
     }
 
     public String buildSynthesisUserPrompt(Long scopeId, String question, String factInput, String deprecatedContext, boolean deepMode) {
@@ -563,7 +589,7 @@ public class AgentRunner {
     private Flux<String> synthesizeWithImages(Long scopeId, String synthesisPrompt, List<FactBlock> factBlocks, String layer1Text, boolean deepMode) {
         ChatClient activeNoToolsClient = (deepMode && deepNoToolsClient != null) ? deepNoToolsClient : noToolsClient;
         
-        if (chatModel == null) {
+        if (slotRouter.getModel("main") == null) {
             return activeNoToolsClient.prompt()
                 .system("你是知识分析与综合专家。")
                 .user(synthesisPrompt)
@@ -595,8 +621,8 @@ public class AgentRunner {
             ? LlmClient.getDeepMultimodalChatModel() 
             : LlmClient.getQueryMultimodalChatModel();
         ChatModel fallbackModel = (deepMode && deepNoToolsClient != null) 
-            ? LlmClient.getDeepAnalysisChatModel() : chatModel;
-        if (fallbackModel == null) fallbackModel = chatModel;
+            ? LlmClient.getDeepAnalysisChatModel() : slotRouter.getModel("main");
+        if (fallbackModel == null) fallbackModel = slotRouter.getModel("main");
         ChatModel synthesisModel = multimodalModel != null ? multimodalModel : fallbackModel;
 
         try {
