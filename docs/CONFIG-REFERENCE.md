@@ -1,68 +1,28 @@
 # LLM Wiki 配置参考
 
 > `application.yml` 只保留部署必改项。本文档收录两类内容：
-> 1. **多 Provider 模式**配置示例（需要改 YAML 结构）
+> 1. **运行时 AI 配置**说明（Provider / 槽位 / 模型，在「系统设置 → 通用设置」维护）
 > 2. **内部调优参数**完整清单（全部由代码默认值驱动，用环境变量覆盖即可，无需改 YAML）
 
 ## 运行时 AI 配置（推荐）
 
 管理员的「系统配置 → 通用设置」中可直接管理 Provider 与用途槽位，保存后立即生效，无需重启。
-配置加密存储于 `system_config`（scope_id=0, key=ai.runtime）。生效优先级：DB 配置 > llmwiki.ai.providers/slots > spring.ai.openai 单 key。
+配置加密存储于 `system_config`（scope_id=0, key=ai.runtime），是 AI Provider / 模型 / 槽位的唯一配置来源；`application.yml` 不再承载任何 AI 凭证或槽位配置。
 加密密钥来自 `AI_CONFIG_SECRET`（缺省派生自 JWT_SECRET）；更换密钥前需先在 UI 重新保存一次所有 Key，否则已存密文无法解密。
 
-## 多 Provider 模式
+## Provider 与槽位配置（系统设置 → 通用设置）
 
-在 `application.yml`（或 profile 文件）的 `llmwiki.ai` 下添加 `providers` + `slots`。
-`providers` 为空时自动回退 `spring.ai.openai.*` 单 key 模式。
-
-```yaml
-llmwiki:
-  ai:
-    providers:
-      dashscope:
-        base-url: https://dashscope.aliyuncs.com/compatible-mode
-        api-key: ${AI_DASHSCOPE_API_KEY:}
-      deepseek:
-        base-url: https://api.deepseek.com
-        api-key: ${AI_DEEPSEEK_API_KEY:}
-      moonshot:
-        base-url: https://api.moonshot.cn
-        api-key: ${AI_MOONSHOT_API_KEY:}
-      openai:
-        base-url: https://api.openai.com
-        api-key: ${AI_OPENAI_API_KEY:}
-      local:
-        base-url: ${AI_LOCAL_BASE_URL:http://localhost:11434}
-        api-key: ${AI_LOCAL_API_KEY:ollama}
-    slots:
-      main:
-        provider: deepseek
-        model: deepseek-v4-flash-0731
-        multimodal: true
-      multimodal:
-        provider: dashscope
-        model: qwen3.7-plus
-      ocr:
-        provider: dashscope
-        model: qwen-vl-ocr
-      deep-analysis:
-        provider: deepseek
-        model: deepseek-v4-pro
-        multimodal: true
-      diagram:
-        provider: moonshot
-        model: kimi-k2.6
-```
+Provider、模型与槽位路由全部在「系统设置 → 通用设置」维护，DB 加密存储、保存即生效（热刷新，无需重启）；未配置时应用正常启动，AI 功能返回配置引导文案。原 `llmwiki.ai.providers/slots` YAML 配置层已移除，AI 凭证不再支持文件 / 环境变量配置。
 
 Slot 说明（共 5 个）：
-- `main` 快速模型：所有 LLM 调用的默认入口；`multimodal: true` 时兼任查询图片理解
+- `main` 快速模型：所有 LLM 调用的默认入口；开启多模态时兼任查询图片理解
 - `multimodal` 多模态模型：查询/深度模式的图片理解（`main` 未开多模态时生效）
 - `ocr` 扫描件识别
 - `deep-analysis` / `diagram` 为可选场景覆写：缺省不配置时自动跟随 `main`
 
-派生规则：查询图片理解 = `main.multimodal ? main : multimodal`；
-深度图片理解 = `deep-analysis` 覆写且 `multimodal: true` 时取 `deep-analysis`，否则取 `multimodal`。
-slot 未配置或 provider 不可用时回退 `main`；slot 未指定 model 时回退 `spring.ai.openai.chat.options.model`。
+派生规则：查询图片理解 = `main` 开多模态时取 `main`，否则取 `multimodal`；
+深度图片理解 = `deep-analysis` 覆写且开多模态时取 `deep-analysis`，否则取 `multimodal`。
+slot 未配置或 provider 不可用时回退 `main`。
 
 ## 内部调优参数（环境变量覆盖）
 

@@ -111,7 +111,7 @@ LLM Wiki 把知识处理视为**编译**：
 ### 前置条件
 
 - Docker & Docker Compose
-- 任意 OpenAI 兼容提供商的 API Key（[DashScope](https://dashscope.console.aliyun.com/)、[DeepSeek](https://platform.deepseek.com/)、[Moonshot](https://platform.moonshot.cn/) 等）
+- 任意 OpenAI 兼容提供商的 API Key（[DashScope](https://dashscope.console.aliyun.com/)、[DeepSeek](https://platform.deepseek.com/)、[Moonshot](https://platform.moonshot.cn/) 等）—— 首次登录后在「系统设置」中配置
 
 ### 启动
 
@@ -119,9 +119,7 @@ LLM Wiki 把知识处理视为**编译**：
 git clone https://github.com/Raymonda/LLM-WIKI.git
 cd LLM-WIKI
 
-# 配置 API Key
-cp .env.example .env
-# 编辑 .env，设置 AI_DASHSCOPE_API_KEY=sk-your-key-here
+cp .env.example .env  # 可选 —— 均有合理默认值
 
 # 启动（MySQL + ES + 应用 + Web UI，约 2.5GB 内存）
 docker-compose up -d
@@ -137,7 +135,7 @@ docker-compose -f docker-compose.full.yml up -d
 
 ### 配置
 
-全部通过环境变量配置。**唯一必填项**是 AI 提供商的 API Key（如 `AI_DASHSCOPE_API_KEY`），其余均有合理默认值。
+基础设施（MySQL、ES、存储等）通过环境变量配置，均有合理默认值。**AI 提供商与模型在管理员的「系统设置 → 通用设置」中配置**，DB 加密存储、热刷新无需重启。
 
 LLM Wiki 支持**多个 AI 提供商同时使用**——你可以把不同任务（分析、OCR、图表识别）路由给不同提供商。多 Provider 配置见[部署指南](docs/LOCAL-DEPLOY_zh.md#ai-提供商配置)。
 

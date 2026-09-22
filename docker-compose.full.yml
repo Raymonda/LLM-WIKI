@@ -123,7 +123,6 @@ services:
       - S3_REGION=us-east-1
       - S3_BUCKET_PREFIX=llmwiki
       - S3_PATH_STYLE=true
-      - AI_DASHSCOPE_API_KEY=${AI_DASHSCOPE_API_KEY}
       - ADMIN_USERNAMES=${ADMIN_USERNAMES:-admin}
       - ROCKETMQ_NAME_SERVER=rocketmq-namesrv:9876
       - ROCKETMQ_ENABLED=true

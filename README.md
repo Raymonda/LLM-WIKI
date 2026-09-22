@@ -111,7 +111,7 @@ Periodic health checks scan for five diagnostic types: contradictions, orphan pa
 ### Prerequisites
 
 - Docker & Docker Compose
-- An API key from any OpenAI-compatible provider ([DashScope](https://dashscope.console.aliyun.com/), [DeepSeek](https://platform.deepseek.com/), [Moonshot](https://platform.moonshot.cn/), etc.)
+- An API key from any OpenAI-compatible provider ([DashScope](https://dashscope.console.aliyun.com/), [DeepSeek](https://platform.deepseek.com/), [Moonshot](https://platform.moonshot.cn/), etc.) — configured in System Settings after first login
 
 ### Run
 
@@ -119,9 +119,7 @@ Periodic health checks scan for five diagnostic types: contradictions, orphan pa
 git clone https://github.com/Raymonda/LLM-WIKI.git
 cd LLM-WIKI
 
-# Configure your API key
-cp .env.example .env
-# Edit .env and set AI_DASHSCOPE_API_KEY=sk-your-key-here
+cp .env.example .env  # optional — sensible defaults throughout
 
 # Start (MySQL + ES + App + Web UI, ~2.5GB RAM)
 docker-compose up -d
@@ -137,7 +135,7 @@ docker-compose -f docker-compose.full.yml up -d
 
 ### Configuration
 
-All configuration is via environment variables. The only **required** variable is an AI provider API key (e.g. `AI_DASHSCOPE_API_KEY`). Everything else has sensible defaults.
+Infrastructure (MySQL, ES, storage, ...) is configured via environment variables — everything has sensible defaults. **AI providers and models are configured in the admin UI** (System Settings -> General), stored encrypted in the database and hot-refreshed without restart.
 
 LLM Wiki supports **multiple AI providers** simultaneously — you can route different tasks (analysis, OCR, diagram recognition) to different providers. See the [deployment guide](docs/LOCAL-DEPLOY.md#ai-provider-configuration) for multi-provider setup.
 

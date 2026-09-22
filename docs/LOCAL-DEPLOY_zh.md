@@ -11,7 +11,7 @@
 ### 前置条件
 
 - [Docker](https://docs.docker.com/get-docker/) 24+ & Docker Compose v2
-- DashScope API Key（[免费获取](https://dashscope.console.aliyun.com/)）
+- 任意 OpenAI 兼容提供商的 API Key（如 [DashScope](https://dashscope.console.aliyun.com/)）—— 首次登录后在「系统设置 → 通用设置」配置，不影响启动
 
 ### 操作步骤
 
@@ -19,9 +19,9 @@
 git clone https://github.com/Raymonda/LLM-WIKI.git
 cd LLM-WIKI
 
-# 配置 API Key（唯一必填项）
+# 可选：复制 .env.example 为 .env 以覆盖默认值
+#（AI 模型在首次登录后的「系统设置 → 通用设置」中配置）
 cp .env.example .env
-# 编辑 .env，填入 AI_DASHSCOPE_API_KEY=sk-your-key-here
 
 # 一键启动（极简模式）
 docker-compose up -d --build
@@ -84,9 +84,8 @@ cd llmwiki
 # 构建
 mvn clean package -DskipTests -pl app/bootstrap -am
 
-# 运行（dev profile 连接 localhost 服务，API Key 通过环境变量传入）
-AI_DASHSCOPE_API_KEY=sk-your-key-here \
-  java -jar target/boot/llmwiki-bootstrap-1.1.0-SNAPSHOT.jar --spring.profiles.active=dev
+# 运行（dev profile 连接 localhost 服务）
+java -jar target/boot/llmwiki-bootstrap-1.1.0-SNAPSHOT.jar --spring.profiles.active=dev
 ```
 
 或者用 Maven 直接运行：
@@ -119,61 +118,24 @@ npm run dev
 
 ## AI 提供商配置
 
-LLM Wiki 支持**任意 OpenAI 兼容 API**。默认使用 DashScope（阿里云），也可切换为 DeepSeek、Moonshot、OpenAI、Ollama 或任何兼容端点。
+LLM Wiki 支持**任意 OpenAI 兼容 API** —— DashScope（阿里云）、DeepSeek、Moonshot、OpenAI、Ollama 或任何兼容端点。
 
-### 单提供商（默认）
+AI 提供商、模型与槽位路由由管理员登录后在「系统设置 → 通用设置」中配置：
 
-在 `.env` 中设置 API Key 即可：
+- DB 加密存储（`system_config`），保存即生效（热刷新，无需重启）
+- 未配置时应用正常启动，AI 功能返回配置引导文案，不阻断其他功能
+- 首次登录后进入「系统设置 → 通用设置」，添加提供商（Base URL + API Key + 模型）并保存即可
 
-```bash
-AI_DASHSCOPE_API_KEY=sk-your-key-here
-```
-
-如需使用其他提供商作为唯一后端，修改 `application.yml` 中的 `spring.ai.openai.base-url` 和模型名：
-
-```bash
-# 示例：使用 DeepSeek 作为唯一提供商
-AI_DASHSCOPE_API_KEY=sk-your-deepseek-key
-# 然后在 application.yml 中将 spring.ai.openai.base-url 改为 https://api.deepseek.com
-```
-
-### 多提供商模式
-
-高级用户可将不同任务路由到不同提供商，取消 `application.yml` 中 `providers` 和 `slots` 段的注释：
-
-```yaml
-llmwiki:
-  ai:
-    providers:
-      dashscope:
-        base-url: https://dashscope.aliyuncs.com/compatible-mode
-        api-key: ${AI_DASHSCOPE_API_KEY:}
-      deepseek:
-        base-url: https://api.deepseek.com
-        api-key: ${AI_DEEPSEEK_API_KEY:}
-    slots:
-      main:
-        provider: deepseek
-        model: deepseek-v4-flash
-      multimodal:
-        provider: dashscope
-        model: qwen3.7-plus
-      ocr:
-        provider: dashscope
-        model: qwen-vl-ocr
-```
-
-可用槽位（5 个）：`main`（快速模型，所有 LLM 调用的默认入口，加 `multimodal: true` 可兼任查询图片理解）、`multimodal`（多模态/图片理解）、`ocr`（扫描件识别）、`deep-analysis` 与 `diagram`（可选场景覆写，缺省时自动跟随 `main`）。
+可用槽位（5 个）：`main`（快速模型，所有 LLM 调用的默认入口，开启多模态可兼任查询图片理解）、`multimodal`（多模态/图片理解）、`ocr`（扫描件识别）、`deep-analysis` 与 `diagram`（可选场景覆写，缺省时自动跟随 `main`）。
 
 ---
 
 ## 环境变量
 
-至少需要一个 AI 提供商的 API Key，其余均有合理默认值。
+所有变量均有合理默认值。AI 提供商在「系统设置 → 通用设置」中配置（DB 加密存储），不通过环境变量。
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `AI_DASHSCOPE_API_KEY` | *（必填）* | DashScope API Key（legacy 单 key 兜底；多提供商推荐在「系统配置 → 通用设置」维护） |
 | `MYSQL_URL` | `jdbc:mysql://localhost:3306/llmwiki?...` | MySQL JDBC 连接串 |
 | `MYSQL_USER` | `llmwiki` | MySQL 用户名 |
 | `MYSQL_PASSWORD` | `llmwiki_2024` | MySQL 密码 |
@@ -215,9 +177,9 @@ sudo sysctl -w vm.max_map_count=262144
 - 默认凭据：`llmwiki` / `llmwiki_2024`
 - Flyway 自动执行迁移——检查日志中的迁移错误
 
-### "placeholder-not-configured" API Key 错误
+### AI 功能返回"未配置"引导文案
 
-忘记设置 `AI_DASHSCOPE_API_KEY`。应用可以启动，但所有 AI 功能（Ingest、Query、Lint）将不可用。
+尚未配置 AI 提供商。使用管理员登录，在「系统设置 → 通用设置」中完成配置即可，保存后立即生效、无需重启。
 
 ### 前端白屏 / 502
 

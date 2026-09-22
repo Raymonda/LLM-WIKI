@@ -271,7 +271,6 @@ common/dal          common/service/facade    common/service/integration
 
 | 变量 | 用途 | 示例 |
 |------|------|------|
-| `AI_DASHSCOPE_API_KEY` | 主 LLM Provider API 密钥 | `sk-xxx...` |
 | `WIKI_DATA_PATH` | Wiki 文件存储根路径 | `/data/llmwiki/wiki-data` |
 | `STORAGE_PROVIDER` | 存储提供商 | `local`（默认）/ `nas` / `s3` |
 | `ES_URIS` | Elasticsearch 地址（逗号分隔） | `http://localhost:9200` |

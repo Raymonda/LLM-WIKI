@@ -60,7 +60,6 @@ services:
       - ES_INDEX_NAME=llmwiki-pages
       - STORAGE_PROVIDER=local
       - WIKI_DATA_PATH=/data/wiki-data
-      - AI_DASHSCOPE_API_KEY=${AI_DASHSCOPE_API_KEY}
       - ADMIN_USERNAMES=${ADMIN_USERNAMES:-admin}
       - ROCKETMQ_ENABLED=false
       - JWT_SECRET=${JWT_SECRET:-llmwiki-default-secret-change-in-production}

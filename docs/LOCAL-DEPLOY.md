@@ -11,7 +11,7 @@ Two modes available:
 ### Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) 24+ & Docker Compose v2
-- A DashScope API key — [get one free](https://dashscope.console.aliyun.com/)
+- An API key from any OpenAI-compatible provider (e.g. [DashScope](https://dashscope.console.aliyun.com/)) — configured in System Settings after first login; not required for startup
 
 ### Steps
 
@@ -19,9 +19,9 @@ Two modes available:
 git clone https://github.com/Raymonda/LLM-WIKI.git
 cd LLM-WIKI
 
-# Configure your API key (the only required variable)
+# Optional: copy .env.example to .env to override defaults
+# (AI model is configured in System Settings -> General after first login)
 cp .env.example .env
-# Edit .env and set AI_DASHSCOPE_API_KEY=sk-your-key-here
 
 # Start (minimal mode)
 docker-compose up -d --build
@@ -84,9 +84,8 @@ cd llmwiki
 # Build
 mvn clean package -DskipTests -pl app/bootstrap -am
 
-# Run (dev profile uses localhost services; API key passed via env var)
-AI_DASHSCOPE_API_KEY=sk-your-key-here \
-  java -jar target/boot/llmwiki-bootstrap-1.1.0-SNAPSHOT.jar --spring.profiles.active=dev
+# Run (dev profile uses localhost services)
+java -jar target/boot/llmwiki-bootstrap-1.1.0-SNAPSHOT.jar --spring.profiles.active=dev
 ```
 
 Or with Maven directly:
@@ -119,61 +118,24 @@ Open http://localhost:5173 → login with admin (check backend console for the t
 
 ## AI Provider Configuration
 
-LLM Wiki works with **any OpenAI-compatible API**. By default it uses DashScope (Alibaba Cloud), but you can switch to DeepSeek, Moonshot, OpenAI, Ollama, or any compatible endpoint.
+LLM Wiki works with **any OpenAI-compatible API** — DashScope (Alibaba Cloud), DeepSeek, Moonshot, OpenAI, Ollama, or any compatible endpoint.
 
-### Single Provider (default)
+AI providers, models, and slot routing are configured by the admin in **System Settings -> General** after login:
 
-Just set the API key in `.env`:
+- Stored encrypted in the database (`system_config`), applied immediately without restart (hot refresh)
+- The app starts normally with no AI configured; AI features return a setup guidance message until configured
+- After the first login, open **System Settings -> General**, add a provider (base URL + API key + model), and save
 
-```bash
-AI_DASHSCOPE_API_KEY=sk-your-key-here
-```
-
-To use a different single provider, override the base URL and model in `application.yml` or via environment variables:
-
-```bash
-# Example: use DeepSeek as the sole provider
-AI_DASHSCOPE_API_KEY=sk-your-deepseek-key
-# Then in application.yml, change spring.ai.openai.base-url to https://api.deepseek.com
-```
-
-### Multi-Provider Mode
-
-For advanced users who want to route different tasks to different providers, uncomment the `providers` and `slots` sections in `application.yml`:
-
-```yaml
-llmwiki:
-  ai:
-    providers:
-      dashscope:
-        base-url: https://dashscope.aliyuncs.com/compatible-mode
-        api-key: ${AI_DASHSCOPE_API_KEY:}
-      deepseek:
-        base-url: https://api.deepseek.com
-        api-key: ${AI_DEEPSEEK_API_KEY:}
-    slots:
-      main:
-        provider: deepseek
-        model: deepseek-v4-flash
-      multimodal:
-        provider: dashscope
-        model: qwen3.7-plus
-      ocr:
-        provider: dashscope
-        model: qwen-vl-ocr
-```
-
-Available slots (5 total): `main` (fast model, the default entry for all LLM calls; add `multimodal: true` to reuse it for query image understanding), `multimodal` (image understanding), `ocr` (scanned-document OCR), plus optional scenario overrides `deep-analysis` and `diagram` (fall back to `main` when omitted).
+Available slots (5 total): `main` (fast model, the default entry for all LLM calls; enable multimodal on it to reuse it for query image understanding), `multimodal` (image understanding), `ocr` (scanned-document OCR), plus optional scenario overrides `deep-analysis` and `diagram` (fall back to `main` when omitted).
 
 ---
 
 ## Environment Variables
 
-At least one AI provider API key is required. Everything else has sensible defaults.
+All variables have sensible defaults. AI providers are configured in **System Settings -> General** (stored encrypted in DB), not via environment variables.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_DASHSCOPE_API_KEY` | *(required*)* | DashScope API key (legacy single-key fallback; multi-provider setup recommended via System Settings -> General) |
 | `MYSQL_URL` | `jdbc:mysql://localhost:3306/llmwiki?...` | MySQL JDBC URL |
 | `MYSQL_USER` | `llmwiki` | MySQL username |
 | `MYSQL_PASSWORD` | `llmwiki_2024` | MySQL password |
@@ -215,9 +177,9 @@ To persist, add `vm.max_map_count=262144` to `/etc/sysctl.conf`.
 - Default credentials: `llmwiki` / `llmwiki_2024`
 - Flyway runs migrations automatically — check logs for migration errors
 
-### "placeholder-not-configured" API key error
+### AI features return a "not configured" guidance message
 
-You forgot to set `AI_DASHSCOPE_API_KEY`. The app starts but all AI features (Ingest, Query, Lint) will fail.
+No AI provider has been configured yet. Log in as admin and complete the setup in **System Settings -> General** — it takes effect immediately, no restart needed.
 
 ### Frontend shows blank page / 502
 
