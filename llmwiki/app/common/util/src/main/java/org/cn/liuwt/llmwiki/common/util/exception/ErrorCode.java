@@ -100,6 +100,7 @@ public enum ErrorCode {
     INGEST_BATCH_TOO_LARGE("INGEST_012", "Batch size exceeds limit: {0}"),
     INGEST_BATCH_NOT_FOUND("INGEST_013", "Batch not found"),
     INGEST_BATCH_INVALID_STATUS("INGEST_014", "Batch is not in the required state for this operation"),
+    INGEST_BATCH_MEMBER_DELETE_FORBIDDEN("INGEST_015", "Execution belongs to a batch and cannot be deleted individually, manage it from the batch view"),
 
     // Source lifecycle
     SOURCE_DELETE_FORBIDDEN("SOURCE_001", "Source deletion is not allowed, use deprecation instead"),

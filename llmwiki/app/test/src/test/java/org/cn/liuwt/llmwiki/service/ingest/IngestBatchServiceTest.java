@@ -1,9 +1,11 @@
 package org.cn.liuwt.llmwiki.service.ingest;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
+import org.cn.liuwt.llmwiki.common.dal.dataobject.IngestBatchDO;
 import org.cn.liuwt.llmwiki.common.dal.dataobject.SourceDO;
 import org.cn.liuwt.llmwiki.common.dal.mapper.ExecutionMapper;
 import org.cn.liuwt.llmwiki.common.dal.mapper.IngestBatchMapper;
@@ -17,18 +19,23 @@ import org.cn.liuwt.llmwiki.facade.model.IngestBatchCreateInfo;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -48,6 +55,7 @@ class IngestBatchServiceTest {
     static void initTableInfo() {
         MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
         TableInfoHelper.initTableInfo(assistant, ExecutionDO.class);
+        TableInfoHelper.initTableInfo(assistant, IngestBatchDO.class);
     }
 
     @Test
@@ -110,5 +118,44 @@ class IngestBatchServiceTest {
 
         assertEquals(1, info.acceptedCount());
         assertEquals(1, info.warnings().size());
+    }
+
+    @Test
+    void shouldReviveCompletedBatchWhenConfirmItems() {
+        IngestBatchDO batch = new IngestBatchDO();
+        batch.setId(77L);
+        batch.setStatus("completed");
+        when(batchMapper.selectById(77L)).thenReturn(batch);
+        when(executionMapper.update(any(), any())).thenReturn(1);
+        when(batchMapper.update(isNull(), any())).thenReturn(1);
+        ArgumentCaptor<LambdaUpdateWrapper<IngestBatchDO>> captor = batchCaptor();
+
+        int confirmed = service.confirmItems(77L, List.of(100L));
+
+        assertEquals(1, confirmed);
+        verify(batchMapper).update(isNull(), captor.capture());
+        LambdaUpdateWrapper<IngestBatchDO> wrapper = captor.getValue();
+        wrapper.getSqlSegment();
+        Map<String, Object> params = wrapper.getParamNameValuePairs();
+        assertTrue(params.containsValue("completed"));
+        assertTrue(params.containsValue("active"));
+    }
+
+    @Test
+    void shouldNotReviveBatchWhenNoItemConfirmed() {
+        IngestBatchDO batch = new IngestBatchDO();
+        batch.setId(77L);
+        when(batchMapper.selectById(77L)).thenReturn(batch);
+        when(executionMapper.update(any(), any())).thenReturn(0);
+
+        int confirmed = service.confirmItems(77L, List.of(100L));
+
+        assertEquals(0, confirmed);
+        verify(batchMapper, never()).update(any(), any());
+    }
+
+    @SuppressWarnings("unchecked")
+    private ArgumentCaptor<LambdaUpdateWrapper<IngestBatchDO>> batchCaptor() {
+        return ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
     }
 }

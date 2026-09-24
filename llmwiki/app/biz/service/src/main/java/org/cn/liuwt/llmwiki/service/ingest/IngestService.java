@@ -139,7 +139,11 @@ public class IngestService {
         if (guidance != null && !guidance.isBlank()) {
             update.set(ExecutionDO::getGuidance, guidance);
         }
-        return executionMapper.update(null, update) == 1;
+        if (executionMapper.update(null, update) != 1) {
+            return false;
+        }
+        reviveCompletedBatch(executionId);
+        return true;
     }
 
     public boolean queueResume(Long executionId, String guidance) {
@@ -215,6 +219,7 @@ public class IngestService {
         }
         executionTracker.clearStepStartedAt(executionId);
         executionTracker.resetStepForRetry(targetStepId);
+        reviveCompletedBatch(executionId);
         return true;
     }
 

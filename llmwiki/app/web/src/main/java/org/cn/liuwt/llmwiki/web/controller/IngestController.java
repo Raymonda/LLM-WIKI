@@ -331,6 +331,9 @@ public class IngestController {
             return Result.failed(ErrorCode.INGEST_EXECUTION_NOT_FOUND);
         }
         assertExecutionReadable(execution);
+        if (execution.getBatchId() != null) {
+            return Result.failed(ErrorCode.INGEST_BATCH_MEMBER_DELETE_FORBIDDEN);
+        }
 
         String currentStatus = execution.getStatus();
         boolean wasActive = "running".equals(currentStatus) || "pending".equals(currentStatus) || "paused".equals(currentStatus);

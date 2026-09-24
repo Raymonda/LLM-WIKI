@@ -5,10 +5,12 @@ import org.cn.liuwt.llmwiki.common.util.exception.BusinessException;
 import org.cn.liuwt.llmwiki.common.util.result.Result;
 import org.cn.liuwt.llmwiki.domain.model.harness.ExecutionModel;
 import org.cn.liuwt.llmwiki.domain.model.wiki.SourceModel;
+import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
 import org.cn.liuwt.llmwiki.domain.service.system.ScopeService;
 import org.cn.liuwt.llmwiki.domain.service.wiki.SourceService;
 import org.cn.liuwt.llmwiki.facade.model.ExecutionInfo;
 import org.cn.liuwt.llmwiki.facade.model.IngestRequest;
+import org.cn.liuwt.llmwiki.service.harness.mq.ExecutionNodeRegistry;
 import org.cn.liuwt.llmwiki.service.ingest.IngestBatchScheduler;
 import org.cn.liuwt.llmwiki.service.ingest.IngestOrchestrationService;
 import org.cn.liuwt.llmwiki.service.ingest.IngestService;
@@ -50,6 +52,12 @@ class IngestControllerTest {
 
     @Mock
     private IngestBatchScheduler ingestBatchScheduler;
+
+    @Mock
+    private ExecutionTracker executionTracker;
+
+    @Mock
+    private ExecutionNodeRegistry registry;
 
     @InjectMocks
     private IngestController controller;
@@ -150,6 +158,39 @@ class IngestControllerTest {
 
         assertTrue(result.isSuccess());
         verify(ingestBatchScheduler).kick(100L);
+    }
+
+    @Test
+    void shouldRejectDeleteWhenExecutionBelongsToBatch() {
+        ExecutionModel execution = new ExecutionModel();
+        execution.setId(7L);
+        execution.setScopeId(100L);
+        execution.setStatus("completed");
+        execution.setBatchId(60L);
+        when(ingestService.getProgress(7L)).thenReturn(execution);
+        when(jwtTokenProvider.getCurrentUserId()).thenReturn(7L);
+        when(scopeService.canView(100L, 7L)).thenReturn(true);
+
+        Result<Void> result = controller.deleteIngest(7L);
+
+        assertFalse(result.isSuccess());
+        verify(executionTracker, never()).deleteExecution(any());
+    }
+
+    @Test
+    void shouldAllowDeleteWhenExecutionIsStandalone() {
+        ExecutionModel execution = new ExecutionModel();
+        execution.setId(8L);
+        execution.setScopeId(100L);
+        execution.setStatus("completed");
+        when(ingestService.getProgress(8L)).thenReturn(execution);
+        when(jwtTokenProvider.getCurrentUserId()).thenReturn(7L);
+        when(scopeService.canView(100L, 7L)).thenReturn(true);
+
+        Result<Void> result = controller.deleteIngest(8L);
+
+        assertTrue(result.isSuccess());
+        verify(executionTracker).deleteExecution(8L);
     }
 
     @Test

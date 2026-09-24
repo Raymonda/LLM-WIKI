@@ -209,6 +209,16 @@ public class IngestBatchService {
                 .eq(ExecutionDO::getBatchId, batchId)
                 .in(ExecutionDO::getStatus, "awaiting_confirmation", "awaiting_review"));
         }
+        if (confirmed > 0) {
+            int revived = batchMapper.update(null, new LambdaUpdateWrapper<IngestBatchDO>()
+                .eq(IngestBatchDO::getId, batchId)
+                .eq(IngestBatchDO::getStatus, "completed")
+                .set(IngestBatchDO::getStatus, "active")
+                .set(IngestBatchDO::getCompletedAt, null));
+            if (revived == 1) {
+                log.info("Revived completed batch {} after confirming {} items", batchId, confirmed);
+            }
+        }
         return confirmed;
     }
 

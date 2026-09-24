@@ -173,6 +173,46 @@ class IngestServiceQueueTest {
     }
 
     @Test
+    void shouldReviveCompletedBatchWhenQueueExecute() {
+        when(executionMapper.update(any(), any())).thenReturn(1);
+        ExecutionDO executionDO = new ExecutionDO();
+        executionDO.setId(11L);
+        executionDO.setBatchId(88L);
+        when(executionMapper.selectById(11L)).thenReturn(executionDO);
+        when(batchMapper.update(any(), any())).thenReturn(1);
+        ArgumentCaptor<LambdaUpdateWrapper<IngestBatchDO>> captor = batchCaptor();
+
+        boolean queued = ingestService.queueExecute(11L, null);
+
+        assertTrue(queued);
+        verify(batchMapper).update(any(), captor.capture());
+        LambdaUpdateWrapper<IngestBatchDO> wrapper = captor.getValue();
+        wrapper.getSqlSegment();
+        Map<String, Object> params = wrapper.getParamNameValuePairs();
+        assertTrue(params.containsValue("completed"));
+        assertTrue(params.containsValue("active"));
+    }
+
+    @Test
+    void shouldReviveCompletedBatchWhenQueueReanalyze() {
+        ExecutionModel execution = executionWithStatus("awaiting_confirmation");
+        ExecutionStepModel analyze = step(5L, "ANALYZE", "completed");
+        when(executionTracker.getExecution(11L)).thenReturn(execution);
+        when(executionTracker.listSteps(11L)).thenReturn(List.of(analyze));
+        when(executionMapper.update(any(), any())).thenReturn(1);
+        ExecutionDO executionDO = new ExecutionDO();
+        executionDO.setId(11L);
+        executionDO.setBatchId(88L);
+        when(executionMapper.selectById(11L)).thenReturn(executionDO);
+        when(batchMapper.update(any(), any())).thenReturn(1);
+
+        boolean queued = ingestService.queueReanalyze(11L, null);
+
+        assertTrue(queued);
+        verify(batchMapper).update(any(), any());
+    }
+
+    @Test
     void shouldReturnFalseAndSkipBatchReviveWhenQueueResumeCasLoses() {
         when(executionMapper.update(any(), any())).thenReturn(0);
 

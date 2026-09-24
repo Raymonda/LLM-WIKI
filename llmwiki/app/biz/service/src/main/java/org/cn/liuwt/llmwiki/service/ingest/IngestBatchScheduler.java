@@ -257,7 +257,10 @@ public class IngestBatchScheduler {
     private boolean isEligible(ExecutionDO execution) {
         if (execution.getBatchId() == null) return true;
         IngestBatchDO batch = batchMapper.selectById(execution.getBatchId());
-        return batch != null && "active".equals(batch.getStatus());
+        if (batch == null) return false;
+        if ("active".equals(batch.getStatus())) return true;
+        return "completed".equals(batch.getStatus())
+            && ("confirmed".equals(execution.getStatus()) || "pending".equals(execution.getStatus()));
     }
 
     private boolean claimForDispatch(ExecutionDO execution, String expectedStatus, boolean writePhase) {

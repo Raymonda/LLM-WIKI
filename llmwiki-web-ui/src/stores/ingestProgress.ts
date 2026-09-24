@@ -121,6 +121,7 @@ interface IngestTask {
   tickTimer: number | null
   nowMs: number
   sourceId: number | null
+  batchId: number | null
   retryCount: number
   retryTimer: number | null
   lastEventMs: number
@@ -164,6 +165,7 @@ function createEmptyTask(): IngestTask {
     tickTimer: null,
     nowMs: Date.now(),
     sourceId: null,
+    batchId: null,
     retryCount: 0,
     retryTimer: null,
     lastEventMs: Date.now(),
@@ -380,6 +382,7 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
       progress: t.displayProgress,
       floatingDismissed: t.floatingDismissed,
       pipelineError: t.pipelineError,
+      batchId: t.batchId,
     }))
   )
 
@@ -888,6 +891,7 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
     plain.executionStatus = execInfo.status
     plain.totalTokens = execInfo.totalTokens || 0
     plain.sourceId = execInfo.sourceId || null
+    plain.batchId = execInfo.batchId ?? null
     if (execInfo.sourceId && execInfo.sourceName) {
       plain.uploadedFile = {
         id: execInfo.sourceId,
@@ -901,6 +905,7 @@ export const useIngestProgressStore = defineStore('ingestProgress', () => {
   }
 
   function applyExecutionInfo(task: IngestTask, execInfo: ExecutionInfo) {
+    task.batchId = execInfo.batchId ?? null
     if (execInfo.status === 'running') {
       task.currentStep = isPhase1Completed(task) ? 'executing' : 'analyzing'
       task.isPhaseRunning = true

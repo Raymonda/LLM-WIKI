@@ -144,6 +144,38 @@ class IngestBatchSchedulerTest {
     }
 
     @Test
+    void shouldDispatchConfirmedCandidateOfCompletedBatch() {
+        stubQueries(List.of(), List.of(executionWithId(3L, "confirmed", 77L)));
+        IngestBatchDO completed = new IngestBatchDO();
+        completed.setId(77L);
+        completed.setStatus("completed");
+        when(batchMapper.selectById(77L)).thenReturn(completed);
+        ExecutionModel confirmed = new ExecutionModel();
+        confirmed.setId(3L);
+        confirmed.setStatus("confirmed");
+        when(executionTracker.getExecution(3L)).thenReturn(confirmed);
+        when(executionMapper.update(any(), any())).thenReturn(1);
+
+        scheduler.kick(10L);
+
+        verify(dispatcher).dispatch(eq(3L), eq(10L), any(), any(), eq(PipelineTaskMessage.TYPE_INGEST_EXECUTE), any());
+    }
+
+    @Test
+    void shouldSkipCancelledBatchEvenWithConfirmedCandidate() {
+        stubQueries(List.of(), List.of(executionWithId(3L, "confirmed", 77L)));
+        IngestBatchDO cancelled = new IngestBatchDO();
+        cancelled.setId(77L);
+        cancelled.setStatus("cancelled");
+        when(batchMapper.selectById(77L)).thenReturn(cancelled);
+
+        scheduler.kick(10L);
+
+        verify(executionMapper, never()).update(any(), any());
+        verify(dispatcher, never()).dispatch(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     void shouldRecheckCandidateWhenCasLoses() {
         stubQueries(List.of(), List.of(
             executionWithId(1L, "pending", null),

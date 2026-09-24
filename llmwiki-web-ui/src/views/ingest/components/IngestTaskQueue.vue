@@ -198,7 +198,7 @@ function onRowClose(row: QueueRow) {
               </div>
               <span v-if="row.badge > 0" class="ingest-queue__badge">{{ row.badge }}</span>
               <button
-                v-if="row.kind === 'task'"
+                v-if="row.kind === 'task' && row.payload?.batchId == null"
                 type="button"
                 class="ingest-queue__item-close"
                 :title="t('ingest.closeTask')"

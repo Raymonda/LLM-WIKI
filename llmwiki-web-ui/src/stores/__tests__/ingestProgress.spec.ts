@@ -148,6 +148,18 @@ describe('ingestProgress recovery stage mapping', () => {
     expect(createIngestSSE).toHaveBeenCalledWith(40)
   })
 
+  it('shouldExposeBatchIdInTaskSummariesWhenRecovered', async () => {
+    vi.mocked(listActiveIngest).mockResolvedValue([
+      { executionId: 50, status: 'completed', batchId: 60 } as unknown as ExecutionInfo,
+    ])
+    const store = useIngestProgressStore()
+
+    await store.recoverActiveTasks(1)
+
+    const summary = store.allTaskSummaries.find(t => t.executionId === 50)
+    expect(summary?.batchId).toBe(60)
+  })
+
   it('shouldSkipServerFetchWhenOpeningHydratedTask', async () => {
     vi.mocked(listActiveIngest).mockResolvedValue([executionInfo(41, 'running')])
     const store = useIngestProgressStore()

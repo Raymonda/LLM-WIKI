@@ -21,6 +21,7 @@ export interface QueueTaskLike {
   status: string
   isPhaseRunning: boolean
   progress: number
+  batchId?: number | null
 }
 
 export interface QueueBatchLike {

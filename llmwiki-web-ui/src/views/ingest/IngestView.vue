@@ -373,7 +373,10 @@ async function handlePauseExecution() {
   await store.pauseExecution()
 }
 
-async function handleCloseTask(task: { executionId: number; isPhaseRunning: boolean; status: string }) {
+async function handleCloseTask(task: { executionId: number; isPhaseRunning: boolean; status: string; batchId?: number | null }) {
+  if (task.batchId != null) {
+    return
+  }
   if (isTerminalTaskStatus(task.status)) {
     store.deleteExecution(task.executionId)
     return
