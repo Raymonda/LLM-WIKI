@@ -72,7 +72,8 @@ public class ParserAgent {
         if (needsParse) {
             byte[] fileBytes = storageProvider.read(scopeIdStr, sourceDO.getFilePath());
             if (fileBytes == null) {
-                throw new RuntimeException("Source file not found in storage: " + sourceDO.getFilePath());
+                throw new RuntimeException("Source file not found in storage: " + sourceDO.getFilePath()
+                    + " (absolute: " + getStorageAbsolutePath(scopeIdStr, sourceDO.getFilePath()) + ")");
             }
             if (!FileFormatValidator.isValidFormat(sourceDO.getFormat(), fileBytes)) {
                 throw new RuntimeException("文件格式校验失败");
@@ -89,7 +90,10 @@ public class ParserAgent {
             boolean diagramEnable = diagramProperties.isEnabled()
                 && ("pdf".equals(format.toLowerCase()) || "docx".equals(format.toLowerCase()) || "doc".equals(format.toLowerCase())
                     || "pptx".equals(format.toLowerCase()) || "ppt".equals(format.toLowerCase()));
-            String ocrModel = ocrProperties.getModel();
+            String ocrSlotModel = slotRouter.resolveSlotModelStrict("ocr");
+            String ocrModel = ocrSlotModel != null && !ocrSlotModel.isBlank() ? ocrSlotModel : ocrProperties.getModel();
+            String diagramSlotModel = slotRouter.resolveSlotModelStrict("diagram");
+            String diagramModel = diagramSlotModel != null && !diagramSlotModel.isBlank() ? diagramSlotModel : diagramProperties.getModel();
             AiSlotRouter.Endpoint ocrEndpoint = slotRouter.getEndpoint("ocr");
             AiSlotRouter.Endpoint diagramEndpoint = slotRouter.getEndpoint("diagram");
             String apiKey = ocrEndpoint != null && ocrEndpoint.apiKey() != null && !ocrEndpoint.apiKey().isBlank()
@@ -147,7 +151,7 @@ public class ParserAgent {
             try {
                 jsonOutput = runner.run(filePath, format, ocrEnable, apiKey, ocrModel,
                     ocrProperties.getMaxPages(), ocrProperties.getScanThreshold(), multimodalMain, assetsDir,
-                    diagramEnable, diagramApiKey, diagramProperties.getModel(), diagramProperties.getMaxImages(),
+                    diagramEnable, diagramApiKey, diagramModel, diagramProperties.getMaxImages(),
                     diagramProperties.getDpi(), diagramProperties.getJpegQuality(), diagramProperties.getConcurrency(),
                     diagramProperties.getScoreThreshold(), diagramProperties.getLargeDrawingRatio(),
                     diagramProperties.getSignificantImageRatio(), diagramProperties.getPayloadGateMb(),
@@ -264,7 +268,8 @@ public class ParserAgent {
             } else {
                 byte[] sourceContent = storageProvider.read(scopeIdStr, sourceDO.getFilePath());
                 if (sourceContent == null) {
-                    throw new RuntimeException("Source file not found: " + sourceDO.getFilePath());
+                    throw new RuntimeException("Source file not found: " + sourceDO.getFilePath()
+                        + " (absolute: " + getStorageAbsolutePath(scopeIdStr, sourceDO.getFilePath()) + ")");
                 }
                 context.setSourceContent(new String(sourceContent, StandardCharsets.UTF_8));
                 sourceDO.setStatus("processing");

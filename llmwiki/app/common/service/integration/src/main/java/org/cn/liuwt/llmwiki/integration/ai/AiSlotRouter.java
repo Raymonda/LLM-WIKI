@@ -113,6 +113,19 @@ public class AiSlotRouter {
         return StringUtils.hasText(slot.model()) ? slot.model() : null;
     }
 
+    public String resolveSlotModelStrict(String slotName) {
+        AiRuntimeConfig cfg = holder.get();
+        if (cfg.isEmpty()) {
+            return null;
+        }
+
+        AiRuntimeConfig.SlotEntry slot = cfg.slots().get(slotName);
+        if (slot == null) {
+            return null;
+        }
+        return StringUtils.hasText(slot.model()) ? slot.model() : null;
+    }
+
     public boolean isMultiProviderMode() {
         return !holder.get().isEmpty();
     }

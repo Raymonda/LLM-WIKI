@@ -9,12 +9,14 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -42,6 +44,10 @@ public class PythonProcessRunner {
 
     private static final Object PYTHON_CMD_LOCK = new Object();
     private static volatile String cachedPythonCommand;
+
+    static final String PYTHON_COMMAND_PROPERTY = "llmwiki.python.command";
+    static final String PYTHON_COMMAND_ENV = "LLMWIKI_PYTHON_COMMAND";
+    private static final int VENV_SEARCH_MAX_DEPTH = 6;
 
     private final Path scriptPath;
     private final long timeoutSeconds;
@@ -241,34 +247,35 @@ public class PythonProcessRunner {
             if (cachedPythonCommand != null) {
                 return cachedPythonCommand;
             }
-            List<String> candidates = new ArrayList<>();
-            // Check local venv first (created by setup-python.bat/sh)
-            String os = System.getProperty("os.name", "").toLowerCase();
-            if (os.contains("win")) {
-                candidates.add(".venv-python\\Scripts\\python");
-                candidates.add(".venv\\Scripts\\python");
-            } else {
-                candidates.add(".venv-python/bin/python");
-                candidates.add(".venv/bin/python");
+            String explicit = explicitPythonCommand();
+            if (explicit != null) {
+                String version = probePythonVersion(explicit);
+                if (version != null) {
+                    log.info("Using explicitly configured Python command: {} ({})", explicit, version);
+                    cachedPythonCommand = explicit;
+                    return explicit;
+                }
+                throw new IllegalStateException("显式配置的 Python 命令不可用: " + explicit
+                        + "（来源: -D" + PYTHON_COMMAND_PROPERTY + " 或环境变量 " + PYTHON_COMMAND_ENV + "），请修正后重启");
             }
-            // System Python
+            LinkedHashSet<String> candidates = new LinkedHashSet<>();
+            Path codeDir = codeSourceDir();
+            if (codeDir != null) {
+                for (Path venvPython : findVenvPythonCandidatesNear(codeDir, VENV_SEARCH_MAX_DEPTH)) {
+                    candidates.add(venvPython.toString());
+                }
+            }
+            Path userDir = Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize();
+            for (Path venvPython : findVenvPythonCandidatesNear(userDir, VENV_SEARCH_MAX_DEPTH)) {
+                candidates.add(venvPython.toString());
+            }
             candidates.addAll(Arrays.asList("python", "python3", "py"));
             for (String cmd : candidates) {
-                try {
-                    ProcessBuilder pb = new ProcessBuilder(cmd, "--version");
-                    pb.redirectErrorStream(true);
-                    applyScrubbedEnvironment(pb);
-                    Process p = pb.start();
-                    boolean finished = p.waitFor(10, TimeUnit.SECONDS);
-                    if (finished && p.exitValue() == 0) {
-                        String output = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
-                        if (output.contains("Python")) {
-                            log.info("Detected Python command: {} ({})", cmd, output);
-                            cachedPythonCommand = cmd;
-                            return cmd;
-                        }
-                    }
-                } catch (Exception ignored) {
+                String version = probePythonVersion(cmd);
+                if (version != null) {
+                    log.info("Detected Python command: {} ({})", cmd, version);
+                    cachedPythonCommand = cmd;
+                    return cmd;
                 }
             }
             log.warn("No Python command found, defaulting to 'python'");
@@ -277,8 +284,90 @@ public class PythonProcessRunner {
         }
     }
 
+    private static String explicitPythonCommand() {
+        String value = System.getProperty(PYTHON_COMMAND_PROPERTY);
+        if (value != null && !value.isBlank()) {
+            return value.trim();
+        }
+        value = System.getenv(PYTHON_COMMAND_ENV);
+        if (value != null && !value.isBlank()) {
+            return value.trim();
+        }
+        return null;
+    }
+
+    static Path codeSourceDir() {
+        try {
+            URI location = PythonProcessRunner.class.getProtectionDomain()
+                    .getCodeSource().getLocation().toURI();
+            Path path = Path.of(location);
+            if (Files.isRegularFile(path)) {
+                return path.getParent();
+            }
+            return path;
+        } catch (Exception e) {
+            log.debug("Cannot resolve code source location: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    static List<Path> findVenvPythonCandidatesNear(Path start, int maxDepth) {
+        List<Path> found = new ArrayList<>();
+        if (start == null) {
+            return found;
+        }
+        boolean windows = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+        List<String> venvDirNames = List.of(".venv-python", ".venv");
+        List<String> binRelPaths = windows
+                ? List.of("Scripts/python.exe", "Scripts/python")
+                : List.of("bin/python", "bin/python3");
+        Path dir = start.toAbsolutePath().normalize();
+        for (int depth = 0; depth <= maxDepth && dir != null; depth++) {
+            for (String venvDirName : venvDirNames) {
+                for (String binRelPath : binRelPaths) {
+                    Path candidate = dir.resolve(venvDirName).resolve(binRelPath);
+                    if (Files.isRegularFile(candidate)) {
+                        found.add(candidate);
+                    }
+                }
+            }
+            dir = dir.getParent();
+        }
+        return found;
+    }
+
+    private static String probePythonVersion(String cmd) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(cmd, "--version");
+            pb.redirectErrorStream(true);
+            applyScrubbedEnvironment(pb);
+            Process p = pb.start();
+            boolean finished = p.waitFor(10, TimeUnit.SECONDS);
+            if (finished && p.exitValue() == 0) {
+                String output = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+                if (output.contains("Python")) {
+                    return output;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    static void resetPythonCommandCacheForTest() {
+        synchronized (PYTHON_CMD_LOCK) {
+            cachedPythonCommand = null;
+        }
+    }
+
     public static PythonEnvironmentCheckResult checkEnvironment() {
-        String pythonCmd = resolvePythonCommand();
+        String pythonCmd;
+        try {
+            pythonCmd = resolvePythonCommand();
+        } catch (IllegalStateException e) {
+            return new PythonEnvironmentCheckResult(false, String.valueOf(explicitPythonCommand()), "unknown",
+                    List.of(e.getMessage()), List.of());
+        }
         List<String> missingRequired = new ArrayList<>();
         List<String> missingOptional = new ArrayList<>();
         String pythonVersion = "unknown";

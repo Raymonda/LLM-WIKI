@@ -91,4 +91,29 @@ class AiSlotRouterTest {
         assertSame(registry.getModel("dash"), router.getModel("main"));
         assertNull(router.resolveModel("main"));
     }
+
+    @Test
+    void shouldResolveStrictSlotModelWithoutMainFallback() {
+        AiProviderRegistry registry = new AiProviderRegistry();
+        AiSlotRouter router = router(registry, config());
+        assertEquals("qwen-vl-ocr", router.resolveSlotModelStrict("ocr"));
+        assertNull(router.resolveSlotModelStrict("diagram"));
+        assertEquals("qwen-plus", router.resolveModel("diagram"));
+    }
+
+    @Test
+    void shouldReturnNullStrictWhenSlotModelBlank() {
+        AiProviderRegistry registry = new AiProviderRegistry();
+        AiSlotRouter router = router(registry, new AiRuntimeConfig(
+            Map.of("dash", new AiRuntimeConfig.ProviderEntry("https://a", "sk-x", true)),
+            Map.of("main", new AiRuntimeConfig.SlotEntry("dash", "qwen-plus", false),
+                   "ocr", new AiRuntimeConfig.SlotEntry("dash", " ", false))));
+        assertNull(router.resolveSlotModelStrict("ocr"));
+    }
+
+    @Test
+    void shouldReturnNullStrictWhenSnapshotEmpty() {
+        AiSlotRouter router = new AiSlotRouter(new AiProviderRegistry(), new AiRuntimeConfigHolder());
+        assertNull(router.resolveSlotModelStrict("ocr"));
+    }
 }

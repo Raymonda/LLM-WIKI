@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -153,6 +154,75 @@ class PythonProcessRunnerTest {
         assertTrue(result.contains("\"keyInArgv\": false"), "argv 不得包含任何凭据: " + result);
         assertTrue(result.contains("\"stdinHasOcr\": true"), "OCR 凭据应经 stdin 传递: " + result);
         assertTrue(result.contains("\"stdinHasDiagram\": true"), "图表凭据应经 stdin 传递: " + result);
+    }
+
+    @Test
+    void findVenvPythonCandidatesNear_findsVenvPythonAtAncestorWithinDepth() throws Exception {
+        Path python = Files.createFile(venvBinDir(tempDir, ".venv-python").resolve(pythonBinaryName()));
+        Path start = Files.createDirectories(tempDir.resolve("a/b/c"));
+
+        List<Path> found = PythonProcessRunner.findVenvPythonCandidatesNear(start, 6);
+
+        assertTrue(found.contains(python));
+    }
+
+    @Test
+    void findVenvPythonCandidatesNear_respectsMaxDepth() throws Exception {
+        Files.createFile(venvBinDir(tempDir, ".venv-python").resolve(pythonBinaryName()));
+        Path start = Files.createDirectories(tempDir.resolve("a/b/c"));
+
+        assertTrue(PythonProcessRunner.findVenvPythonCandidatesNear(start, 1).isEmpty());
+    }
+
+    @Test
+    void findVenvPythonCandidatesNear_nullStartReturnsEmpty() {
+        assertTrue(PythonProcessRunner.findVenvPythonCandidatesNear(null, 6).isEmpty());
+    }
+
+    @Test
+    void findVenvPythonCandidatesNear_prefersDotVenvPythonOverDotVenv() throws Exception {
+        Path preferred = Files.createFile(venvBinDir(tempDir, ".venv-python").resolve(pythonBinaryName()));
+        Path other = Files.createFile(venvBinDir(tempDir, ".venv").resolve(pythonBinaryName()));
+        Path start = Files.createDirectories(tempDir.resolve("sub"));
+
+        List<Path> found = PythonProcessRunner.findVenvPythonCandidatesNear(start, 2);
+
+        assertEquals(List.of(preferred, other), found);
+    }
+
+    @Test
+    void resolvePythonCommand_failsFastWhenExplicitCommandUnusable() {
+        System.setProperty(PythonProcessRunner.PYTHON_COMMAND_PROPERTY, "definitely-not-a-python-" + System.nanoTime());
+        PythonProcessRunner.resetPythonCommandCacheForTest();
+        try {
+            assertThrows(IllegalStateException.class, PythonProcessRunner::resolvePythonCommand);
+        } finally {
+            System.clearProperty(PythonProcessRunner.PYTHON_COMMAND_PROPERTY);
+            PythonProcessRunner.resetPythonCommandCacheForTest();
+        }
+    }
+
+    @Test
+    void resolvePythonCommand_usesExplicitCommandWhenUsable() {
+        Assumptions.assumeTrue(pythonAvailable(), "Python 环境不可用，跳过");
+        System.setProperty(PythonProcessRunner.PYTHON_COMMAND_PROPERTY, "python");
+        PythonProcessRunner.resetPythonCommandCacheForTest();
+        try {
+            assertEquals("python", PythonProcessRunner.resolvePythonCommand());
+        } finally {
+            System.clearProperty(PythonProcessRunner.PYTHON_COMMAND_PROPERTY);
+            PythonProcessRunner.resetPythonCommandCacheForTest();
+        }
+    }
+
+    private static Path venvBinDir(Path venvParent, String venvDirName) throws Exception {
+        boolean windows = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
+        return Files.createDirectories(venvParent.resolve(venvDirName).resolve(windows ? "Scripts" : "bin"));
+    }
+
+    private static String pythonBinaryName() {
+        boolean windows = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
+        return windows ? "python.exe" : "python";
     }
 
     private static boolean pythonAvailable() {
