@@ -2,7 +2,9 @@ package org.cn.liuwt.llmwiki.bootstrap.validation;
 
 import org.cn.liuwt.llmwiki.bootstrap.ConfigValidationBootstrap;
 import org.cn.liuwt.llmwiki.bootstrap.StartupConfigValidator;
+import org.cn.liuwt.llmwiki.common.dal.mapper.SourceMapper;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.AiRuntimeConfigService;
+import org.cn.liuwt.llmwiki.integration.storage.StorageProvider;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.env.MockEnvironment;
 
@@ -38,7 +40,7 @@ class StartupConfigValidatorTest {
         MockEnvironment env = new MockEnvironment()
             .withProperty("spring.profiles.active", "prod")
             .withProperty("llmwiki.jwt.secret", "llmwiki-default-secret-change-in-production");
-        ConfigValidationBootstrap bootstrap = new ConfigValidationBootstrap(env, unconfiguredDbService());
+        ConfigValidationBootstrap bootstrap = bootstrap(env);
         IllegalStateException e = assertThrows(IllegalStateException.class, () -> bootstrap.run(null));
         assertTrue(e.getMessage().contains("生产环境关键配置校验失败"));
     }
@@ -48,7 +50,7 @@ class StartupConfigValidatorTest {
         MockEnvironment env = new MockEnvironment()
             .withProperty("spring.profiles.active", "dev")
             .withProperty("llmwiki.jwt.secret", "llmwiki-default-secret-change-in-production");
-        ConfigValidationBootstrap bootstrap = new ConfigValidationBootstrap(env, unconfiguredDbService());
+        ConfigValidationBootstrap bootstrap = bootstrap(env);
         assertDoesNotThrow(() -> bootstrap.run(null));
     }
 
@@ -57,8 +59,13 @@ class StartupConfigValidatorTest {
         MockEnvironment env = new MockEnvironment()
             .withProperty("spring.profiles.active", "prod")
             .withProperty("llmwiki.jwt.secret", REAL_JWT);
-        ConfigValidationBootstrap bootstrap = new ConfigValidationBootstrap(env, unconfiguredDbService());
+        ConfigValidationBootstrap bootstrap = bootstrap(env);
         assertDoesNotThrow(() -> bootstrap.run(null));
+    }
+
+    private ConfigValidationBootstrap bootstrap(MockEnvironment env) {
+        return new ConfigValidationBootstrap(env, unconfiguredDbService(),
+            mock(SourceMapper.class), mock(StorageProvider.class), false);
     }
 
     private AiRuntimeConfigService unconfiguredDbService() {

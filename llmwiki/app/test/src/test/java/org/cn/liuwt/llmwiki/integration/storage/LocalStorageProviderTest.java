@@ -211,4 +211,18 @@ class LocalStorageProviderTest {
 
         assertTrue(provider.list("test-scope", "raw/.tmp").isEmpty());
     }
+
+    @Test
+    void shouldAbsolutizeRelativeBasePathOnInit() {
+        LocalStorageProvider provider = new LocalStorageProvider();
+        provider.setBasePath("./wiki-data");
+        provider.init();
+
+        String url = provider.getUrl("s1", "wiki/a.md");
+
+        assertTrue(Path.of(url).isAbsolute());
+        Path expected = java.nio.file.Paths.get("./wiki-data").toAbsolutePath().normalize()
+                .resolve("s1").resolve("wiki/a.md").normalize();
+        assertEquals(expected.toString(), Path.of(url).normalize().toString());
+    }
 }

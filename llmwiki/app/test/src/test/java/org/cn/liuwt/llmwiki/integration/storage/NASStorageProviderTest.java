@@ -305,4 +305,14 @@ class NASStorageProviderTest {
 
         assertTrue(provider.list("test-scope", "raw/.tmp").isEmpty());
     }
+
+    @Test
+    void shouldAbsolutizeRelativeBasePathOnInit() {
+        NASStorageProvider provider = new NASStorageProvider();
+        provider.setBasePath("./wiki-data");
+        provider.setLockEnabled(false);
+        provider.init();
+
+        assertTrue(Path.of(provider.getUrl("s1", "wiki/a.md")).isAbsolute());
+    }
 }

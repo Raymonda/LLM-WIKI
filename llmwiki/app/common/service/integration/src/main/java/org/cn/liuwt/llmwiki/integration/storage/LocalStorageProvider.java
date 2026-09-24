@@ -1,9 +1,12 @@
 package org.cn.liuwt.llmwiki.integration.storage;
 
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -22,8 +25,42 @@ public class LocalStorageProvider implements StorageProvider {
     @Value("${llmwiki.wiki-data-path:./wiki-data}")
     private String basePath;
 
+    @Autowired(required = false)
+    private Environment environment;
+
     public void setBasePath(String basePath) {
-        this.basePath = basePath;
+        this.basePath = basePath != null ? Paths.get(basePath).toAbsolutePath().normalize().toString() : null;
+    }
+
+    @PostConstruct
+    void init() {
+        boolean explicit = isWikiDataPathExplicitlyConfigured();
+        basePath = Paths.get(basePath).toAbsolutePath().normalize().toString();
+        if (explicit) {
+            log.info("Wiki data storage root (local): {}", basePath);
+        } else {
+            log.warn("");
+            log.warn("================ WIKI DATA PATH WARNING ================");
+            log.warn("  llmwiki.wiki-data-path 未显式配置，默认 ./wiki-data 已解析为:");
+            log.warn("    {}", basePath);
+            log.warn("  该路径锚定在应用启动目录(user.dir)，从不同目录启动将读写");
+            log.warn("  不同的 wiki-data，造成 DB 记录与文件漂移（ingest 丢文件）。");
+            log.warn("  修复: 设置环境变量 WIKI_DATA_PATH 为绝对路径后重启。");
+            log.warn("==========================================================");
+            log.warn("");
+        }
+    }
+
+    private boolean isWikiDataPathExplicitlyConfigured() {
+        if (environment == null) {
+            return true;
+        }
+        String envVar = environment.getProperty("WIKI_DATA_PATH");
+        if (envVar != null && !envVar.isBlank()) {
+            return true;
+        }
+        String prop = environment.getProperty("llmwiki.wiki-data-path");
+        return prop != null && !prop.isBlank() && !"./wiki-data".equals(prop.trim());
     }
 
     private Path resolvePath(String scopeId, String relativePath) {

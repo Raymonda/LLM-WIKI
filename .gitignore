@@ -79,8 +79,9 @@ node_modules/
 # Root-level wiki data (private user content, never commit)
 wiki-data/
 
-# Local dev startup script (contains absolute local paths)
+# Local dev startup scripts (machine-specific profile / local credentials)
 start-dev.ps1
+llmwiki/start-local.ps1
 
 # RocketMQ runtime data
 llmwiki/rocketmq/store/
