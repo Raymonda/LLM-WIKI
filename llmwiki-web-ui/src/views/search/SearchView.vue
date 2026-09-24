@@ -110,6 +110,27 @@ const isStreamingSynthesis = computed(() => isStreaming.value && isSynthesizing.
 const activeFact = ref<FactBlockView | null>(null)
 const evidenceOpen = ref(false)
 
+const thinkingOpen = ref(true)
+const thinkingBodyRef = ref<HTMLElement | null>(null)
+const thinkingUserScrolledUp = ref(false)
+
+watch(isStreamingSynthesis, (v) => {
+  if (v) thinkingOpen.value = false
+})
+
+watch([factContent, aiAnswer], async () => {
+  if (!thinkingOpen.value || thinkingUserScrolledUp.value) return
+  await nextTick()
+  const el = thinkingBodyRef.value
+  if (el) el.scrollTop = el.scrollHeight
+})
+
+function handleThinkingScroll() {
+  const el = thinkingBodyRef.value
+  if (!el) return
+  thinkingUserScrolledUp.value = el.scrollHeight - el.scrollTop - el.clientHeight > 24
+}
+
 const factPopupVisible = computed({
   get: () => activeFact.value !== null,
   set: (v: boolean) => {
@@ -331,6 +352,8 @@ function handleQuery() {
   refineInput.value = ''
   isSaving.value = false
   didScrollToProspectiveStart = false
+  thinkingOpen.value = true
+  thinkingUserScrolledUp.value = false
   sse.startQuery(q, queryAnalysisMode.value)
 }
 
@@ -338,6 +361,8 @@ function submitIntent(intentText: string) {
   if (!clarification.value || !intentText.trim()) return
   const extra = clarifyInput.value.trim()
   const assumed = extra ? `${intentText.trim()} ${extra}` : intentText.trim()
+  thinkingOpen.value = true
+  thinkingUserScrolledUp.value = false
   sse.startQuery(lastQuestion.value, queryAnalysisMode.value, undefined, assumed, true)
   clarifyInput.value = ''
 }
@@ -397,6 +422,8 @@ function startNewQuestion() {
   isRefining.value = false
   isSaving.value = false
   localLoading.value = false
+  thinkingOpen.value = true
+  thinkingUserScrolledUp.value = false
 }
 
 function toggleRefineInput() {
@@ -721,7 +748,27 @@ onUnmounted(() => {
               <Zap v-else :size="16" class="search-page__zap-icon" />
               <span>{{ queryAnalysisMode === 'deep' ? t('search.deepThinking') : t('search.quickSynthesis') }}</span>
             </div>
+            <div v-if="isStreaming && !synthesisStream && aiAnswer" class="search-page__thinking">
+              <button
+                class="search-page__thinking-header"
+                :aria-expanded="thinkingOpen"
+                @click="thinkingOpen = !thinkingOpen"
+              >
+                <Brain :size="14" class="search-page__thinking-icon" />
+                <span class="search-page__thinking-title">{{ t('search.thinkingProcess') }}</span>
+                <Loader2 v-if="!isSynthesizing" :size="12" class="search-page__loading-icon" />
+                <ChevronDown :size="14" class="search-page__thinking-chevron" :class="{ 'search-page__thinking-chevron--open': thinkingOpen }" />
+              </button>
+              <div v-show="thinkingOpen" ref="thinkingBodyRef" class="search-page__thinking-body" @scroll="handleThinkingScroll">
+                <WikiPageRenderer
+                  :content="aiAnswer"
+                  :streaming="true"
+                  :link-resolution="answerLinkResolution"
+                />
+              </div>
+            </div>
             <WikiPageRenderer
+              v-else
               :content="synthesisStream || aiAnswer"
               :streaming="isStreaming || isRefining"
               :link-resolution="answerLinkResolution"
@@ -747,12 +794,25 @@ onUnmounted(() => {
             <div v-if="factBlocks.length > 0" class="search-page__fact-cards">
               <FactEvidenceList :blocks="factBlocks" />
             </div>
-            <WikiPageRenderer
-              v-else
-              :content="factContent"
-              :streaming="!isSynthesizing && (isStreaming || isRefining)"
-              :link-resolution="answerLinkResolution"
-            />
+            <div v-else-if="factContent" class="search-page__thinking">
+              <button
+                class="search-page__thinking-header"
+                :aria-expanded="thinkingOpen"
+                @click="thinkingOpen = !thinkingOpen"
+              >
+                <Brain :size="14" class="search-page__thinking-icon" />
+                <span class="search-page__thinking-title">{{ t('search.thinkingProcess') }}</span>
+                <Loader2 v-if="isStreaming && !isSynthesizing" :size="12" class="search-page__loading-icon" />
+                <ChevronDown :size="14" class="search-page__thinking-chevron" :class="{ 'search-page__thinking-chevron--open': thinkingOpen }" />
+              </button>
+              <div v-show="thinkingOpen" ref="thinkingBodyRef" class="search-page__thinking-body" @scroll="handleThinkingScroll">
+                <WikiPageRenderer
+                  :content="factContent"
+                  :streaming="!isSynthesizing && (isStreaming || isRefining)"
+                  :link-resolution="answerLinkResolution"
+                />
+              </div>
+            </div>
             <div v-if="isStreamingSynthesis && !synthesisStream" class="search-page__synthesis-hint" :class="'search-page__synthesis-hint--' + queryAnalysisMode">
               <Brain v-if="queryAnalysisMode === 'deep'" :size="16" class="search-page__brain-icon" />
               <Zap v-else :size="16" class="search-page__zap-icon" />
@@ -1551,6 +1611,98 @@ onUnmounted(() => {
   flex-direction: column;
   gap: var(--space-3);
   margin-bottom: var(--space-3);
+}
+
+.search-page__thinking {
+  margin-bottom: var(--space-3);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.search-page__thinking-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  font-size: var(--font-caption);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.search-page__thinking-header:hover {
+  color: var(--text-secondary);
+}
+
+.search-page__thinking-icon {
+  flex-shrink: 0;
+}
+
+.search-page__thinking-title {
+  flex: 1;
+  text-align: left;
+  font-weight: var(--weight-medium);
+}
+
+.search-page__thinking-chevron {
+  flex-shrink: 0;
+  transition: transform var(--transition-fast);
+}
+
+.search-page__thinking-chevron--open {
+  transform: rotate(180deg);
+}
+
+.search-page__thinking-body {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.search-page__thinking-body :deep(.wiki-content) {
+  max-width: none;
+  font-size: var(--font-caption);
+  line-height: var(--leading-body);
+  color: var(--text-secondary);
+}
+
+.search-page__thinking-body :deep(.wiki-content h1),
+.search-page__thinking-body :deep(.wiki-content h2),
+.search-page__thinking-body :deep(.wiki-content h3),
+.search-page__thinking-body :deep(.wiki-content h4),
+.search-page__thinking-body :deep(.wiki-content h5),
+.search-page__thinking-body :deep(.wiki-content h6) {
+  margin: var(--space-2) 0 var(--space-1);
+  padding: 0;
+  border: none;
+  font-family: var(--font-body);
+  font-size: var(--font-body-sm);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-body-sm);
+  color: var(--text-secondary);
+}
+
+.search-page__thinking-body :deep(.wiki-content p),
+.search-page__thinking-body :deep(.wiki-content ul),
+.search-page__thinking-body :deep(.wiki-content ol),
+.search-page__thinking-body :deep(.wiki-content blockquote),
+.search-page__thinking-body :deep(.wiki-content pre) {
+  margin-bottom: var(--space-2);
+}
+
+.search-page__thinking-body :deep(.wiki-content ul),
+.search-page__thinking-body :deep(.wiki-content ol) {
+  padding-left: var(--space-4);
+}
+
+.search-page__thinking-body :deep(.wiki-content pre),
+.search-page__thinking-body :deep(.wiki-content code) {
+  font-size: var(--font-caption);
 }
 
 .search-page__evidence-strip {

@@ -35,6 +35,7 @@ export default {
   rateLimited: '调用频率受限，请稍后再试。',
   deepThinking: '深度思考中',
   quickSynthesis: '快速综合中',
+  thinkingProcess: '思考过程',
   savingToWiki: 'AI 正在整理答案为 Wiki 页面...',
   savedAsWiki: '已保存为 Wiki 页面',
   viewPage: '查看页面',

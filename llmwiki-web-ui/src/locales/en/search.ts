@@ -35,6 +35,7 @@ export default {
   rateLimited: 'Rate limited, please try again later.',
   deepThinking: 'Deep thinking...',
   quickSynthesis: 'Quick synthesis...',
+  thinkingProcess: 'Thinking',
   savingToWiki: 'AI is organizing the answer into a Wiki page...',
   savedAsWiki: 'Saved as Wiki page',
   viewPage: 'View page',
