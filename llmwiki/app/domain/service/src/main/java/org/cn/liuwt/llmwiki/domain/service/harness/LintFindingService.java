@@ -957,13 +957,14 @@ public class LintFindingService {
 
         for (LintFindingDO f : staleFindings) {
             if (!"auto_refresh".equals(f.getHandlingMethod())) continue;
-            if (processedPageIds.contains(f.getAssetId())) {
+            Long pageId = resolvePageIdForFinding(scopeId, f);
+            if (pageId != null && processedPageIds.contains(pageId)) {
                 autoResolve(f.getId(), "auto_refresh");
                 refreshed++;
                 continue;
             }
 
-            List<Long> sourceIds = findSourceIdsForPage(scopeId, f.getAssetId());
+            List<Long> sourceIds = findSourceIdsForPage(scopeId, pageId);
             if (sourceIds.isEmpty()) {
                 autoResolve(f.getId(), "manual_edit");
                 noSource++;
@@ -972,8 +973,8 @@ public class LintFindingService {
 
             try {
                 markAsRepairing(f.getId(), null);
-                staleRefreshService.refreshPage(scopeId, f.getAssetId(), sourceIds.get(0));
-                processedPageIds.add(f.getAssetId());
+                staleRefreshService.refreshPage(scopeId, pageId, sourceIds.get(0));
+                processedPageIds.add(pageId);
                 refreshed++;
             } catch (Exception e) {
                 markRepairFailed(f.getId());
@@ -982,6 +983,37 @@ public class LintFindingService {
             }
         }
         log.info("batchAutoResolveStaleBySource completed: scopeId={}, refreshed={}, failed={}, noSource={}", scopeId, refreshed, failed, noSource);
+    }
+
+    public Long resolvePageIdForFinding(Long scopeId, LintFindingDO finding) {
+        if (finding.getAssetId() != null) {
+            return finding.getAssetId();
+        }
+        String pagePath = finding.getPagePath();
+        if (pagePath == null || pagePath.isBlank()) {
+            return null;
+        }
+        WikiPageDO page = wikiPageMapper.selectOne(
+            new LambdaQueryWrapper<WikiPageDO>()
+                .eq(WikiPageDO::getScopeId, scopeId)
+                .eq(WikiPageDO::getFilePath, pagePath)
+                .last("LIMIT 1"));
+        if (page == null) {
+            page = wikiPageMapper.selectOne(
+                new LambdaQueryWrapper<WikiPageDO>()
+                    .eq(WikiPageDO::getScopeId, scopeId)
+                    .eq(WikiPageDO::getTitle, pagePath)
+                    .last("LIMIT 1"));
+        }
+        if (page == null) {
+            return null;
+        }
+        lintFindingMapper.update(null,
+            new LambdaUpdateWrapper<LintFindingDO>()
+                .eq(LintFindingDO::getId, finding.getId())
+                .set(LintFindingDO::getAssetId, page.getId()));
+        finding.setAssetId(page.getId());
+        return page.getId();
     }
 
     public List<Long> findSourceIdsForPage(Long scopeId, Long pageId) {

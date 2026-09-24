@@ -163,7 +163,7 @@ function showBatchPreviewDialog(action: string) {
       case 'rejectLinks':
         return f.findingType === 'missing_crossref' && f.status === 'open'
       case 'dismiss':
-        return true
+        return f.status === 'open' || f.status === 'awaiting_approval'
       default:
         return false
     }
@@ -490,6 +490,7 @@ function getRiskHint(action: string): { icon: any; tone: 'error' | 'warning' | '
       :has-selected-failed="store.hasSelectedFailed"
       :selected-auto-resolvable-count="store.selectedAutoResolvableCount"
       :selected-failed-count="store.selectedFailedCount"
+      :selected-dismissable-count="store.selectedDismissableCount"
       :selected-awaiting-count="store.selectedAwaitingCount"
       :selected-stale-count="store.selectedStaleCount"
       :selected-auto-resolved-count="store.selectedAutoResolvedCount"
@@ -767,6 +768,11 @@ function getRiskHint(action: string): { icon: any; tone: 'error' | 'warning' | '
 }
 
 .lint-view__error-toast {
+  position: fixed;
+  top: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1100;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -777,6 +783,7 @@ function getRiskHint(action: string): { icon: any; tone: 'error' | 'warning' | '
   border-radius: var(--radius-md);
   font-size: var(--font-body-sm);
   font-weight: var(--weight-medium);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
   animation: fadeIn 0.3s ease;
 }
 
@@ -810,177 +817,6 @@ function getRiskHint(action: string): { icon: any; tone: 'error' | 'warning' | '
   gap: var(--space-1);
 }
 
-/* 批量操作预览对话框 */
-.batch-preview-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  animation: fadeIn 0.2s ease;
-}
-
-.batch-preview-dialog {
-  background: var(--surface-card);
-  border-radius: var(--radius-xl);
-  width: 90%;
-  max-width: 600px;
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-  animation: slideUp 0.3s ease;
-}
-
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(20px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.batch-preview-dialog__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid var(--border-subtle);
-  flex-shrink: 0;
-  background: var(--surface-card);
-}
-
-.batch-preview-dialog__title {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--text-primary);
-}
-
-.batch-preview-dialog__title h3 {
-  font-size: var(--font-h3);
-  font-weight: var(--weight-semibold);
-  margin: 0;
-}
-
-.batch-preview-dialog__close {
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: var(--space-1);
-  border-radius: var(--radius-md);
-  transition: all var(--transition-fast);
-}
-
-.batch-preview-dialog__close:hover {
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-}
-
-.batch-preview-dialog__body {
-  padding: var(--space-4) var(--space-5);
-  overflow-y: auto;
-  flex: 1 1 auto;
-  min-height: 0;
-  scrollbar-gutter: stable;
-}
-
-.batch-preview-dialog__desc {
-  font-size: var(--font-body-sm);
-  color: var(--text-secondary);
-  margin: 0 0 var(--space-3) 0;
-}
-
-.batch-preview-dialog__list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.batch-preview-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  background: var(--bg-secondary);
-  border-radius: var(--radius-md);
-  font-size: var(--font-body-sm);
-}
-
-.batch-preview-item__title {
-  flex: 1;
-  font-weight: var(--weight-medium);
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.batch-preview-item__type {
-  padding: 2px 8px;
-  background: var(--accent-light);
-  color: var(--accent-primary);
-  border-radius: var(--radius-full);
-  font-size: var(--font-caption);
-  font-weight: var(--weight-medium);
-}
-
-.batch-preview-item__status {
-  padding: 2px 8px;
-  background: var(--warning-light);
-  color: var(--warning);
-  border-radius: var(--radius-full);
-  font-size: var(--font-caption);
-  font-weight: var(--weight-medium);
-}
-
-.batch-preview-dialog__warning {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  background: var(--warning-light);
-  border: 1px solid var(--warning);
-  border-radius: var(--radius-md);
-  margin-top: var(--space-3);
-  font-size: var(--font-body-sm);
-  color: var(--warning);
-}
-
-.batch-preview-dialog__footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-5);
-  border-top: 1px solid var(--border-subtle);
-  flex-shrink: 0;
-  background: var(--surface-card);
-}
-
-.batch-preview-dialog__btn {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-md);
-  font-size: var(--font-body-sm);
-  font-weight: var(--weight-medium);
-  cursor: pointer;
-  border: none;
-  transition: opacity var(--transition-fast);
-}
-
-.batch-preview-dialog__btn:hover {
-  opacity: 0.85;
-}
-
-.batch-preview-dialog__btn--cancel {
-  background: transparent;
-  border: 1px solid var(--border-default);
-  color: var(--text-secondary);
-}
-
 /* ============================================================
    批量操作预览对话框 — Flat Design + Color Blocking
    设计原则：零冗余边框、色块分区、统一字阶 12/14/16/18/24
@@ -1010,6 +846,12 @@ function getRiskHint(action: string): { icon: any; tone: 'error' | 'warning' | '
   font-size: 14px;
   color: var(--text-primary);
   line-height: 1.5;
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* 高风险对话框顶部色带 */

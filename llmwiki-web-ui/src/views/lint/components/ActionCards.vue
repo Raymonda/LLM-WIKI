@@ -43,6 +43,7 @@ const props = defineProps<{
   hasSelectedFailed: boolean
   selectedAutoResolvableCount: number
   selectedFailedCount: number
+  selectedDismissableCount: number
   rulingTaskIds: Map<number, number>
 }>()
 
@@ -270,7 +271,7 @@ const visiblePages = computed(() => {
   const tp = totalPages.value
   const cp = currentPage.value
   if (tp <= 7) {
-    for (let i = 1; i <= tp; pages.push(++i));
+    for (let i = 1; i <= tp; i++) pages.push(i)
   } else {
     pages.push(1)
     if (cp > 3) pages.push(-1)
@@ -403,11 +404,12 @@ const visiblePages = computed(() => {
                 <X v-else :size="12" />{{ t('lint.batchRejectLinksCount', [selectedCrossrefOpenCount]) }}
               </button>
               <button
+                v-if="selectedDismissableCount > 0"
                 class="action-cards__batch-btn action-cards__batch-btn--dismiss"
                 :disabled="batchProcessing"
                 @click="emit('showBatchPreview', 'dismiss')"
               >
-                {{ t('lint.batchDismissCount', [selectedCount]) }}
+                {{ t('lint.batchDismissCount', [selectedDismissableCount]) }}
               </button>
             </div>
             <button class="action-cards__batch-btn action-cards__batch-btn--ghost" @click="emit('clearSelection')">{{ t('lint.cancelSelection') }}</button>

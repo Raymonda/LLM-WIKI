@@ -132,7 +132,7 @@ export function resolveSchemaCompliance(id: number): Promise<void> {
 
 export function triggerRepair(id: number, scopeId: number): Promise<Record<string, unknown>> {
   const params = new URLSearchParams({ scopeId: scopeId.toString() })
-  return api.post(`/lint/findings/${id}/trigger-repair?${params.toString()}`)
+  return api.post(`/lint/findings/${id}/trigger-repair?${params.toString()}`, undefined, { timeout: 180000 })
 }
 
 export function approveFinding(id: number, scopeId: number): Promise<Record<string, unknown>> {

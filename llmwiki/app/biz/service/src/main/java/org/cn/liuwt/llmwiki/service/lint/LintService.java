@@ -302,16 +302,17 @@ public class LintService {
             throw new RuntimeException("Only stale/open findings can trigger repair: id=" + findingId + " type=" + finding.getFindingType() + " status=" + finding.getStatus());
         }
 
-        List<Long> sourceIds = lintFindingService.findSourceIdsForPage(scopeId, finding.getAssetId());
+        Long pageId = lintFindingService.resolvePageIdForFinding(scopeId, finding);
+        List<Long> sourceIds = lintFindingService.findSourceIdsForPage(scopeId, pageId);
         if (sourceIds.isEmpty()) {
-            throw new RuntimeException("No source found for stale page: pageId=" + finding.getAssetId() + ". The page may be an orphan without source tracking.");
+            throw new RuntimeException("No source found for stale page: pageId=" + pageId + ". The page may be an orphan without source tracking.");
         }
 
         Long sourceId = sourceIds.get(0);
         lintFindingService.markAsRepairing(findingId, null);
 
         try {
-            staleRefreshService.refreshPage(scopeId, finding.getAssetId(), sourceId);
+            staleRefreshService.refreshPage(scopeId, pageId, sourceId);
         } catch (Exception e) {
             lintFindingService.markRepairFailed(findingId);
             throw new RuntimeException("Stale refresh failed: " + e.getMessage(), e);
@@ -338,12 +339,13 @@ public class LintService {
                 continue;
             }
 
-            if (f.getAssetId() != null && processedPageIds.contains(f.getAssetId())) {
+            Long pageId = lintFindingService.resolvePageIdForFinding(scopeId, f);
+            if (pageId != null && processedPageIds.contains(pageId)) {
                 skipped++;
                 continue;
             }
 
-            List<Long> sourceIds = lintFindingService.findSourceIdsForPage(scopeId, f.getAssetId());
+            List<Long> sourceIds = lintFindingService.findSourceIdsForPage(scopeId, pageId);
             if (sourceIds.isEmpty()) {
                 lintFindingService.autoResolve(f.getId(), "manual_edit");
                 log.info("Stale finding id={} has no source → auto_resolved as manual_edit (orphan page)", f.getId());
@@ -352,8 +354,8 @@ public class LintService {
 
             lintFindingService.generatePlanForApproval(f.getId(), "auto_refresh",
                 "AI 将基于最新源文件刷新该页面内容，请审批后执行");
-            if (f.getAssetId() != null) {
-                processedPageIds.add(f.getAssetId());
+            if (pageId != null) {
+                processedPageIds.add(pageId);
             }
             plansGenerated++;
         }
@@ -389,17 +391,18 @@ public class LintService {
         }
 
         if ("stale".equals(finding.getFindingType()) && "auto_refresh".equals(finding.getHandlingMethod())) {
-            List<Long> sourceIds = lintFindingService.findSourceIdsForPage(effectiveScopeId, finding.getAssetId());
+            Long pageId = lintFindingService.resolvePageIdForFinding(effectiveScopeId, finding);
+            List<Long> sourceIds = lintFindingService.findSourceIdsForPage(effectiveScopeId, pageId);
             if (sourceIds.isEmpty()) {
                 lintFindingService.updateStatus(findingId, "open");
-                throw new RuntimeException("No source found for stale page: pageId=" + finding.getAssetId() + ". Cannot trigger repair for orphan page.");
+                throw new RuntimeException("No source found for stale page: pageId=" + pageId + ". Cannot trigger repair for orphan page.");
             }
 
             Long sourceId = sourceIds.get(0);
             lintFindingService.markAsRepairing(findingId, null);
 
             try {
-                staleRefreshService.refreshPage(scopeId, finding.getAssetId(), sourceId);
+                staleRefreshService.refreshPage(scopeId, pageId, sourceId);
             } catch (Exception e) {
                 lintFindingService.markRepairFailed(findingId);
                 throw new RuntimeException("Stale refresh failed after approval: " + e.getMessage(), e);
@@ -510,10 +513,18 @@ public class LintService {
             }
         }
         if (filePath != null && !filePath.isBlank()) {
-            return wikiPageMapper.selectOne(
+            WikiPageDO page = wikiPageMapper.selectOne(
                 new LambdaQueryWrapper<WikiPageDO>()
                     .eq(WikiPageDO::getScopeId, scopeId)
                     .eq(WikiPageDO::getFilePath, filePath)
+                    .last("LIMIT 1"));
+            if (page != null) {
+                return page;
+            }
+            return wikiPageMapper.selectOne(
+                new LambdaQueryWrapper<WikiPageDO>()
+                    .eq(WikiPageDO::getScopeId, scopeId)
+                    .eq(WikiPageDO::getTitle, filePath)
                     .last("LIMIT 1"));
         }
         return null;
@@ -521,7 +532,9 @@ public class LintService {
 
     private void repairConflictExtra(LintFindingDO finding, Map<String, Object> extra,
                                      WikiPageDO fromPage, WikiPageDO toPage) {
-        boolean needsRepair = !extra.containsKey("fromPagePath") || extra.containsKey("pagePathB");
+        boolean needsRepair = extra.containsKey("pagePathB")
+            || asLong(extra.get("fromPageId")) == null
+            || asLong(extra.get("relatedPageId")) == null;
         if (!needsRepair) {
             return;
         }

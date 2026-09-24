@@ -148,6 +148,28 @@ const typeLabelKeyMap: Record<string, string> = {
 const currentTypeIcon = computed(() => typeIconMap[props.findingType] || Info)
 const currentTypeLabel = computed(() => typeLabelKeyMap[props.findingType] ? t(typeLabelKeyMap[props.findingType]) : props.findingType)
 
+const alternativeLabelKeyMap: Record<string, string> = {
+  merge: 'lint.rulingAltMerge',
+  coexist: 'lint.rulingAltCoexist',
+  choose_a: 'lint.rulingAltChooseA',
+  choose_b: 'lint.rulingAltChooseB',
+  discard: 'lint.rulingAltDiscard',
+}
+const alternativeLabel = (label: string) => {
+  const key = alternativeLabelKeyMap[label?.toLowerCase()]
+  return key ? t(key) : label
+}
+
+const riskLevelKeyMap: Record<string, string> = {
+  high: 'lint.severityHigh',
+  medium: 'lint.severityMedium',
+  low: 'lint.severityLow',
+}
+const riskLevelLabel = (risk: string) => {
+  const key = riskLevelKeyMap[risk?.toLowerCase()]
+  return key ? t(key) : risk
+}
+
 const isAwaitingApproval = computed(() => props.status === 'awaiting_approval')
 const isResolvedOrAuto = computed(() => props.status === 'resolved' || props.status === 'auto_resolved')
 const isConflict = computed(() => props.findingType === 'conflict')
@@ -205,9 +227,9 @@ const conflictToLabel = computed(() => props.toPageTitle || t('lint.pageFallback
         </div>
         <div class="ruling-brief-card__alternatives">
           <div v-for="(alt, idx) in brief.alternatives" :key="idx" class="ruling-brief-card__alternative-item">
-            <span class="ruling-brief-card__alternative-label">{{ alt.label }}</span>
+            <span class="ruling-brief-card__alternative-label">{{ alternativeLabel(alt.label) }}</span>
             <span class="ruling-brief-card__alternative-desc"><InlineMarkdown :content="alt.description" inline /></span>
-            <span class="ruling-brief-card__alternative-risk">{{ alt.riskLevel }}</span>
+            <span class="ruling-brief-card__alternative-risk">{{ riskLevelLabel(alt.riskLevel) }}</span>
           </div>
         </div>
       </div>

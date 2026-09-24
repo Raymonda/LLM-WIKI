@@ -3,7 +3,8 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   ShieldCheck, CheckCircle2, AlertTriangle, XCircle, Clock,
-  Unlink, RefreshCw, Link2, Swords, Lightbulb, Globe, Zap, Loader2
+  Unlink, RefreshCw, Link2, Swords, Lightbulb, Globe, Zap, Loader2,
+  FileWarning, Copy, FileText
 } from 'lucide-vue-next'
 
 const props = defineProps<{
@@ -78,6 +79,10 @@ const typeItems = computed(() => {
     gap: { icon: Lightbulb, labelKey: 'lint.typeGap', color: 'var(--accent-primary)' },
     web_gap: { icon: Globe, labelKey: 'lint.typeWebGap', color: 'var(--error)' },
     action: { icon: Zap, labelKey: 'lint.typeAction', color: 'var(--success)' },
+    schema_compliance: { icon: FileWarning, labelKey: 'lint.typeSchemaCompliance', color: 'var(--warning)' },
+    schema_violation: { icon: FileWarning, labelKey: 'lint.typeSchemaViolation', color: 'var(--error)' },
+    duplicate_orphan: { icon: Copy, labelKey: 'lint.typeDuplicateOrphan', color: 'var(--warning)' },
+    content_thin: { icon: FileText, labelKey: 'lint.typeContentThin', color: 'var(--info, var(--accent-primary))' },
   }
   const items: { type: string; icon: typeof Unlink; label: string; color: string; count: number }[] = []
   for (const [type, count] of Object.entries(props.findingCountsByType)) {

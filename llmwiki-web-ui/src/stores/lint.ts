@@ -91,6 +91,23 @@ export const useLintStore = defineStore('lint', () => {
   const MAX_POLL_INTERVAL = 15000
   let watchdogTimer: ReturnType<typeof setInterval> | null = null
   const WATCHDOG_INTERVAL = 8000
+  let completionHandledFor: number | null = null
+
+  const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled']
+
+  function isTerminal(status?: string | null): boolean {
+    return !!status && TERMINAL_STATUSES.includes(status)
+  }
+
+  function handleProgressUpdate(progress: LintExecutionInfo) {
+    if (completionHandledFor !== null && progress.executionId === completionHandledFor && !isTerminal(progress.status)) {
+      return
+    }
+    execution.value = progress
+    if (isTerminal(progress.status)) {
+      onLintComplete()
+    }
+  }
 
   function setActionError(msg: string | null) {
     actionError.value = msg
@@ -160,6 +177,10 @@ export const useLintStore = defineStore('lint', () => {
   const selectedCrossrefOpenIds = computed(() =>
     selectedItems.value.filter(f => f.findingType === 'missing_crossref' && f.status === 'open').map(f => f.id)
   )
+
+  const selectedDismissableIds = computed(() =>
+    selectedItems.value.filter(f => f.status === 'open' || f.status === 'awaiting_approval').map(f => f.id)
+  )
   
   const hasSelectedAwaiting = computed(() => selectedAwaitingIds.value.length > 0)
   const hasSelectedAutoResolved = computed(() => selectedAutoResolvedIds.value.length > 0)
@@ -173,6 +194,7 @@ export const useLintStore = defineStore('lint', () => {
   const selectedCrossrefOpenCount = computed(() => selectedCrossrefOpenIds.value.length)
   const selectedAutoResolvableCount = computed(() => selectedAutoResolvableIds.value.length)
   const selectedFailedCount = computed(() => selectedFailedIds.value.length)
+  const selectedDismissableCount = computed(() => selectedDismissableIds.value.length)
 
   const currentTabTotal = computed(() => findingsPaged.value?.total ?? 0)
 
@@ -185,6 +207,7 @@ export const useLintStore = defineStore('lint', () => {
       if (activeExec && (activeExec.status === 'running' || activeExec.status === 'pending')) {
         running.value = true
         execution.value = activeExec
+        lintStartTime.value = activeExec.startTime ? new Date(activeExec.startTime).getTime() : Date.now()
         overview.value = null
         overviewLoading.value = true
         findingsPaged.value = null
@@ -316,6 +339,7 @@ export const useLintStore = defineStore('lint', () => {
     findingsLoading.value = true
     mainTabCounts.value = { manual: 0, ai_processed: 0, archived: 0 }
     completionSummary.value = null
+    completionHandledFor = null
     running.value = true
     error.value = null
     lintStartTime.value = Date.now()
@@ -342,33 +366,27 @@ export const useLintStore = defineStore('lint', () => {
 
     es.addEventListener('init', (e: MessageEvent) => {
       const data = JSON.parse(e.data) as LintExecutionInfo
-      execution.value = data
-      if (data.status === 'completed' || data.status === 'failed') {
-        onLintComplete()
-      }
+      handleProgressUpdate(data)
     })
 
     es.addEventListener('step', () => {
-      getLintProgress(execId).then(progress => {
-        execution.value = progress
-      }).catch(() => {})
+      getLintProgress(execId).then(handleProgressUpdate).catch(() => {})
     })
 
     es.addEventListener('step_progress', () => {
-      getLintProgress(execId).then(progress => {
-        execution.value = progress
-      }).catch(() => {})
+      getLintProgress(execId).then(handleProgressUpdate).catch(() => {})
     })
 
     es.addEventListener('done', (e: MessageEvent) => {
       const data = JSON.parse(e.data) as LintExecutionInfo
-      execution.value = data
-      onLintComplete()
+      handleProgressUpdate(data)
     })
 
     es.onerror = () => {
       disconnectSSE()
-      startPolling(execId)
+      if (running.value) {
+        startPolling(execId)
+      }
     }
   }
 
@@ -385,11 +403,7 @@ export const useLintStore = defineStore('lint', () => {
       if (!running.value) { stopWatchdog(); return }
       try {
         const progress = await getLintProgress(execId)
-        execution.value = progress
-        if (progress.status === 'completed' || progress.status === 'failed') {
-          stopWatchdog()
-          onLintComplete()
-        }
+        handleProgressUpdate(progress)
       } catch {}
     }, WATCHDOG_INTERVAL)
   }
@@ -406,15 +420,15 @@ export const useLintStore = defineStore('lint', () => {
     if (running.value && execution.value?.executionId) {
       try {
         const progress = await getLintProgress(execution.value.executionId)
-        execution.value = progress
-        if (progress.status === 'completed' || progress.status === 'failed') {
-          onLintComplete()
-          return
-        }
+        handleProgressUpdate(progress)
       } catch {}
+      return
     }
-    if (!running.value && overview.value) {
-      await Promise.allSettled([loadOverview(), loadTabCounts(), loadFindings()])
+    if (!running.value) {
+      const hasActive = await checkActiveLint()
+      if (!hasActive) {
+        await Promise.allSettled([loadOverview(), loadTabCounts(), loadFindings()])
+      }
     }
   }
 
@@ -431,14 +445,24 @@ export const useLintStore = defineStore('lint', () => {
   }
 
   async function onLintComplete() {
-    if (!running.value) return
+    const execId = execution.value?.executionId
+    if (execId != null && completionHandledFor === execId) return
+    if (execId != null) completionHandledFor = execId
     disconnectSSE()
     stopPolling()
     stopWatchdog()
     running.value = false
-    if (execution.value?.executionId) {
-      latestExecutionId.value = execution.value.executionId
-      await buildCompletionSummary(execution.value.executionId)
+    mainTab.value = 'manual'
+    manualTypeFilter.value = undefined
+    currentPage.value = 1
+    selectedIds.value = new Set()
+    if (execId != null) {
+      latestExecutionId.value = execId
+      if (execution.value?.status === 'completed') {
+        await buildCompletionSummary(execId)
+      } else if (execution.value?.status === 'failed') {
+        error.value = '体检失败'
+      }
     }
     await loadOverview()
     await loadTabCounts()
@@ -490,17 +514,9 @@ export const useLintStore = defineStore('lint', () => {
     const poll = async () => {
       try {
         const progress = await getLintProgress(execId)
-        execution.value = progress
-        if (progress.status === 'completed' || progress.status === 'failed') {
+        handleProgressUpdate(progress)
+        if (isTerminal(progress.status)) {
           stopPolling()
-          running.value = false
-          if (progress.status === 'completed') {
-            latestExecutionId.value = progress.executionId
-            await buildCompletionSummary(progress.executionId)
-          }
-          await loadOverview()
-          await loadTabCounts()
-          await loadFindings()
           return
         }
         pollInterval = Math.min(Math.round(pollInterval * 1.5), MAX_POLL_INTERVAL)
@@ -841,10 +857,10 @@ export const useLintStore = defineStore('lint', () => {
   }
 
   async function batchDismissSelected() {
-    if (selectedIds.value.size === 0 || batchProcessing.value) return
+    if (selectedDismissableIds.value.length === 0 || batchProcessing.value) return
     batchProcessing.value = true
     try {
-      const ids = Array.from(selectedIds.value)
+      const ids = selectedDismissableIds.value
       await batchRejectFindings(ids)
       await Promise.allSettled(ids.map(id => recordFindingFeedback(id, 'ignored').catch(() => {})))
       clearSelection()
@@ -935,7 +951,7 @@ export const useLintStore = defineStore('lint', () => {
     selectedAutoResolvableItems, selectedAutoResolvableIds,
     hasSelectedAwaiting, hasSelectedAutoResolved, hasSelectedFailed, hasSelectedStale, hasSelectedCrossrefOpen,
     selectedAwaitingCount, selectedStaleCount, selectedAutoResolvedCount, selectedCrossrefOpenCount,
-    selectedAutoResolvableCount, selectedFailedCount,
+    selectedAutoResolvableCount, selectedFailedCount, selectedDismissableCount,
     currentTabTotal,
     loadOverview, loadTabCounts, loadFindings, loadPageConflictsAction,
     switchMainTab, setManualTypeFilter, goToPage, setPageSize,
