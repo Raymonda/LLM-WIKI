@@ -4,9 +4,11 @@ import org.cn.liuwt.llmwiki.common.dal.dataobject.ExecutionDO;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.RateLimitService;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionHistoryService;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionTracker;
+import org.cn.liuwt.llmwiki.service.harness.mq.ExecutionNodeRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -31,6 +33,12 @@ public class ExecutionRecoveryService {
     @Autowired
     private RateLimitService rateLimitService;
 
+    @Autowired
+    private ExecutionNodeRegistry nodeRegistry;
+
+    @Value("${llmwiki.rocketmq.enabled:false}")
+    private boolean rocketMqEnabled;
+
     @EventListener(ApplicationReadyEvent.class)
     public void recoverOnStartup() {
         log.info("ExecutionRecoveryService: scanning for orphaned executions on startup");
@@ -52,6 +60,10 @@ public class ExecutionRecoveryService {
         List<ExecutionDO> zombies = executionHistoryService.findZombieExecutions(null, NO_STEP_GRACE, NO_HEARTBEAT_GRACE);
         int recovered = 0;
         for (ExecutionDO exec : zombies) {
+            if (rocketMqEnabled && exec.getNodeId() != null
+                && !nodeRegistry.getNodeId().equals(exec.getNodeId())) {
+                continue;
+            }
             log.warn("Reclaiming zombie execution id={} status={} scopeId={} (no step for {}min or no heartbeat for {}min)",
                 exec.getId(), exec.getStatus(), exec.getScopeId(),
                 NO_STEP_GRACE.toMinutes(), NO_HEARTBEAT_GRACE.toMinutes());

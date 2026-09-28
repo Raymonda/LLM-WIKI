@@ -20,6 +20,7 @@ import org.cn.liuwt.llmwiki.domain.service.wiki.WikiFileServiceImpl;
 import org.cn.liuwt.llmwiki.domain.model.harness.LintRulesConfig;
 import org.cn.liuwt.llmwiki.domain.service.harness.governance.parser.SchemaSection6Parser;
 import org.cn.liuwt.llmwiki.domain.service.harness.tracker.ExecutionHistoryService;
+import org.cn.liuwt.llmwiki.domain.service.search.SearchService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -53,6 +54,12 @@ public class LintFindingService {
 
     @Autowired
     private ExecutionHistoryService executionHistoryService;
+
+    @Autowired
+    private LintRepairSnapshotService lintRepairSnapshotService;
+
+    @Autowired
+    private SearchService searchService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -973,7 +980,7 @@ public class LintFindingService {
 
             try {
                 markAsRepairing(f.getId(), null);
-                staleRefreshService.refreshPage(scopeId, pageId, sourceIds.get(0));
+                staleRefreshService.refreshPage(scopeId, pageId, sourceIds.get(0), f.getId());
                 processedPageIds.add(pageId);
                 refreshed++;
             } catch (Exception e) {
@@ -1168,18 +1175,38 @@ public class LintFindingService {
             return;
         }
         String prevStatus = finding.getStatus();
-        String extraJson = finding.getExtra();
-        if (extraJson == null || extraJson.isBlank()) {
-            extraJson = "{}";
+        Map<String, Object> extraMap = lintRepairSnapshotService.readExtra(finding.getExtra());
+        extraMap.put("rollbackAt", LocalDateTime.now().toString());
+        extraMap.put("prevStatus", prevStatus);
+
+        boolean contentRestored = false;
+        String restoredContent = null;
+        Object snapshotPathObj = extraMap.get("snapshotPath");
+        Object restorePathObj = extraMap.get("restorePath");
+        if (snapshotPathObj instanceof String snapshotPath && restorePathObj instanceof String restorePath) {
+            try {
+                String restored = lintRepairSnapshotService.restoreSnapshot(finding.getScopeId(), snapshotPath, restorePath);
+                if (restored != null) {
+                    contentRestored = true;
+                    restoredContent = restored;
+                    extraMap.put("contentRestored", true);
+                    extraMap.remove("snapshotPath");
+                    extraMap.remove("restorePath");
+                } else {
+                    extraMap.put("contentRestoreFailed", "snapshot_missing");
+                }
+            } catch (Exception e) {
+                extraMap.put("contentRestoreFailed", e.getMessage());
+                log.warn("Failed to restore snapshot for finding id={}: {}", findingId, e.getMessage());
+            }
         }
+
+        String extraJson;
         try {
-            @SuppressWarnings("unchecked")
-            java.util.Map<String, Object> extraMap = objectMapper.readValue(extraJson, java.util.Map.class);
-            extraMap.put("rollbackAt", LocalDateTime.now().toString());
-            extraMap.put("prevStatus", prevStatus);
             extraJson = objectMapper.writeValueAsString(extraMap);
         } catch (Exception e) {
-            log.warn("Failed to update extra JSON for finding id={}", findingId);
+            log.warn("Failed to serialize extra JSON for finding id={}", findingId);
+            extraJson = finding.getExtra();
         }
         lintFindingMapper.update(null,
             new LambdaUpdateWrapper<LintFindingDO>()
@@ -1191,8 +1218,28 @@ public class LintFindingService {
         );
         if (finding.getAssetId() != null) {
             markPageNeedsUpdateAfterRollback(finding.getScopeId(), finding.getAssetId());
+            if (contentRestored) {
+                resyncRestoredPage(finding.getScopeId(), finding.getAssetId(), restoredContent);
+            }
         }
-        log.info("Finding id={} rolled back from {} to rolled_back", findingId, prevStatus);
+        log.info("Finding id={} rolled back from {} to rolled_back (contentRestored={})", findingId, prevStatus, contentRestored);
+    }
+
+    private void resyncRestoredPage(Long scopeId, Long pageId, String restoredContent) {
+        try {
+            WikiPageDO page = wikiPageMapper.selectById(pageId);
+            if (page == null) return;
+            page.setContentUpdatedAt(LocalDateTime.now());
+            wikiPageMapper.updateById(page);
+            searchService.indexPage(
+                scopeId, page.getId(), page.getTitle(), page.getFilePath(),
+                page.getCategory(), page.getSummary(), restoredContent != null ? restoredContent : "",
+                page.getHealthStatus(), page.getVisibility(),
+                page.getLifecycleStatus()
+            );
+        } catch (Exception e) {
+            log.warn("Failed to resync restored page after rollback: scopeId={}, pageId={}, error={}", scopeId, pageId, e.getMessage());
+        }
     }
 
     private void markPageNeedsUpdateAfterRollback(Long scopeId, Long pageId) {

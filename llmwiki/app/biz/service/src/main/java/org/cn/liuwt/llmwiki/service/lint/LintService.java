@@ -42,9 +42,10 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class LintService {
@@ -114,19 +115,22 @@ public class LintService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    private ExecutorService lintSchedulerPool;
+    @Value("${llmwiki.lint.stagger-minutes:10}")
+    private int staggerMinutes;
+
+    private ScheduledExecutorService lintSchedulerPool;
     private Semaphore scopeConcurrencySemaphore;
 
     @PostConstruct
     public void init() {
-        lintSchedulerPool = Executors.newFixedThreadPool(scheduledConcurrency, r -> {
+        lintSchedulerPool = Executors.newScheduledThreadPool(scheduledConcurrency, r -> {
             Thread t = new Thread(r, "lint-scheduler-" + r.hashCode());
             t.setDaemon(true);
             return t;
         });
         scopeConcurrencySemaphore = new Semaphore(scheduledConcurrency);
-        log.info("LintService initialized: skipWindowHours={}, scheduledConcurrency={}, maxScopesPerRun={}",
-            skipWindowHours, scheduledConcurrency, maxScopesPerRun);
+        log.info("LintService initialized: skipWindowHours={}, scheduledConcurrency={}, maxScopesPerRun={}, staggerMinutes={}",
+            skipWindowHours, scheduledConcurrency, maxScopesPerRun, staggerMinutes);
     }
 
     @PreDestroy
@@ -262,11 +266,14 @@ public class LintService {
     }
 
     private void runLintBatchLocal(List<ScopeDO> scopes, String scopeType) {
-        log.info("Scheduled lint ({}) eligible={}, concurrency={}",
-            scopeType, scopes.size(), scheduledConcurrency);
+        log.info("Scheduled lint ({}) eligible={}, concurrency={}, staggerMinutes={}",
+            scopeType, scopes.size(), scheduledConcurrency, staggerMinutes);
 
+        int index = 0;
         for (ScopeDO scope : scopes) {
-            lintSchedulerPool.submit(() -> {
+            long delaySeconds = (long) (index / scheduledConcurrency) * staggerMinutes * 60L;
+            index++;
+            lintSchedulerPool.schedule(() -> {
                 try {
                     if (!scopeConcurrencySemaphore.tryAcquire(5_000)) {
                         log.warn("Scheduled lint scope concurrency timeout: scopeId={}", scope.getId());
@@ -286,10 +293,10 @@ public class LintService {
                 } catch (Exception e) {
                     log.warn("Scheduled lint failed for scopeId={}: {}", scope.getId(), e.getMessage());
                 }
-            });
+            }, delaySeconds, TimeUnit.SECONDS);
         }
 
-        log.info("Scheduled lint ({}) batch dispatched: scopes={}, concurrency={}",
+        log.info("Scheduled lint ({}) batch dispatched with stagger: scopes={}, concurrency={}",
             scopeType, scopes.size(), scheduledConcurrency);
     }
 
@@ -312,7 +319,7 @@ public class LintService {
         lintFindingService.markAsRepairing(findingId, null);
 
         try {
-            staleRefreshService.refreshPage(scopeId, pageId, sourceId);
+            staleRefreshService.refreshPage(scopeId, pageId, sourceId, findingId);
         } catch (Exception e) {
             lintFindingService.markRepairFailed(findingId);
             throw new RuntimeException("Stale refresh failed: " + e.getMessage(), e);
@@ -402,7 +409,7 @@ public class LintService {
             lintFindingService.markAsRepairing(findingId, null);
 
             try {
-                staleRefreshService.refreshPage(scopeId, pageId, sourceId);
+                staleRefreshService.refreshPage(scopeId, pageId, sourceId, findingId);
             } catch (Exception e) {
                 lintFindingService.markRepairFailed(findingId);
                 throw new RuntimeException("Stale refresh failed after approval: " + e.getMessage(), e);

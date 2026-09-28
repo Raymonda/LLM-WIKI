@@ -10,6 +10,7 @@ import org.cn.liuwt.llmwiki.domain.model.harness.LintRulesConfig;
 import org.cn.liuwt.llmwiki.domain.service.harness.conflict.ContentDuplicateDetector;
 import org.cn.liuwt.llmwiki.domain.service.harness.GlobalSummaryService.GlobalSummary;
 import org.cn.liuwt.llmwiki.domain.service.harness.LintAgent.ProbeResult;
+import org.cn.liuwt.llmwiki.domain.service.harness.governance.parser.SchemaSection6Parser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,7 +19,9 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -58,6 +61,9 @@ public class LintProbeService {
     @Autowired
     private ContentDuplicateDetector contentDuplicateDetector;
 
+    @Autowired
+    private SchemaSection6Parser schemaSection6Parser;
+
     public ProbeOutcome probeAndValidate(Long scopeId, Long executionId,
                                           GlobalSummary summary,
                                           List<LintFindingDO> previousFindings,
@@ -73,6 +79,18 @@ public class LintProbeService {
                                           LintRulesConfig rulesConfig,
                                           List<WikiPageDO> focusPages,
                                           List<WikiPageDO> allPagesForStats) {
+        return probeAndValidate(scopeId, executionId, summary, previousFindings, healthDistribution,
+            rulesConfig, focusPages, allPagesForStats, 0L);
+    }
+
+    public ProbeOutcome probeAndValidate(Long scopeId, Long executionId,
+                                          GlobalSummary summary,
+                                          List<LintFindingDO> previousFindings,
+                                          Map<String, Long> healthDistribution,
+                                          LintRulesConfig rulesConfig,
+                                          List<WikiPageDO> focusPages,
+                                          List<WikiPageDO> allPagesForStats,
+                                          long catalogSampleOffset) {
 
         String previousFindingsSummary = buildPreviousFindingsSummary(previousFindings, rulesConfig);
         String previousHealthSummary = buildPreviousHealthSummary(healthDistribution);
@@ -108,7 +126,7 @@ public class LintProbeService {
         CompletableFuture<ProbeResult> aiFuture = CompletableFuture.supplyAsync(
             () -> lintAgent.probe(scopeId, summary,
                 previousFindingsSummary, previousHealthSummary, rulesConfig,
-                probeFocusPages, allPagesForStats),
+                probeFocusPages, allPagesForStats, catalogSampleOffset),
             probeExecutor);
         CompletableFuture<List<SafetyNetFinding>> orphanFuture = CompletableFuture.supplyAsync(
             () -> detectOrphansBySql(scopeId, rulesConfig), probeExecutor);
@@ -130,6 +148,7 @@ public class LintProbeService {
         int probeSize = probeFocusPages != null ? probeFocusPages.size()
             : (allPagesForStats != null ? allPagesForStats.size() : 0);
         int timeoutSeconds = Math.min(PROBE_TIMEOUT_BASE_SECONDS + probeSize / 2, PROBE_TIMEOUT_MAX_SECONDS);
+        List<String> incompleteDetectors = new ArrayList<>();
         try {
             CompletableFuture.allOf(aiFuture, orphanFuture, staleFuture, conflictFuture, refConflictFuture, deprecatedSourceFuture, contentDupFuture)
                 .get(timeoutSeconds, TimeUnit.SECONDS);
@@ -156,6 +175,12 @@ public class LintProbeService {
             sqlRefConflicts = refConflictFuture.isDone() ? refConflictFuture.getNow(Collections.emptyList()) : Collections.emptyList();
             sqlDeprecatedSource = deprecatedSourceFuture.isDone() ? deprecatedSourceFuture.getNow(Collections.emptyList()) : Collections.emptyList();
             contentDuplicates = contentDupFuture.isDone() ? contentDupFuture.getNow(Collections.emptyList()) : Collections.emptyList();
+            if (!orphanFuture.isDone()) incompleteDetectors.add("SQL孤儿检测");
+            if (!staleFuture.isDone()) incompleteDetectors.add("SQL过时检测");
+            if (!conflictFuture.isDone()) incompleteDetectors.add("SQL冲突检测");
+            if (!refConflictFuture.isDone()) incompleteDetectors.add("SQL参考页冲突检测");
+            if (!deprecatedSourceFuture.isDone()) incompleteDetectors.add("SQL废弃来源检测");
+            if (!contentDupFuture.isDone()) incompleteDetectors.add("内容重复检测");
         }
 
         Map<String, Long> filePathToId;
@@ -176,7 +201,35 @@ public class LintProbeService {
 
         Set<Long> touchedFindingIds = persistMergedFindings(scopeId, executionId, merged, rulesConfig);
 
-        return new ProbeOutcome(merged, aiResult, touchedFindingIds);
+        List<String> degradationNotes = buildDegradationNotes(scopeId, aiResult, incompleteDetectors, timeoutSeconds);
+        return new ProbeOutcome(merged, aiResult, touchedFindingIds, degradationNotes);
+    }
+
+    private List<String> buildDegradationNotes(Long scopeId, ProbeResult aiResult, List<String> incompleteDetectors, int timeoutSeconds) {
+        List<String> notes = new ArrayList<>();
+        String rulesWarning = schemaSection6Parser.getParseWarning(scopeId);
+        if (rulesWarning != null && !rulesWarning.isBlank()) {
+            notes.add("Schema 体检规则未生效：" + rulesWarning);
+        }
+        String aiStatus = aiResult.getStatus();
+        switch (aiStatus) {
+            case "success" -> { }
+            case "skipped" -> notes.add("AI 探查未执行（AI 未配置或探查被 Schema 规则禁用），本次诊断仅依赖 SQL 确定性检测");
+            case "barrier_timeout" -> notes.add("AI 探查因 LLM 并发限流未执行，本次诊断仅依赖 SQL 确定性检测");
+            case "parse_failed" -> notes.add("AI 探查输出解析失败，AI 诊断结果未采纳，本次诊断仅依赖 SQL 确定性检测");
+            case "timeout" -> notes.add("AI 探查超时（上限 " + timeoutSeconds + " 秒），AI 诊断结果缺失，本次诊断仅依赖 SQL 确定性检测");
+            case "cancelled" -> notes.add("AI 探查被取消，AI 诊断结果缺失，本次诊断仅依赖 SQL 确定性检测");
+            default -> notes.add("AI 探查异常（状态：" + aiStatus + "），本次诊断仅依赖 SQL 确定性检测");
+        }
+        for (String detector : incompleteDetectors) {
+            notes.add(detector + "超时未完成，对应维度的诊断结果可能不完整");
+        }
+        if (aiResult.isCatalogSampled()) {
+            notes.add("AI 页面目录为抽样覆盖：全库共 " + aiResult.getTotalPages()
+                + " 页，仅 " + aiResult.getCatalogPages()
+                + " 页进入 AI 视野（异常页优先 + 随机抽样），其余页面仅由 SQL 确定性检测覆盖");
+        }
+        return notes;
     }
 
     private Map<String, Long> buildFilePathToIdMapForPaths(Long scopeId, Set<String> paths) {
@@ -425,6 +478,10 @@ public class LintProbeService {
         Set<String> aiStalePaths = new HashSet<>();
         Set<String> aiConflictPaths = new HashSet<>();
         Set<String> aiMissingCrossrefPaths = new HashSet<>();
+        Map<String, MergedFinding> aiOrphanByPath = new HashMap<>();
+        Map<String, MergedFinding> aiStaleByPath = new HashMap<>();
+        Map<String, MergedFinding> aiConflictByPath = new HashMap<>();
+        Map<String, MergedFinding> aiMissingCrossrefByPath = new HashMap<>();
 
         if (!aiResult.isEmpty()) {
             for (Map<String, Object> f : aiResult.getFindings()) {
@@ -440,54 +497,60 @@ public class LintProbeService {
                 Long assetId = filePathToId.getOrDefault(pagePath, null);
                 Map<String, Object> extra = buildExtraFromAiFinding(f);
 
-                if ("orphan".equalsIgnoreCase(type)) aiOrphanPaths.add(pagePath);
-                if ("stale".equalsIgnoreCase(type)) aiStalePaths.add(pagePath);
-                if ("conflict".equalsIgnoreCase(type)) aiConflictPaths.add(pagePath);
-                if ("missing_crossref".equalsIgnoreCase(type)) aiMissingCrossrefPaths.add(pagePath);
+                MergedFinding aiFinding = new MergedFinding(type, priority, title, detail, pagePath, assetId, extra, true);
+                if ("orphan".equalsIgnoreCase(type)) { aiOrphanPaths.add(pagePath); aiOrphanByPath.put(pagePath, aiFinding); }
+                if ("stale".equalsIgnoreCase(type)) { aiStalePaths.add(pagePath); aiStaleByPath.put(pagePath, aiFinding); }
+                if ("conflict".equalsIgnoreCase(type)) { aiConflictPaths.add(pagePath); aiConflictByPath.put(pagePath, aiFinding); }
+                if ("missing_crossref".equalsIgnoreCase(type)) { aiMissingCrossrefPaths.add(pagePath); aiMissingCrossrefByPath.put(pagePath, aiFinding); }
                 if ("schema_compliance".equalsIgnoreCase(type)) {
                     extra.put("violationType", f.getOrDefault("violationType", "unknown"));
                     extra.put("expectedStructure", f.getOrDefault("expectedStructure", ""));
                     extra.put("actualStructure", f.getOrDefault("actualStructure", ""));
                 }
 
-                merged.add(new MergedFinding(type, priority, title, detail, pagePath, assetId, extra, true));
+                merged.add(aiFinding);
             }
         }
 
         for (SafetyNetFinding sf : sqlOrphans) {
-            if (!aiOrphanPaths.contains(sf.pagePath)) {
+            MergedFinding ai = aiOrphanByPath.get(sf.pagePath);
+            if (ai != null) {
+                attachSafetyNetEvidence(ai, sf);
+            } else {
                 merged.add(new MergedFinding(sf.type, sf.priority, sf.title, sf.detail,
                     sf.pagePath, sf.assetId, sf.extra, false));
-            } else {
-                log.debug("SQL orphan {} 已被AI探查覆盖，跳过重复", sf.pagePath);
             }
         }
 
         for (SafetyNetFinding sf : sqlStale) {
-            if (!aiStalePaths.contains(sf.pagePath)) {
+            MergedFinding ai = aiStaleByPath.get(sf.pagePath);
+            if (ai != null) {
+                attachSafetyNetEvidence(ai, sf);
+            } else {
                 merged.add(new MergedFinding(sf.type, sf.priority, sf.title, sf.detail,
                     sf.pagePath, sf.assetId, sf.extra, false));
-            } else {
-                log.debug("SQL stale {} 已被AI探查覆盖，跳过重复", sf.pagePath);
             }
         }
 
         for (SafetyNetFinding sf : sqlConflicts) {
-            Set<String> dedupSet = "missing_crossref".equals(sf.type) ? aiMissingCrossrefPaths : aiConflictPaths;
-            if (!dedupSet.contains(sf.pagePath)) {
+            MergedFinding ai = "missing_crossref".equals(sf.type)
+                ? aiMissingCrossrefByPath.get(sf.pagePath)
+                : aiConflictByPath.get(sf.pagePath);
+            if (ai != null) {
+                attachSafetyNetEvidence(ai, sf);
+            } else {
                 merged.add(new MergedFinding(sf.type, sf.priority, sf.title, sf.detail,
                     sf.pagePath, sf.assetId, sf.extra, false));
-            } else {
-                log.debug("SQL {} {} 已被AI探查覆盖，跳过重复", sf.type, sf.pagePath);
             }
         }
 
         for (SafetyNetFinding sf : sqlRefConflicts) {
-            if (!aiMissingCrossrefPaths.contains(sf.pagePath)) {
+            MergedFinding ai = aiMissingCrossrefByPath.get(sf.pagePath);
+            if (ai != null) {
+                attachSafetyNetEvidence(ai, sf);
+            } else {
                 merged.add(new MergedFinding(sf.type, sf.priority, sf.title, sf.detail,
                     sf.pagePath, sf.assetId, sf.extra, false));
-            } else {
-                log.debug("SQL 参考页 {} 已被AI探查覆盖，跳过重复", sf.pagePath);
             }
         }
 
@@ -497,6 +560,23 @@ public class LintProbeService {
         }
 
         return merged;
+    }
+
+    /**
+     * 证据双写：SQL 安全网命中已被 AI 覆盖的页面时，不丢弃确定性证据，
+     * 而是并入 AI finding 的 extra 作为独立佐证，便于追溯与交叉校验。
+     */
+    private void attachSafetyNetEvidence(MergedFinding aiFinding, SafetyNetFinding sf) {
+        aiFinding.extra.put("safetyNetConfirmed", true);
+        Map<String, Object> evidence = new LinkedHashMap<>();
+        evidence.put("type", sf.type);
+        evidence.put("title", sf.title);
+        evidence.put("detail", sf.detail);
+        if (sf.extra != null && !sf.extra.isEmpty()) {
+            evidence.put("data", sf.extra);
+        }
+        aiFinding.extra.put("safetyNetEvidence", evidence);
+        log.debug("SQL {} {} 与AI探查交叉确认，证据已并入 extra", sf.type, sf.pagePath);
     }
 
     /**
@@ -742,17 +822,25 @@ public class LintProbeService {
         private final List<MergedFinding> mergedFindings;
         private final ProbeResult aiResult;
         private final Set<Long> touchedFindingIds;
+        private final List<String> degradationNotes;
 
         public ProbeOutcome(List<MergedFinding> mergedFindings, ProbeResult aiResult, Set<Long> touchedFindingIds) {
+            this(mergedFindings, aiResult, touchedFindingIds, Collections.emptyList());
+        }
+
+        public ProbeOutcome(List<MergedFinding> mergedFindings, ProbeResult aiResult, Set<Long> touchedFindingIds,
+                            List<String> degradationNotes) {
             this.mergedFindings = mergedFindings;
             this.aiResult = aiResult;
             this.touchedFindingIds = touchedFindingIds;
+            this.degradationNotes = degradationNotes != null ? degradationNotes : Collections.emptyList();
         }
 
         public List<MergedFinding> getMergedFindings() { return mergedFindings; }
         public ProbeResult getAiResult() { return aiResult; }
         public String getAiRawOutput() { return aiResult.getRawOutput(); }
         public Set<Long> getTouchedFindingIds() { return touchedFindingIds; }
+        public List<String> getDegradationNotes() { return degradationNotes; }
     }
 
     public static class MergedFinding {

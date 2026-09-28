@@ -61,6 +61,9 @@ public class LintOrphanService {
     private LintFindingService lintFindingService;
 
     @Autowired
+    private LintRepairSnapshotService lintRepairSnapshotService;
+
+    @Autowired
     private StorageProvider storageProvider;
 
     @Autowired
@@ -587,6 +590,7 @@ public class LintOrphanService {
         merged = linkWritingService.sanitizeSourceLinks(merged);
         merged = linkWritingService.sanitizeWikiLinks(merged, scopeId);
 
+        lintRepairSnapshotService.snapshotBeforeRewrite(scopeId, findingId, pageStoragePath);
         storageProvider.write(scopeIdStr, pageStoragePath, merged.getBytes(StandardCharsets.UTF_8));
 
         page.setContentUpdatedAt(LocalDateTime.now());

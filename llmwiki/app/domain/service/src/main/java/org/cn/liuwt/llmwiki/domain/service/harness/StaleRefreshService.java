@@ -49,12 +49,19 @@ public class StaleRefreshService {
     private LintFindingService lintFindingService;
 
     @Autowired
+    private LintRepairSnapshotService lintRepairSnapshotService;
+
+    @Autowired
     private WikiFileServiceImpl wikiFileService;
 
     @Autowired
     private SearchService searchService;
 
     public void refreshPage(Long scopeId, Long pageId, Long sourceId) {
+        refreshPage(scopeId, pageId, sourceId, null);
+    }
+
+    public void refreshPage(Long scopeId, Long pageId, Long sourceId, Long findingId) {
         if (chatClient == null || !chatClient.isAvailable()) {
             throw new RuntimeException("AI not available, cannot refresh stale page");
         }
@@ -99,6 +106,7 @@ public class StaleRefreshService {
         merged = linkWritingService.sanitizeSourceLinks(merged);
         merged = linkWritingService.sanitizeWikiLinks(merged, scopeId);
 
+        lintRepairSnapshotService.snapshotBeforeRewrite(scopeId, findingId, pageStoragePath);
         storageProvider.write(scopeIdStr, pageStoragePath, merged.getBytes(StandardCharsets.UTF_8));
 
         page.setContentUpdatedAt(LocalDateTime.now());

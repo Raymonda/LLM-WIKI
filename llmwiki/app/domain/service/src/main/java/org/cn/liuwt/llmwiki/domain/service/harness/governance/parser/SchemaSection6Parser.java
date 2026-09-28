@@ -29,6 +29,12 @@ public class SchemaSection6Parser {
 
     private final ConcurrentMap<Long, LintRulesConfig> cache = new ConcurrentHashMap<>();
 
+    private final ConcurrentMap<Long, String> parseWarnings = new ConcurrentHashMap<>();
+
+    public String getParseWarning(Long scopeId) {
+        return scopeId == null ? null : parseWarnings.get(scopeId);
+    }
+
     private static final Pattern SECTION_6_PATTERN = Pattern.compile(
         "^##\\s*6[.、\\s]*健康检查规则.*?\\n(.*?)(?=^##\\s|\\Z)",
         Pattern.MULTILINE | Pattern.DOTALL
@@ -61,6 +67,7 @@ public class SchemaSection6Parser {
     public void invalidate(Long scopeId) {
         if (scopeId != null) {
             cache.remove(scopeId);
+            parseWarnings.remove(scopeId);
         }
     }
 
@@ -71,7 +78,8 @@ public class SchemaSection6Parser {
         try {
             SchemaConfigDO schema = schemaManager.getSchema(scopeId, SchemaSkeletonValidator.WIKI_SCHEMA_KEY);
             if (schema == null || schema.getConfigValue() == null || schema.getConfigValue().isBlank()) {
-                log.debug("scopeId={} Schema 不存在或为空，使用默认 LintRulesConfig", scopeId);
+                recordWarning(scopeId, "Schema 配置不存在或为空，体检规则使用内置默认值");
+                log.warn("scopeId={} Schema 不存在或为空，使用默认 LintRulesConfig", scopeId);
                 return LintRulesConfig.buildDefaults();
             }
 
@@ -83,13 +91,15 @@ public class SchemaSection6Parser {
                         return model.getLintRules();
                     }
                 } catch (Exception e) {
+                    recordWarning(scopeId, "结构化规则 JSON 反序列化失败，已回退到文本解析，部分规则可能未生效");
                     log.warn("scopeId={} 结构化 JSON 反序列化失败，回退到 Markdown 解析: {}", scopeId, e.getMessage());
                 }
             }
 
             String section6 = extractSection6(schema.getConfigValue());
             if (section6 == null || section6.isBlank()) {
-                log.debug("scopeId={} Schema Section 6 不存在或为空，使用默认 LintRulesConfig", scopeId);
+                recordWarning(scopeId, "Schema 第 6 节（健康检查规则）缺失或为空，体检规则使用内置默认值");
+                log.warn("scopeId={} Schema Section 6 不存在或为空，使用默认 LintRulesConfig", scopeId);
                 return LintRulesConfig.buildDefaults();
             }
 
@@ -97,8 +107,15 @@ public class SchemaSection6Parser {
             applyStructuredRules(config, section6);
             return config;
         } catch (Exception e) {
+            recordWarning(scopeId, "体检规则解析异常（" + e.getMessage() + "），使用内置默认值");
             log.warn("Schema Section 6 解析失败 scopeId={}, 使用默认配置: {}", scopeId, e.getMessage());
             return LintRulesConfig.buildDefaults();
+        }
+    }
+
+    private void recordWarning(Long scopeId, String warning) {
+        if (scopeId != null && warning != null) {
+            parseWarnings.put(scopeId, warning);
         }
     }
 

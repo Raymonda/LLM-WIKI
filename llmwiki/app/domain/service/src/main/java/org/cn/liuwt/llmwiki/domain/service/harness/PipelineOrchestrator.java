@@ -575,6 +575,8 @@ public class PipelineOrchestrator {
 
         int totalTokens = 0;
         boolean hasFailures = false;
+        boolean probeDegraded = false;
+        long nextCatalogSampleOffset = -1;
         Boolean lintReportShortCircuit = null;
 
         for (int i = 0; i < lintSteps.length; i++) {
@@ -671,6 +673,14 @@ public class PipelineOrchestrator {
 
             try {
                 Map<String, Object> result = executeLintStep(scopeId, stepName, execution, lintCtx, watermark, fullScan, checkedPageIds, rulesConfig);
+                if ("PROBE_AND_VALIDATE".equals(stepName)) {
+                    if (Boolean.TRUE.equals(result.get("degraded"))) {
+                        probeDegraded = true;
+                    }
+                    if (result.get("nextSampleOffset") instanceof Number n) {
+                        nextCatalogSampleOffset = n.longValue();
+                    }
+                }
                 int stepTokens = result.get("tokensUsed") != null ? (Integer) result.get("tokensUsed") : 0;
                 executionTracker.completeStep(
                     step.getId(),
@@ -713,6 +723,9 @@ public class PipelineOrchestrator {
         watermark.put("crossrefCursor", crossrefCursor);
         int staleCursor = ((Number) watermark.getOrDefault("staleCursor", 0)).intValue() + staleBatchSize;
         watermark.put("staleCursor", staleCursor);
+        if (nextCatalogSampleOffset >= 0) {
+            watermark.put("catalogSampleOffset", nextCatalogSampleOffset);
+        }
         watermark.put("findingsSignature", computeFindingsSignature(scopeId));
         writeLintWatermark(scopeId, watermark);
 
@@ -735,10 +748,29 @@ public class PipelineOrchestrator {
         List<LintFindingDO> findings = lintFindingService.listFindingsByExecution(execution.getId());
         long highCount = findings.stream().filter(f -> "high".equals(f.getPriority())).count();
         long mediumCount = findings.stream().filter(f -> "medium".equals(f.getPriority())).count();
-        if (!findings.isEmpty()) {
-            String title = String.format("知识体检完成，发现 %d 个诊断项", findings.size());
-            String content = String.format("其中高优先级 %d 项、中优先级 %d 项。点击查看详情。", highCount, mediumCount);
-            notificationService.createPersonalNotification(execution.getSubmittedBy(), "lint_completed", title, content, scopeId, null, execution.getId());
+        List<String> skippedSteps = executionTracker.listSteps(execution.getId()).stream()
+            .filter(s -> "skipped".equals(s.getApprovalLevel()))
+            .map(ExecutionStepModel::getStepName)
+            .toList();
+        boolean lintDegraded = probeDegraded || !skippedSteps.isEmpty();
+        if (!findings.isEmpty() || lintDegraded) {
+            String title = lintDegraded
+                ? String.format("知识体检完成（存在降级），发现 %d 个诊断项", findings.size())
+                : String.format("知识体检完成，发现 %d 个诊断项", findings.size());
+            StringBuilder content = new StringBuilder(
+                String.format("其中高优先级 %d 项、中优先级 %d 项。", highCount, mediumCount));
+            if (lintDegraded) {
+                content.append("本次体检存在降级：");
+                if (probeDegraded) {
+                    content.append("AI 探查未完整执行；");
+                }
+                if (!skippedSteps.isEmpty()) {
+                    content.append("步骤 ").append(String.join("、", skippedSteps)).append(" 被跳过；");
+                }
+                content.append("结果可能不完整，");
+            }
+            content.append("点击查看详情。");
+            notificationService.createPersonalNotification(execution.getSubmittedBy(), "lint_completed", title, content.toString(), scopeId, null, execution.getId());
         }
 
         return executionTracker.getExecution(execution.getId());
@@ -852,12 +884,13 @@ public class PipelineOrchestrator {
         switch (stepName) {
             case "PROBE_AND_VALIDATE": {
                 List<WikiPageDO> focusPages = lintCtx.isIncremental() ? lintCtx.focusPages() : null;
+                long catalogSampleOffset = ((Number) watermark.getOrDefault("catalogSampleOffset", 0)).longValue();
                 LintProbeService.ProbeOutcome outcome = lintProbeService.probeAndValidate(
                     scopeId, execution.getId(),
                     lintCtx.summary(),
                     lintCtx.previousFindings(), lintCtx.healthDistribution(),
                     rulesConfig,
-                    focusPages, null);
+                    focusPages, null, catalogSampleOffset);
 
                 int aiCount = outcome.getAiResult() != null ? outcome.getAiResult().getFindings().size() : 0;
                 int sqlOrphanCount = 0;
@@ -873,7 +906,33 @@ public class PipelineOrchestrator {
                 String probeSummary = String.format(
                     "诊断探查完成（AI探查状态：%s）：AI探查 %d 个，SQL安全网孤儿 %d 个/过时 %d 个，合并后总计 %d 个诊断项",
                     aiStatus, aiCount, sqlOrphanCount, sqlStaleCount, totalCount);
-                result.put("output", probeSummary);
+
+                StringBuilder probeOutput = new StringBuilder(probeSummary);
+                probeOutput.append("\n\n【体检覆盖度】扫描模式：");
+                if (lintCtx.isIncremental()) {
+                    probeOutput.append("增量（变更 ").append(lintCtx.changedPages().size())
+                        .append(" 页，新增 ").append(lintCtx.newPages().size())
+                        .append(" 页；SQL 确定性检测仍全库扫描）");
+                } else {
+                    probeOutput.append("全量（共 ").append(lintCtx.totalPageCount()).append(" 页）");
+                }
+                if (outcome.getAiResult() != null && outcome.getAiResult().getTotalPages() > 0) {
+                    probeOutput.append("；AI 目录覆盖 ").append(outcome.getAiResult().getCatalogPages())
+                        .append("/").append(outcome.getAiResult().getTotalPages()).append(" 页");
+                }
+                probeOutput.append("\n【降级声明】");
+                if (outcome.getDegradationNotes().isEmpty()) {
+                    probeOutput.append("无，所有检测线均完整执行");
+                } else {
+                    for (String note : outcome.getDegradationNotes()) {
+                        probeOutput.append("\n- ").append(note);
+                    }
+                }
+                result.put("output", probeOutput.toString());
+                result.put("degraded", !outcome.getDegradationNotes().isEmpty());
+                if (outcome.getAiResult() != null && outcome.getAiResult().getNextSampleOffset() >= 0) {
+                    result.put("nextSampleOffset", outcome.getAiResult().getNextSampleOffset());
+                }
                 if (outcome.getAiRawOutput() != null) {
                     tokensUsed += estimateTokens(outcome.getAiRawOutput());
                 }
@@ -1050,8 +1109,8 @@ public class PipelineOrchestrator {
                 String healthResult = getPreviousStepOutput(execution.getId(), "WRITE_HEALTH_STATUS");
 
                 String report = String.format(
-                    "# 知识库健康报告\n\n## 健康状态汇总\n%s\n\n## 诊断探查结果\n%s",
-                    healthResult, probeResult
+                    "# 知识库健康报告\n\n%s\n\n## 健康状态汇总\n%s\n\n## 诊断探查结果\n%s",
+                    buildLintCoverageSection(execution.getId(), scopeId, watermark), healthResult, probeResult
                 );
                 result.put("output", report);
                 break;
@@ -1142,6 +1201,27 @@ public class PipelineOrchestrator {
             }
         }
         return "";
+    }
+
+    private String buildLintCoverageSection(Long executionId, Long scopeId, Map<String, Object> watermark) {
+        StringBuilder sb = new StringBuilder("## 体检覆盖度与降级声明\n");
+        List<String> declarations = new ArrayList<>();
+        for (ExecutionStepModel step : executionTracker.listSteps(executionId)) {
+            if ("skipped".equals(step.getApprovalLevel())) {
+                declarations.add("步骤「" + step.getStepName() + "」被跳过：" + step.getOutputData());
+            }
+        }
+        if (shouldShortCircuitLintReport(scopeId, watermark)) {
+            declarations.add("诊断项集合与上次体检一致，后续「生成处置建议」「提议 Schema 补丁」将复用上次结果，不重新调用 LLM");
+        }
+        if (declarations.isEmpty()) {
+            sb.append("截至报告生成时，所有已执行步骤均完整运行，无跳过。\n");
+        } else {
+            for (String d : declarations) {
+                sb.append("- ").append(d).append("\n");
+            }
+        }
+        return sb.toString();
     }
 
     private List<WikiPageDO> selectLintPartition(List<WikiPageDO> allPages, int partitionIndex) {

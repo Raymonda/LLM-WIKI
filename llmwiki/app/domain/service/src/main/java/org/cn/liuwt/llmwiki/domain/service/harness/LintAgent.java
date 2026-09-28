@@ -20,6 +20,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -65,6 +66,15 @@ public class LintAgent {
                       String previousFindingsSummary, String previousHealthSummary,
                       LintRulesConfig rules,
                       List<WikiPageDO> focusPages, List<WikiPageDO> allPagesForStats) {
+        return probe(scopeId, summary, previousFindingsSummary, previousHealthSummary, rules,
+            focusPages, allPagesForStats, 0L);
+    }
+
+    ProbeResult probe(Long scopeId, GlobalSummary summary,
+                      String previousFindingsSummary, String previousHealthSummary,
+                      LintRulesConfig rules,
+                      List<WikiPageDO> focusPages, List<WikiPageDO> allPagesForStats,
+                      long sampleOffset) {
         if (chatClient == null || !rules.getDiagnosticStandard().isProbeEnabled()) {
             log.info("scopeId={} LintAgent probe 被跳过（chatClient=null 或 probeEnabled=false）", scopeId);
             return ProbeResult.skipped();
@@ -80,8 +90,8 @@ public class LintAgent {
             String systemPrompt = schemaInjector.prependForLint(scopeId,
                 LintPrompts.getInstance().probeSystemPrompt(rules));
             boolean incremental = focusPages != null && !focusPages.isEmpty();
-            String pageCatalog = buildPageCatalog(scopeId, focusPages, allPagesForStats);
-            String userPrompt = buildProbeUserPrompt(scopeId, summary, pageCatalog,
+            PageCatalog catalog = buildPageCatalogWithStats(scopeId, focusPages, allPagesForStats, sampleOffset);
+            String userPrompt = buildProbeUserPrompt(scopeId, summary, catalog.text(),
                 previousFindingsSummary, previousHealthSummary, rules, incremental);
 
             int inputPromptLength = systemPrompt.length() + userPrompt.length();
@@ -92,9 +102,11 @@ public class LintAgent {
             if (parsed == null) {
                 log.warn("LintAgent probe 输出解析失败 scopeId={}，原始输出前 200 字符: {}",
                     scopeId, raw != null && raw.length() > 200 ? raw.substring(0, 200) : raw);
-                return new ProbeResult(Collections.emptyList(), raw, inputPromptLength, "parse_failed");
+                return new ProbeResult(Collections.emptyList(), raw, inputPromptLength, "parse_failed",
+                    catalog.totalPages(), catalog.detailPages(), catalog.sampled(), catalog.nextSampleOffset());
             }
-            return new ProbeResult(parsed, raw, inputPromptLength, "success");
+            return new ProbeResult(parsed, raw, inputPromptLength, "success",
+                catalog.totalPages(), catalog.detailPages(), catalog.sampled(), catalog.nextSampleOffset());
         } catch (Exception e) {
             log.warn("LintAgent probe 失败 scopeId={}: {}", scopeId, e.getMessage());
             return ProbeResult.withStatus("error");
@@ -110,6 +122,12 @@ public class LintAgent {
     }
 
     String buildPageCatalog(Long scopeId, List<WikiPageDO> focusPages, List<WikiPageDO> allPagesForStats) {
+        return buildPageCatalogWithStats(scopeId, focusPages, allPagesForStats, 0L).text();
+    }
+
+    record PageCatalog(String text, int totalPages, int detailPages, boolean sampled, long nextSampleOffset) {}
+
+    PageCatalog buildPageCatalogWithStats(Long scopeId, List<WikiPageDO> focusPages, List<WikiPageDO> allPagesForStats, long sampleOffset) {
         try {
             List<WikiPageDO> allPages = allPagesForStats != null ? allPagesForStats : wikiPageMapper.selectList(
                 new QueryWrapper<WikiPageDO>()
@@ -119,13 +137,16 @@ public class LintAgent {
             );
 
             if (allPages.isEmpty()) {
-                return "(暂无页面)";
+                return new PageCatalog("(暂无页面)", 0, 0, false, -1);
             }
 
             boolean incremental = focusPages != null && !focusPages.isEmpty();
             List<WikiPageDO> detailPages = incremental ? focusPages : allPages;
+            long nextOffset = -1;
             if (!incremental && detailPages.size() > PAGE_CATALOG_MAX) {
-                detailPages = prioritizeAbnormalPages(detailPages, PAGE_CATALOG_MAX);
+                RotatingSample sample = prioritizeAbnormalPages(detailPages, PAGE_CATALOG_MAX, sampleOffset);
+                detailPages = sample.pages();
+                nextOffset = sample.nextOffset();
             }
 
             Set<Long> detailPageIds = detailPages.stream().map(WikiPageDO::getId).collect(Collectors.toSet());
@@ -170,13 +191,14 @@ public class LintAgent {
                 sb.append("\n");
             }
             appendContentPreviews(sb, scopeId, detailPages);
-            if (!incremental && allPages.size() > PAGE_CATALOG_MAX) {
+            boolean sampled = !incremental && allPages.size() > PAGE_CATALOG_MAX;
+            if (sampled) {
                 sb.append("- ...（共 ").append(allPages.size()).append(" 页，仅展示 ").append(detailPages.size()).append(" 页异常+抽样）\n");
             }
-            return sb.toString();
+            return new PageCatalog(sb.toString(), allPages.size(), detailPages.size(), sampled, nextOffset);
         } catch (Exception e) {
             log.warn("Failed to build page catalog for Lint probe, scopeId={}: {}", scopeId, e.getMessage());
-            return "(无法获取页面目录)";
+            return new PageCatalog("(无法获取页面目录)", -1, -1, false, -1);
         }
     }
 
@@ -250,7 +272,13 @@ public class LintAgent {
         return sb.toString();
     }
 
-    private List<WikiPageDO> prioritizeAbnormalPages(List<WikiPageDO> pages, int max) {
+    record RotatingSample(List<WikiPageDO> pages, long nextOffset) {}
+
+    /**
+     * 异常页全量保留；健康页按 id 稳定排序后从 sampleOffset 起轮转取样，
+     * 游标随 watermark 跨轮推进，保证多轮体检后全库页面都能进入 AI 视野（消除随机抽样的幸存者偏差）。
+     */
+    private RotatingSample prioritizeAbnormalPages(List<WikiPageDO> pages, int max, long sampleOffset) {
         List<WikiPageDO> abnormal = new ArrayList<>();
         List<WikiPageDO> normal = new ArrayList<>();
         for (WikiPageDO p : pages) {
@@ -262,13 +290,18 @@ public class LintAgent {
         }
         List<WikiPageDO> result = new ArrayList<>(abnormal);
         int remaining = max - result.size();
-        if (remaining > 0 && !normal.isEmpty()) {
-            java.util.Collections.shuffle(normal);
-            for (int i = 0; i < normal.size() && result.size() < max; i++) {
-                result.add(normal.get(i));
-            }
+        if (remaining <= 0 || normal.isEmpty()) {
+            return new RotatingSample(result, 0L);
         }
-        return result;
+        normal.sort(Comparator.comparingLong(WikiPageDO::getId));
+        int start = (int) Math.floorMod(sampleOffset, normal.size());
+        int taken = 0;
+        while (taken < remaining) {
+            result.add(normal.get((start + taken) % normal.size()));
+            taken++;
+        }
+        long nextOffset = Math.floorMod(start + taken, normal.size());
+        return new RotatingSample(result, nextOffset);
     }
 
     private String buildProbeUserPrompt(Long scopeId, GlobalSummary summary, String pageCatalog,
@@ -373,16 +406,34 @@ public class LintAgent {
         private final String rawOutput;
         private final int inputPromptLength;
         private final String status;
+        private final int totalPages;
+        private final int catalogPages;
+        private final boolean catalogSampled;
+        private final long nextSampleOffset;
 
         public ProbeResult(List<Map<String, Object>> findings, String rawOutput, int inputPromptLength) {
             this(findings, rawOutput, inputPromptLength, "success");
         }
 
         public ProbeResult(List<Map<String, Object>> findings, String rawOutput, int inputPromptLength, String status) {
+            this(findings, rawOutput, inputPromptLength, status, -1, -1, false, -1);
+        }
+
+        public ProbeResult(List<Map<String, Object>> findings, String rawOutput, int inputPromptLength, String status,
+                           int totalPages, int catalogPages, boolean catalogSampled) {
+            this(findings, rawOutput, inputPromptLength, status, totalPages, catalogPages, catalogSampled, -1);
+        }
+
+        public ProbeResult(List<Map<String, Object>> findings, String rawOutput, int inputPromptLength, String status,
+                           int totalPages, int catalogPages, boolean catalogSampled, long nextSampleOffset) {
             this.findings = findings != null ? findings : Collections.emptyList();
             this.rawOutput = rawOutput;
             this.inputPromptLength = inputPromptLength;
             this.status = status != null ? status : "success";
+            this.totalPages = totalPages;
+            this.catalogPages = catalogPages;
+            this.catalogSampled = catalogSampled;
+            this.nextSampleOffset = nextSampleOffset;
         }
 
         public static ProbeResult empty() {
@@ -401,6 +452,10 @@ public class LintAgent {
         public String getRawOutput() { return rawOutput; }
         public int getInputPromptLength() { return inputPromptLength; }
         public String getStatus() { return status; }
+        public int getTotalPages() { return totalPages; }
+        public int getCatalogPages() { return catalogPages; }
+        public boolean isCatalogSampled() { return catalogSampled; }
+        public long getNextSampleOffset() { return nextSampleOffset; }
         public boolean isEmpty() { return findings.isEmpty(); }
 
         public List<Map<String, Object>> getFindingsByType(String type) {

@@ -37,9 +37,9 @@ export const MANUAL_TYPE_OPTIONS: { value: string; label: string }[] = [
 ]
 
 const MAIN_TAB_STATUS_FILTER: Record<MainTabKey, string> = {
-  manual: 'open,awaiting_approval,repairing,deferred,failed',
+  manual: 'open,awaiting_approval,repairing,failed',
   ai_processed: 'auto_resolved',
-  archived: 'resolved,dismissed,rolled_back'
+  archived: 'resolved,dismissed,rolled_back,deferred'
 }
 
 export const AUTO_RESOLVE_EXCLUDED_TYPES = ['stale', 'orphan', 'content_thin', 'schema_compliance']
@@ -684,7 +684,7 @@ export const useLintStore = defineStore('lint', () => {
         await rollbackFinding(id)
         await refreshAfterAction()
       } catch (e: any) {
-        setActionError(e.message || '回滚失败')
+        setActionError(e.message || '撤销失败')
       }
     })
   }
@@ -930,7 +930,7 @@ export const useLintStore = defineStore('lint', () => {
       clearSelection()
       await refreshAfterAction()
     } catch (e: any) {
-      setActionError(e.message || '批量回滚失败')
+      setActionError(e.message || '批量撤销失败')
     } finally {
       batchProcessing.value = false
     }
